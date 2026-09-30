@@ -100,8 +100,10 @@ function cdp(wsUrl) {
 }
 
 // Windows virtual key codes, so the browser sees the real key.
-const VK = { Enter: 13, Escape: 27, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, z: 90, Z: 90 };
+const VK = { Enter: 13, Escape: 27, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, z: 90, Z: 90, F12: 123, i: 73, l: 76 };
 const KEY_TEXT = { Enter: "\r", z: "z", Z: "z" };
+// CDP modifier bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8.
+const CTRL_SHIFT = 2 | 8;
 
 (async () => {
   await new Promise((r) => server.listen(PORT, "127.0.0.1", r));
@@ -127,7 +129,12 @@ const KEY_TEXT = { Enter: "\r", z: "z", Z: "z" };
   const client = await cdp(target.webSocketDebuggerUrl);
   const consoleErrors = [];
   client.on("Runtime.consoleAPICalled", (p) => {
-    if (p.type === "error") consoleErrors.push(p.args.map((a) => a.value ?? a.description).join(" "));
+    if (p.type !== "error") return;
+    const text = p.args.map((a) => a.value ?? a.description).join(" ");
+    // The edge-case tests deliberately trigger failures, so their console noise
+    // is expected. Anything else is a real error.
+    if (/simulated/.test(text)) return;
+    consoleErrors.push(text);
   });
   client.on("Runtime.exceptionThrown", (p) => {
     consoleErrors.push("exception: " + (p.exceptionDetails?.exception?.description || p.exceptionDetails?.text));
@@ -309,6 +316,41 @@ const KEY_TEXT = { Enter: "\r", z: "z", Z: "z" };
   await js("p.clickStagedBtn(); document.getElementById('btn-scan').click();");
   await sleep(400);
   ok("rescan keeps the deleted status", (await probe(`p.status(${JSON.stringify(first)})`)) === "deleted", await probe(`p.status(${JSON.stringify(first)})`));
+
+  // ---- DevTools shortcut ----
+  await press("F12");
+  await sleep(300);
+  ok("F12 asks the backend to open DevTools", (await probe("p.devtoolsCalled()")) === true, JSON.stringify(await probe("p.logFilter('devtools')")));
+
+  // ---- file-log viewer ----
+  await press("l", CTRL_SHIFT);
+  await sleep(300);
+  ok("Ctrl+Shift+L opens the log viewer", (await probe("p.modalHidden()")) === false);
+  ok("log viewer shows the log text", /fake log line/.test((await probe("p.logModalText()")) || ""), await probe("p.logModalText()"));
+  await js("document.querySelector('#modal-foot button').click()");
+  await sleep(200);
+  ok("log viewer closes", (await probe("p.modalHidden()")) === true);
+
+  // ---- a counter-refresh failure must not roll back a saved decision ----
+  await probe("p.backToMonths()");
+  await sleep(300);
+  await js("p.resetShots();");
+  await sleep(200);
+  await probe("p.clickFirstMonth()");
+  await sleep(300);
+  const rbCard = await probe("p.cardName()");
+  await js("p.setFailNextSummary(true);");
+  await press("ArrowLeft");
+  await sleep(400);
+  ok("stage persists even when the counter refresh fails", (await probe(`p.status(${JSON.stringify(rbCard)})`)) === "staged", await probe(`p.status(${JSON.stringify(rbCard)})`));
+  ok("card advances even when the counter refresh fails", (await probe("p.cardName()")) !== rbCard, `${rbCard} -> ${await probe("p.cardName()")}`);
+
+  // ---- an undo from another queue must not inject an out-of-scope card ----
+  await js("p.setUndoOutOfScope(true);");
+  await press("z");
+  await sleep(400);
+  ok("out-of-scope undo returns to the months view", (await probe("p.monthRows()")).length === 2, JSON.stringify(await probe("p.monthRows()")));
+  ok("out-of-scope undo does not show a card", (await probe("p.hasCard()")) === false);
 
   const pageFails = await js("return window.__FAILS;").catch(() => []);
 

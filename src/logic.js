@@ -146,24 +146,18 @@ export class ReviewQueue {
     return id;
   }
 
-  /** Re-inserts an id right after the cursor, for undo. */
-  reinsertAfterCursor(id) {
-    if (id === null || id === undefined) return;
-    if (this.ids.includes(id)) return;
-    this.ids.splice(this.cursor, 0, id);
-  }
-
   /**
-   * Points the cursor back at `id`, re-inserting it if it is no longer queued.
+   * Points the cursor back at `id`, but only when it is still queued.
    *
    * Undo cannot simply step the cursor back by one: a skipped item was deferred
-   * to the back of the list, and an item decided outside this queue is gone
-   * entirely. Seeking by id handles every case, and `showCurrent` then re-hydrates
-   * whatever the cursor lands on.
+   * to the back of the list, so a plain decrement would show the wrong file.
+   * Seeking by id handles that. An id that is not in this queue at all is left
+   * alone rather than injected: the undo stack is session-wide, so it may belong
+   * to another root or month, and re-inserting it would surface a card the user
+   * never asked to see.
    */
   focusId(id) {
     if (id === null || id === undefined) return null;
-    this.reinsertAfterCursor(id);
     const index = this.ids.indexOf(id);
     if (index === -1) return null;
     this.cursor = index;

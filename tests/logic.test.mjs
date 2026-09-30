@@ -125,16 +125,6 @@ test("deferCurrent on an empty queue is a no-op", () => {
   assert.equal(q.deferred, 0);
 });
 
-test("reinsertAfterCursor restores an undone item without duplicating it", () => {
-  const q = new ReviewQueue([1, 2, 3]);
-  q.advance(); // cursor at 2
-  q.advance(); // cursor at 3
-  q.reinsertAfterCursor(99);
-  assert.deepEqual(q.ids, [1, 2, 99, 3]);
-  q.reinsertAfterCursor(1); // already present, no change
-  assert.deepEqual(q.ids, [1, 2, 99, 3]);
-});
-
 test("focusId finds a deferred item, which a cursor step-back would miss", () => {
   const q = new ReviewQueue([1, 2, 3]);
   q.deferCurrent(); // 1 is deferred to the back, cursor still at 2
@@ -145,13 +135,15 @@ test("focusId finds a deferred item, which a cursor step-back would miss", () =>
   assert.deepEqual(q.ids, [2, 3, 1]);
 });
 
-test("focusId re-inserts an id that is no longer in the queue", () => {
+test("focusId leaves an id that is not in this queue alone", () => {
   const q = new ReviewQueue([1, 2, 3]);
   q.advance();
   q.advance();
-  q.focusId(99);
-  assert.equal(q.current(), 99);
-  assert.equal(q.ids.filter((id) => id === 99).length, 1);
+  // The undo stack is session-wide, so the undone id may belong to another
+  // root or month. It must not be injected into this queue.
+  assert.equal(q.focusId(99), null);
+  assert.deepEqual(q.ids, [1, 2, 3]);
+  assert.equal(q.current(), 3);
   assert.equal(q.focusId(null), null);
   assert.equal(q.focusId(undefined), null);
 });

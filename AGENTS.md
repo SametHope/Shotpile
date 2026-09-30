@@ -46,9 +46,9 @@ src-tauri/src/commands.rs the entire command surface
 ## Verify before claiming done
 
 ```powershell
-npm run test:logic                          # 23 frontend logic tests
-npm run test:gui                            # 49 GUI assertions in headless Chrome
-cd src-tauri; cargo test                    # 36 unit + 2 end-to-end tests
+npm run test:logic                          # 22 frontend logic tests
+npm run test:gui                            # 57 GUI assertions in headless Chrome
+cd src-tauri; cargo test                    # 38 unit + 2 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
 ```
@@ -58,6 +58,25 @@ fakes the Rust command surface in memory, then drives it with real Chrome key
 events via CDP. It is where the rendered card, the shortcuts and the confirm
 dialog get covered. If you change a view, a shortcut, or the dialog, add a
 probe there. Chrome must be installed; the script has no npm dependencies.
+
+## Diagnosing
+
+- **Frontend** logs to the console through `src/log.js` (levels debug/info/warn/
+  error, plus a 500-entry ring buffer). DevTools opens with `F12` or
+  `Ctrl+Shift+I`; `__sifterLog.dump()` prints the ring. `?log=debug` on the URL
+  lowers the level floor.
+- **Backend** appends to `%APPDATA%\com.hope.screenshotsifter\logs\sifter.log`
+  via `src-tauri/src/log.rs` (rotated at 2 MiB). `Ctrl+Shift+L` shows the tail
+  in a modal; the `log_read` command backs it.
+- Both are compiled into release builds. When something breaks, ask for the
+  console output or the file log before guessing.
+
+## CSS gotcha
+
+- Author `display` rules outrank the UA `[hidden] { display: none }`, so
+  `style.css` starts with `[hidden] { display: none !important; }`. Do not
+  remove it: without it the modal and header buttons stay on screen and block
+  the app even when they are marked `hidden`.
 
 ## Environment notes
 

@@ -1,0 +1,29 @@
+fix: unblock the app, add logging, DevTools shortcut, and fix two edges
+
+The app opened to a stuck "Onay" modal that could not be closed. Root cause:
+author `display` rules (`.backdrop { display: grid }`, `.btn { display:
+inline-flex }`) outrank the UA `[hidden] { display: none }`, so the modal and
+header buttons stayed on screen even when marked `hidden`, and closeModal()
+could not hide them. Fixed with `[hidden] { display: none !important; }`.
+
+Logging, so a release build can be diagnosed after the fact:
+- src/log.js: leveled console logger (debug/info/warn/error) plus a
+  500-entry ring buffer. `__sifterLog.dump()` prints it from DevTools.
+- src-tauri/src/log.rs: dependency-free file logger writing to
+  %APPDATA%\com.hope.screenshotsifter\logs\sifter.log, rotated at 2 MiB.
+- Both are compiled into release builds. Backend logs boot, db open, scans,
+  decisions, undos and commit failures; frontend logs commands, views,
+  decisions and errors.
+
+DevTools and log viewer shortcuts:
+- F12 / Ctrl+Shift+I opens DevTools via a new open_devtools command.
+- Ctrl+Shift+L shows the file-log tail in a modal, backed by log_read.
+
+Two edge fixes:
+- decide() no longer rolls back a persisted decision when the later
+  counter refresh fails; only a failed write restores the queue.
+- focusId() no longer re-inserts an id that is not in the current queue, so
+  a session-wide undo from another root/month returns to the month list
+  instead of surfacing an out-of-scope card.
+
+Adds an MIT LICENSE and updates the docs and test counts.

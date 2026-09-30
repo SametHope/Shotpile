@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod log;
 mod scan;
 
 use std::sync::{Mutex, MutexGuard};
@@ -79,7 +80,26 @@ pub fn run() {
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
-            let db = Db::open(&dir.join("sifter.db"))?;
+            let log_path = dir.join("logs").join("sifter.log");
+            if let Some(parent) = log_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            log::init(&log_path);
+            log::info(
+                "boot",
+                &format!("screenshot sifter {}", env!("CARGO_PKG_VERSION")),
+            );
+            let db = match Db::open(&dir.join("sifter.db")) {
+                Ok(db) => db,
+                Err(e) => {
+                    log::error("boot", &format!("db açılamadı: {e}"));
+                    return Err(e.into());
+                }
+            };
+            log::info(
+                "boot",
+                &format!("db açıldı: {}", dir.join("sifter.db").display()),
+            );
             app.manage(AppState {
                 db: Mutex::new(db),
                 undo: Mutex::new(Vec::new()),
@@ -101,6 +121,8 @@ pub fn run() {
             commands::unstage,
             commands::staged_list,
             commands::commit_deletes,
+            commands::log_read,
+            commands::open_devtools,
         ])
         .run(tauri::generate_context!())
         .expect("Screenshot Sifter başlatılamadı");

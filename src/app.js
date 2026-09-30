@@ -20,6 +20,7 @@ import {
   progressOf,
   tzOffsetMinutes,
 } from "./logic.js";
+import { log } from "./log.js";
 
 const { invoke } = window.__TAURI__.core;
 const convertFileSrc = window.__TAURI__.core.convertFileSrc;
@@ -61,7 +62,13 @@ const state = {
 // ---------------------------------------------------------------- tauri glue
 
 async function api(cmd, args = {}) {
-  return invoke(cmd, args);
+  log.debug("api", `${cmd} ${JSON.stringify(args)}`);
+  try {
+    return await invoke(cmd, args);
+  } catch (e) {
+    log.error("api", `${cmd} failed: ${e}`, args);
+    throw e;
+  }
 }
 
 function tzArgs() {
@@ -148,6 +155,22 @@ el.modal.addEventListener("click", (e) => {
   if (e.target === el.modal) closeModal();
 });
 
+/** Opens the file log in a modal, for diagnosing without DevTools. */
+async function showLog() {
+  log.info("log", "günlük açılıyor");
+  let text;
+  try {
+    text = await api("log_read", { maxLines: 500 });
+  } catch (e) {
+    text = `Günlük okunamadı: ${e}`;
+  }
+  modal({
+    title: "Günlük",
+    body: [h("pre", { class: "logview", text: text || "(günlük boş)" })],
+    actions: [{ label: "Kapat" }],
+  });
+}
+
 function confirmDialog({ title, message, confirmLabel, variant = "danger", extra }) {
   return new Promise((resolve) => {
     let settled = false;
@@ -214,11 +237,13 @@ async function openQueue(scope, month = null, label = "") {
   state.queue = new ReviewQueue(ids);
   state.scope = { scope, month, label };
   if (ids.length === 0) {
+    log.info("queue", `${label || scope}: dosya yok`);
     state.view = "months";
     render();
     toast("Bu kuyrukta incelenecek dosya yok");
     return;
   }
+  log.info("queue", `${label || scope}: ${ids.length} dosya`);
   state.view = "review";
   await showCurrent();
 }
@@ -242,6 +267,7 @@ function preload() {
 // -------------------------------------------------------------------- render
 
 function render() {
+  log.debug("view", state.view);
   el.back.hidden = state.view !== "review";
   const busy = state.busy;
   el.scan.disabled = busy;
@@ -472,22 +498,34 @@ async function decide(action) {
   state.card = null;
   render();
 
+  let updated;
   try {
-    const updated = await api("decide", { id, kind: action });
-    state.cache.set(id, updated);
-    if (action === ACTION.DELETE) {
-      await refreshCounts();
-      toast(`${updated.name} silinmeyi bekliyor`, {
-        action: "Geri al",
-        onAction: () => undo(),
-      });
-    }
+    updated = await api("decide", { id, kind: action });
   } catch (e) {
+    // Only the write is rolled back. A later refresh failure must not undo a
+    // decision that actually persisted.
+    log.error("decide", `${action} ${shot.name} kaydedilemedi`, e);
     state.queue.restore(before);
     state.card = shot;
     render();
     toast(`Karar kaydedilemedi: ${e}`);
     return;
+  }
+
+  state.cache.set(id, updated);
+  log.info("decide", `${action} -> ${updated.name} (${updated.status})`);
+
+  if (action === ACTION.DELETE) {
+    try {
+      await refreshCounts();
+    } catch (e) {
+      // The decision saved; only the counter refresh failed.
+      log.warn("decide", `sayılar güncellenemedi: ${e}`);
+    }
+    toast(`${updated.name} silinmeyi bekliyor`, {
+      action: "Geri al",
+      onAction: () => undo(),
+    });
   }
 
   if (state.queue.atEnd()) {
@@ -512,13 +550,25 @@ async function undo() {
     } else {
       // Seek by id, not by stepping the cursor back: a skip was deferred to the
       // back of the queue, so a plain decrement would show the wrong file.
-      state.queue.focusId(shot.id);
-      state.scope = { ...state.scope };
-      await showCurrent();
+      const focused = state.queue.focusId(shot.id);
+      if (focused === null) {
+        // The undone decision belongs to another queue (the undo stack is
+        // session-wide), so it has no place in this one. Drop back to the
+        // month list rather than showing an out-of-scope card.
+        log.info("undo", `${shot.name} bu kuyrukta değil, aylara dönülüyor`);
+        state.view = "months";
+        await loadMonths();
+        render();
+      } else {
+        state.scope = { ...state.scope };
+        await showCurrent();
+      }
     }
     await refreshCounts();
+    log.info("undo", shot.name);
     toast(`Geri alındı: ${shot.name}`);
   } catch (e) {
+    log.error("undo", "geri alınamadı", e);
     toast(`Geri alınamadı: ${e}`);
   }
 }
@@ -549,12 +599,17 @@ async function commit() {
   state.busy = true;
   el.commit.disabled = true;
   el.commit.textContent = "Taşınıyor...";
+  log.info("commit", `${n} dosya geri dönüşüm kutusuna taşınıyor`);
   try {
     const report = await api("commit_deletes");
     for (const f of report.failed) {
-      if (!f.gone) toast(`${f.name}: ${f.error}`, { ms: 7000 });
+      if (!f.gone) {
+        log.warn("commit", `${f.name}: ${f.error}`);
+        toast(`${f.name}: ${f.error}`, { ms: 7000 });
+      }
     }
     if (report.deleted) {
+      log.info("commit", `${report.deleted} dosya taşındı, ${report.still_staged} bekliyor`);
       toast(`${report.deleted} dosya geri dönüşüm kutusuna taşındı`);
     }
     if (report.still_staged) {
@@ -566,6 +621,7 @@ async function commit() {
       render();
     }
   } catch (e) {
+    log.error("commit", "taşınamadı", e);
     toast(`Taşınamadı: ${e}`);
   } finally {
     state.busy = false;
@@ -602,8 +658,10 @@ async function rescan() {
     const bits = [`${report.added} yeni`, `${report.refreshed} güncel`];
     if (report.unviewable) bits.push(`${report.unviewable} önizlemesiz`);
     if (report.missing) bits.push(`${report.missing} dosya diskte yok`);
+    log.info("scan", `${root.path}: ${bits.join(", ")} (${report.elapsed_ms} ms)`);
     toast(`Tarama: ${bits.join(" · ")}`);
   } catch (e) {
+    log.error("scan", `${root.path} taranamadı`, e);
     toast(`Tarama başarısız: ${e}`);
   } finally {
     state.busy = false;
@@ -706,6 +764,20 @@ function attachGestures() {
 // ------------------------------------------------------------------ keyboard
 
 document.addEventListener("keydown", (e) => {
+  // DevTools on F12 / Ctrl+Shift+I, before anything else, so it works in a
+  // release build and even while a modal is up.
+  if (e.key === "F12" || ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "i")) {
+    e.preventDefault();
+    log.info("devtools", "açılıyor");
+    api("open_devtools").catch((err) => log.warn("devtools", `açılamadı: ${err}`));
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "l") {
+    e.preventDefault();
+    showLog();
+    return;
+  }
+
   if (!el.modal.hidden) return;
   const tag = (e.target.tagName || "").toLowerCase();
   if (tag === "input" || tag === "textarea") return;
@@ -755,9 +827,12 @@ el.stagedBtn.addEventListener("click", () => {
 });
 
 (async function boot() {
+  log.info("boot", `screenshot sifter ${state.info?.app_version ?? ""} başlatılıyor`);
   try {
     state.info = await api("app_info");
+    log.info("app_info", `db ${state.info.db_path} (schema ${state.info.schema_version})`);
   } catch (e) {
+    log.error("boot", "arka uç açılamadı", e);
     el.view.replaceChildren(h("div", { class: "empty" },
       h("h2", { text: "Uygulama arka ucu açılamadı" }),
       h("p", { text: String(e) })));
@@ -766,6 +841,7 @@ el.stagedBtn.addEventListener("click", () => {
   await loadRoots();
   const active = state.roots.find((r) => r.total > 0) || state.roots[0] || null;
   if (!active) {
+    log.info("boot", "kayıtlı klasör yok, kurulum ekranı");
     state.view = "setup";
     render();
     return;

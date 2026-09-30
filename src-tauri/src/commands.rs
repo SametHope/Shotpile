@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{Manager, State};
 
 use crate::db::{MonthStat, Root, Shot, Summary, STATUS_DELETED, STATUS_PENDING, STATUS_STAGED};
 use crate::scan;
@@ -18,6 +18,7 @@ pub struct UndoEntry {
 pub struct AppInfo {
     pub data_dir: String,
     pub db_path: String,
+    pub log_path: String,
     pub schema_version: i64,
     pub app_version: String,
     pub image_exts: Vec<String>,
@@ -74,6 +75,13 @@ pub fn store_scan(
     elapsed_ms: u128,
 ) -> Result<ScanReport, String> {
     let unviewable = files.iter().filter(|f| !scan::is_viewable(&f.ext)).count();
+    crate::log::debug(
+        "scan",
+        &format!(
+            "{path}: {} dosya yazılıyor ({unviewable} önizlemesiz)",
+            files.len()
+        ),
+    );
     let root_id = db.upsert_root(path)?;
     db.flag_root_missing(root_id)?;
     let (added, refreshed) = db.upsert_shots_bulk(root_id, &files)?;
@@ -126,11 +134,34 @@ pub fn app_info(state: State<'_, AppState>) -> Result<AppInfo, String> {
     Ok(AppInfo {
         data_dir: dir,
         db_path: path,
+        log_path: crate::log::path()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default(),
         schema_version: db.schema_version(),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         image_exts: scan::IMAGE_EXTS.iter().map(|e| e.to_string()).collect(),
         unviewable_exts: unviewable,
     })
+}
+
+/// Returns the tail of the file log, for diagnosing a release build from inside
+/// the app. `max_lines` is clamped so a caller cannot ask for the world.
+#[tauri::command]
+pub fn log_read(max_lines: Option<usize>) -> String {
+    let n = max_lines.unwrap_or(500).min(5000);
+    crate::log::read_tail(n)
+}
+
+/// Opens the WebView DevTools. Bound to F12 / Ctrl+Shift+I in the frontend, so a
+/// release build can be inspected without a debug build.
+#[tauri::command]
+pub fn open_devtools(app: tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "ana pencere bulunamadı".to_string())?;
+    window.open_devtools();
+    crate::log::info("devtools", "açıldı");
+    Ok(())
 }
 
 #[tauri::command]
@@ -164,7 +195,21 @@ pub async fn scan_root(state: State<'_, AppState>, path: String) -> Result<ScanR
 
     let (files, stats, elapsed_ms) = collected;
     let db = lock(&state.db);
-    store_scan(&db, &path, files, stats, elapsed_ms)
+    let report = store_scan(&db, &path, files, stats, elapsed_ms)?;
+    crate::log::info(
+        "scan",
+        &format!(
+            "{}: {} dosya ({} yeni, {} güncel, {} önizlemesiz, {} eksik) {} ms",
+            path,
+            report.found,
+            report.added,
+            report.refreshed,
+            report.unviewable,
+            report.missing,
+            report.elapsed_ms
+        ),
+    );
+    Ok(report)
 }
 
 #[tauri::command]
@@ -237,6 +282,7 @@ pub fn decide(state: State<'_, AppState>, id: i64, kind: String) -> Result<Shot,
         let excess = undo.len() - limit;
         undo.drain(0..excess);
     }
+    crate::log::info("decide", &format!("{id} {} -> {status}", shot.name));
     Ok(shot)
 }
 
@@ -251,7 +297,9 @@ pub fn undo_last(state: State<'_, AppState>) -> Result<Option<Shot>, String> {
         return Ok(None);
     }
     db.set_status(entry.id, &entry.prev, entry.prev_decided_ms)?;
-    db.shot(entry.id)
+    let shot = db.shot(entry.id)?;
+    crate::log::info("undo", &format!("{} -> {}", entry.id, entry.prev));
+    Ok(shot)
 }
 
 #[tauri::command]
@@ -300,7 +348,10 @@ pub async fn commit_deletes(state: State<'_, AppState>) -> Result<CommitReport, 
         for (id, path, name) in rows {
             match trash::delete(&path) {
                 Ok(()) => ok_ids.push(id),
-                Err(e) => failed.push((id, name, path, e.to_string())),
+                Err(e) => {
+                    crate::log::warn("commit", &format!("{name}: {e}"));
+                    failed.push((id, name, path, e.to_string()));
+                }
             }
         }
         (ok_ids, failed)
@@ -330,6 +381,14 @@ pub async fn commit_deletes(state: State<'_, AppState>) -> Result<CommitReport, 
         });
     }
     let still_staged = db.staged_rows()?.len();
+    crate::log::info(
+        "commit",
+        &format!(
+            "{deleted} silindi, {} bekliyor, {} başarısız",
+            still_staged,
+            failed.len()
+        ),
+    );
     Ok(CommitReport {
         deleted,
         failed,

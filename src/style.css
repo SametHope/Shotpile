@@ -23,6 +23,12 @@
 
 * { box-sizing: border-box; }
 
+/* Author `display` rules (`.backdrop { display: grid }`, `.btn { display:
+   inline-flex }`, ...) outrank the UA stylesheet's `[hidden] { display: none }`,
+   so a hidden modal or button stays on screen and blocks the app. This one
+   rule keeps `hidden` authoritative no matter what display an element has. */
+[hidden] { display: none !important; }
+
 html, body { margin: 0; padding: 0; min-height: 100%; }
 
 body {
@@ -523,6 +529,21 @@ kbd {
 #toast.on { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
 #toast .msg { overflow: hidden; text-overflow: ellipsis; }
 #toast button { color: #93c5fd; }
+
+/* File-log viewer (Ctrl+Shift+L). */
+.logview {
+  margin: 0;
+  max-height: 52vh;
+  overflow: auto;
+  font: 12px/1.5 ui-monospace, Consolas, "Cascadia Mono", monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: #0f141b;
+  color: #d7e0ea;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #232b36;
+}
 
 .sr {
   position: absolute;

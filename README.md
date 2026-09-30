@@ -38,12 +38,26 @@ npm run dev          # tauri dev
 npm run build        # NSIS installer in src-tauri/target/release/bundle
 ```
 
+## Diagnosing problems
+
+Two logs, because a release build cannot always be attached to a debugger:
+
+- **DevTools** — press `F12` or `Ctrl+Shift+I`. The frontend logs every command,
+  view change, decision and error to the console via `src/log.js`. Type
+  `__sifterLog.dump()` in the console to print the whole recent history.
+- **File log** — the Rust backend appends to
+  `%APPDATA%\com.hope.screenshotsifter\logs\sifter.log` (rotated at 2 MiB, the
+  previous file kept as `sifter.log.old`). Press `Ctrl+Shift+L` to read the tail
+  in a modal, or open the file directly.
+
+Both are always on, including in release builds.
+
 ## Tests
 
 ```powershell
-npm run test:logic   # 23 frontend logic tests (node --test)
-npm run test:gui     # 49 GUI assertions: the real src/app.js in headless Chrome
-cd src-tauri; cargo test                  # 36 unit + 2 end-to-end tests
+npm run test:logic   # 22 frontend logic tests (node --test)
+npm run test:gui     # 57 GUI assertions: the real src/app.js in headless Chrome
+cd src-tauri; cargo test                  # 38 unit + 2 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
 ```
@@ -51,9 +65,10 @@ cd src-tauri; cargo fmt --check
 `npm run test:gui` loads `tests/gui-smoke.html` in headless Chrome, which runs
 the unmodified `src/app.js` against an in-memory stand-in for the Rust commands,
 then drives it with real browser key events. It covers what the Rust tests
-cannot: the rendered card, the keyboard shortcuts, drag-decision rollback, and
-the confirmation dialog. It needs Chrome installed and asserts that Enter does
-**not** confirm a destructive action.
+cannot: the rendered card, the keyboard shortcuts, drag-decision rollback, the
+confirmation dialog, the DevTools and log-viewer shortcuts, and the two edge
+cases around failed writes and cross-queue undo. It needs Chrome installed and
+asserts that Enter does **not** confirm a destructive action.
 
 ## Architecture
 
@@ -120,3 +135,7 @@ Tracked but not previewable, shown as a placeholder you can still decide on:
 - There is no thumbnail grid yet, by design. The month list is numbers only.
 - Staging and the Recycle Bin commit are global across every watched folder,
   while the month list and per-month counts are per folder.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

@@ -45,6 +45,11 @@
   const FAILS = [];
   let nextId = 1;
   const shots = new Map();
+  // Test hooks for the two edge cases the GUI harness can reach but the logic
+  // tests cannot: a counter-refresh failure after a successful write, and an
+  // undo that belongs to a different queue.
+  let failNextSummary = false;
+  let undoOutOfScope = false;
 
   function addShot(rootId, name, ext, takenMs, viewable) {
     const id = nextId++;
@@ -87,6 +92,10 @@
       return { ...r, total: mine.length, pending: count(mine, "pending"), kept: count(mine, "kept"), deleted: count(mine, "deleted"), skipped: count(mine, "skipped"), staged: count(mine, "staged"), missing: 0 };
     }),
     summary: (a) => {
+      if (failNextSummary) {
+        failNextSummary = false;
+        throw new Error("simulated summary failure");
+      }
       const mine = a.rootId == null ? [...shots.values()] : byRoot(a.rootId);
       return {
         total: mine.length, pending: count(mine, "pending"),
@@ -138,6 +147,18 @@
       return s;
     },
     undo_last: () => {
+      // Simulate the session-wide undo stack returning an id from another root,
+      // which is not part of the queue currently on screen.
+      if (undoOutOfScope) {
+        undoOutOfScope = false;
+        const other = [...shots.values()].find((s) => s.root_id === B);
+        if (other) {
+          other.status = "pending";
+          other.decided_ms = null;
+          LOG.push("undo:out-of-scope:" + other.name);
+          return other;
+        }
+      }
       let last = null;
       for (const s of shots.values()) if (s.decided_ms) last = s;
       if (!last) return null;
@@ -156,6 +177,8 @@
     },
     scan_root: () => ({ root: "C:/shots-a", found: 4, added: 0, refreshed: 4, skipped_other: 2, unreadable: 0, unviewable: 1, missing: 0, total_in_root: 4, elapsed_ms: 12 }),
     pick_folder: () => "C:/shots-a",
+    open_devtools: () => { LOG.push("devtools"); return undefined; },
+    log_read: () => "fake log line",
   };
 
   window.__FAILS = FAILS;
@@ -233,9 +256,19 @@
     },
     stagedCountInDb: () => [...shots.values()].filter((s) => s.status === "staged").length,
     setFailNextDecide: (v) => { FAILS.__failNextDecide = v; },
+    setFailNextSummary: (v) => { failNextSummary = v; },
+    setUndoOutOfScope: (v) => { undoOutOfScope = v; },
     logHas: (needle) => LOG.includes(needle),
     logFilter: (prefix) => LOG.filter((l) => l.startsWith(prefix)),
+    devtoolsCalled: () => LOG.includes("devtools"),
+    logModalText: () => { const n = $(".logview"); return n ? n.textContent.trim() : null; },
     reset: () => { LOG.length = 0; },
+    resetShots: () => {
+      for (const s of shots.values()) {
+        s.status = "pending";
+        s.decided_ms = null;
+      }
+    },
   };
   </script>
   <script type="module" src="../src/app.js"></script>
