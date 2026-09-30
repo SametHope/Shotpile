@@ -1,9 +1,0 @@
-fix: scan the picked folder so selecting one actually worked
-
-addFolder looked for the new root in the database, but a root only enters
-the database during a scan. Picking a folder returns a path, so the lookup
-always came back empty and the app silently did nothing — no scan, no log,
-no feedback. It now scans the picked folder first, then selects the root.
-
-Also logs pick_folder (chosen path or cancel) so a silent folder pick is
-diagnosable, and adds a GUI harness test for the pick -> scan -> months flow.
