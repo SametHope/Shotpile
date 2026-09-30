@@ -13,13 +13,13 @@ export const ACTION = {
 };
 
 export const MONTH_NAMES = [
-  "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
-  "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık",
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
 ];
 
 const SHORT_MONTH_NAMES = [
-  "Oca", "Şub", "Mar", "Nis", "May", "Haz",
-  "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara",
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
 /** "2026-09" -> "Eylül 2026". Returns the input unchanged if it is malformed. */
@@ -85,10 +85,10 @@ export function formatDateTime(ms) {
 }
 
 export const DATE_SOURCE_LABELS = {
-  filename: "dosya adından",
-  created: "oluşturma tarihinden",
-  modified: "değiştirme tarihinden",
-  unknown: "tarih yok",
+  filename: "from filename",
+  created: "from creation date",
+  modified: "from modified date",
+  unknown: "no date",
 };
 
 /** Local minutes east of UTC, which is what the month grouping expects. */

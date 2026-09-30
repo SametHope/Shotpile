@@ -47,7 +47,7 @@ src-tauri/src/commands.rs the entire command surface
 
 ```powershell
 npm run test:logic                          # 22 frontend logic tests
-npm run test:gui                            # 70 GUI assertions in headless Chrome
+npm run test:gui                            # 75 GUI assertions in headless Chrome
 cd src-tauri; cargo test                    # 39 unit + 2 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
@@ -93,6 +93,16 @@ probe there. Chrome must be installed; the script has no npm dependencies.
 - `.review .wrap` sets `margin: 0` to override the `.wrap` class's
   `margin: 0 auto`. On a flex item, auto margins absorb the free space and stop
   the wrap from stretching, which would leave the card narrow.
+- Scrollbars are hidden globally (`html { scrollbar-width: none }`). During a
+  swipe the card leaves the stage, so `#view.reviewing` sets `overflow: visible`
+  to avoid clipping it or throwing scrollbars. Toggle the class in `render()`.
+- The footbar is always in the layout and expands/collapses via a `max-height`
+  transition (`.footbar.on`), so showing it never shifts the content above.
+- The swipe exit animation holds the decision until the card has animated off
+  (`state.animating`), so a swipe never flashes the "queue done" finale. A
+  keyboard/button decision fades the card out instead.
+- The queue filmstrip (`.filmstrip`) shows the previous few decisions and the
+  next few photos; `jumpTo(index)` moves the cursor so a pass can be walked.
 - The deck cards are absolutely positioned and centred via
   `translate(-50%, -50%)`. The swipe gesture sets `cardEl.style.transform`
   inline, so every one of those transforms must repeat the
@@ -118,7 +128,7 @@ probe there. Chrome must be installed; the script has no npm dependencies.
 
 ## Style
 
-- UI text is Turkish, matching the user's other apps.
+- UI text is English only. Do not reintroduce Turkish strings.
 - Visual tokens live at the top of `src/style.css` and deliberately mirror the
   existing single-page QoL apps (`--accent:#1d4ed8`, `--line`, `--radius:12px`,
   the same soft gradient wash). Keep new colours in that palette.

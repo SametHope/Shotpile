@@ -13,11 +13,11 @@ import {
   progressOf,
 } from "../src/logic.js";
 
-test("monthLabel renders Turkish month names", () => {
-  assert.equal(monthLabel("2026-09"), "Eylül 2026");
-  assert.equal(monthLabel("2026-01"), "Ocak 2026");
-  assert.equal(monthLabel("2026-12"), "Aralık 2026");
-  assert.equal(monthLabel("2026-09", { short: true }), "Eyl 2026");
+test("monthLabel renders English month names", () => {
+  assert.equal(monthLabel("2026-09"), "September 2026");
+  assert.equal(monthLabel("2026-01"), "January 2026");
+  assert.equal(monthLabel("2026-12"), "December 2026");
+  assert.equal(monthLabel("2026-09", { short: true }), "Sep 2026");
 });
 
 test("monthLabel passes through malformed input", () => {

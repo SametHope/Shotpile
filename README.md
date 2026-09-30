@@ -16,16 +16,21 @@ live on the local machine.
   Swipe left to stage for deletion, right to keep, up to skip. Arrow keys and
   on-screen buttons do the same thing; `Z` / `Ctrl+Z` / `Backspace` undoes.
   The current card sits on top of a small deck, so the next couple of photos peek
-  out below it and a swipe always has somewhere to land.
+  out below it and a swipe always has somewhere to land. The active stamp fills
+  with colour as you drag — red to delete, green to keep, yellow to skip — and
+  the card animates off-screen instead of vanishing.
+- **Walk the queue.** A filmstrip under the buttons shows the previous few
+  decisions and the next few photos; click any of them to jump back.
 - **Inspect** any photo full-screen. Click the image to open a viewer where scroll
   zooms (up to 8×), drag pans, double-click toggles 1×/2×, and `Esc` closes.
 - **Preview** months visually: each month row carries a strip of sample
-  thumbnails, not just numbers.
+  thumbnails and an icon-led stat, not just numbers.
 - **Remember** every decision in SQLite, so a month is only "done" when it stays
   done. Skipped files come back at the end of the same pass.
 - **Delete safely.** A left-swipe only marks a file. Nothing touches the disk
-  until you press *Geri dönüşüm kutusuna taşı*, which uses the Recycle Bin, so
-  the files stay recoverable.
+  until you press *Move to Recycle Bin*, which uses the Recycle Bin, so the
+  files stay recoverable. The footer bar expands and collapses smoothly, so
+  showing it never shifts the content.
 
 ## Requirements
 
@@ -62,7 +67,7 @@ Both are always on, including in release builds.
 
 ```powershell
 npm run test:logic   # 22 frontend logic tests (node --test)
-npm run test:gui     # 70 GUI assertions: the real src/app.js in headless Chrome
+npm run test:gui     # 75 GUI assertions: the real src/app.js in headless Chrome
 cd src-tauri; cargo test                  # 39 unit + 2 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check

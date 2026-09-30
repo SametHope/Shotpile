@@ -56,6 +56,8 @@ const state = {
   scope: null, // { scope, month }
   card: null, // current shot
   drag: null,
+  dragged: false, // true once the current gesture moved, so a click isn't a swipe
+  animating: false, // true while a swipe exit animation is playing
   busy: false,
   toastTimer: null,
 };
@@ -80,9 +82,11 @@ async function refreshCounts() {
   state.summary = await api("summary", tzArgs());
   const staged = state.summary.staged_all || 0;
   el.stagedN.textContent = String(staged);
-  el.footbar.hidden = staged === 0;
+  // The footbar is always in the layout and expands/collapses with a
+  // transition, so showing it never shifts the content under it.
+  el.footbar.classList.toggle("on", staged > 0);
   el.stagedBtn.hidden = staged === 0;
-  el.stagedBtn.textContent = `Silinecekler (${staged})`;
+  el.stagedBtn.textContent = `To Delete (${staged})`;
 }
 
 // ------------------------------------------------------------------- helpers
@@ -158,17 +162,17 @@ el.modal.addEventListener("click", (e) => {
 
 /** Opens the file log in a modal, for diagnosing without DevTools. */
 async function showLog() {
-  log.info("log", "günlük açılıyor");
+  log.info("log", "opening log");
   let text;
   try {
     text = await api("log_read", { maxLines: 500 });
   } catch (e) {
-    text = `Günlük okunamadı: ${e}`;
+    text = `Couldn't read log: ${e}`;
   }
   modal({
-    title: "Günlük",
-    body: [h("pre", { class: "logview", text: text || "(günlük boş)" })],
-    actions: [{ label: "Kapat" }],
+    title: "Log",
+    body: [h("pre", { class: "logview", text: text || "(log is empty)" })],
+    actions: [{ label: "Close" }],
   });
 }
 
@@ -192,7 +196,7 @@ function confirmDialog({ title, message, confirmLabel, variant = "danger", extra
         done(false);
       }
       // Enter is deliberately not handled here. The focused button's own
-      // activation runs instead, and `modal()` focuses the first one ("Vazgeç"),
+      // activation runs instead, and `modal()` focuses the first one ("Cancel"),
       // so the safe option stays the default for a destructive confirm.
     };
     document.addEventListener("keydown", onKey, true);
@@ -200,7 +204,7 @@ function confirmDialog({ title, message, confirmLabel, variant = "danger", extra
       title,
       body: [h("div", { text: message }), extra].filter(Boolean),
       actions: [
-        { label: "Vazgeç", onClick: () => done(false) },
+        { label: "Cancel", onClick: () => done(false) },
         { label: confirmLabel, variant, onClick: () => done(true) },
       ],
     });
@@ -240,13 +244,13 @@ async function openQueue(scope, month = null, label = "") {
   state.queue = new ReviewQueue(ids);
   state.scope = { scope, month, label };
   if (ids.length === 0) {
-    log.info("queue", `${label || scope}: dosya yok`);
+    log.info("queue", `${label || scope}: no files`);
     state.view = "months";
     render();
-    toast("Bu kuyrukta incelenecek dosya yok");
+    toast("No files to review in this queue");
     return;
   }
-  log.info("queue", `${label || scope}: ${ids.length} dosya`);
+  log.info("queue", `${label || scope}: ${ids.length} files`);
   state.view = "review";
   await showCurrent();
 }
@@ -274,6 +278,7 @@ function preload() {
 
 function render() {
   log.debug("view", state.view);
+  el.view.classList.toggle("reviewing", state.view === "review");
   el.back.hidden = state.view !== "review";
   const busy = state.busy;
   el.scan.disabled = busy;
@@ -292,16 +297,16 @@ function render() {
 
 function renderSetup() {
   const nodes = [
-    h("div", { class: "empty" },
-      h("h2", { text: "Ekran görüntülerini incelemeye başla" }),
-      h("p", { text: "Bir klasör seç. Aylara göre ya da rastgele sırayla gez, beğenmediklerini geri dönüşüm kutusuna taşı." }),
-      h("button", { class: "btn primary", onclick: addFolder }, "Klasör seç")
+      h("div", { class: "empty" },
+      h("h2", { text: "Start reviewing screenshots" }),
+      h("p", { text: "Pick a folder. Browse by month or in a random order, and send the ones you don't want to the Recycle Bin." }),
+      h("button", { class: "btn primary", onclick: addFolder }, "Choose Folder")
     ),
   ];
 
   if (state.roots.length) {
     nodes.push(h("div", { class: "panel", style: "padding:14px" },
-      h("div", { class: "hint", style: "margin-bottom:8px", text: "Kayıtlı klasörler" }),
+      h("div", { class: "hint", style: "margin-bottom:8px", text: "Saved folders" }),
       h("div", { class: "staged-list" }, state.roots.map(rootRow))
     ));
   }
@@ -313,56 +318,71 @@ function rootRow(root) {
     h("div", { style: "flex:1;min-width:0" },
       h("div", { class: "path", text: root.path }),
       h("div", { class: "meta", text: root.total === 0
-        ? "henüz taranmadı"
-        : `${root.total} dosya · ${root.pending} bekliyor${root.staged ? ` · ${root.staged} silinmeyi bekliyor` : ""}${root.last_scan_ms ? ` · son tarama ${formatDateTime(root.last_scan_ms)}` : ""}` })
+        ? "not scanned yet"
+        : `${root.total} files · ${root.pending} pending${root.staged ? ` · ${root.staged} waiting to delete` : ""}${root.last_scan_ms ? ` · last scan ${formatDateTime(root.last_scan_ms)}` : ""}` })
     ),
     h("button", {
       class: "btn primary sm",
       onclick: () => selectRoot(root),
-    }, root.total === 0 ? "Tara" : "Aç")
+    }, root.total === 0 ? "Scan" : "Open")
   );
 }
 
 function renderMonths() {
   const s = state.summary;
   const strip = h("div", { class: "stat-strip" },
-    stat(s?.total, "toplam"),
-    stat(s?.pending, "bekleyen"),
-    stat(s?.kept, "saklanan"),
-    stat(s?.deleted, "silinen"),
-    stat(s?.skipped, "atlanan"),
-    stat(formatBytes(s?.bytes_pending || 0), "bekleyen boyut")
+    stat(s?.total, "total"),
+    stat(s?.pending, "pending"),
+    stat(s?.kept, "kept"),
+    stat(s?.deleted, "deleted"),
+    stat(s?.skipped, "skipped"),
+    stat(formatBytes(s?.bytes_pending || 0), "size")
   );
 
   const actions = h("div", { style: "display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px" },
-    h("button", { class: "btn primary", onclick: () => openQueue("unreviewed", null, "Tümü") },
-      "İncelenmemişler"),
-    h("button", { class: "btn", onclick: () => openQueue("random", null, "Rastgele") }, "Rastgele"),
-    h("button", { class: "btn", onclick: () => openQueue("skipped", null, "Atlananlar") }, "Atlananlar"),
-    h("button", { class: "btn", onclick: () => openQueue("staged", null, "Silinecekler") }, "Silinecekler")
+    h("button", { class: "btn primary", onclick: () => openQueue("unreviewed", null, "All") },
+      "Unreviewed"),
+    h("button", { class: "btn", onclick: () => openQueue("random", null, "Random") }, "Random"),
+    h("button", { class: "btn", onclick: () => openQueue("skipped", null, "Skipped") }, "Skipped"),
+    h("button", { class: "btn", onclick: () => openQueue("staged", null, "To Delete") }, "To Delete")
   );
 
   const list = state.months.length
     ? h("div", { class: "months" }, state.months.map(monthRow))
     : h("div", { class: "empty" },
-        h("h2", { text: "Henüz ekran görüntüsü yok" }),
-        h("p", { text: "Klasörü tara." }),
-        h("button", { class: "btn primary", onclick: rescan }, "Yeniden tara"));
+        h("h2", { text: "No screenshots yet" }),
+        h("p", { text: "Scan a folder." }),
+        h("button", { class: "btn primary", onclick: rescan }, "Rescan"));
 
   el.view.replaceChildren(strip, actions, list);
 }
 
+const STAT_ICONS = {
+  total: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>',
+  pending: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>',
+  kept: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg>',
+  deleted: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2m1 0v14a2 2 0 01-2 2H9a2 2 0 01-2-2V6"/></svg>',
+  skipped: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4l10 8-10 8V4z"/><path d="M19 5v14"/></svg>',
+  size: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 14h.01M11 14h.01"/></svg>',
+};
+
 function stat(n, k) {
-  return h("div", { class: "stat" }, h("div", { class: "n", text: String(n ?? 0) }), h("div", { class: "k", text: k }));
+  return h("div", { class: `stat stat-${k}` },
+    h("span", { class: "stat-icon", html: STAT_ICONS[k] || "" }),
+    h("div", {},
+      h("div", { class: "n", text: String(n ?? 0) }),
+      h("div", { class: "k", text: k })
+    )
+  );
 }
 
 function monthRow(m) {
   const p = progressOf(m);
   const chips = [];
-  if (p.kept) chips.push(h("span", { class: "chip kept", text: `${p.kept} saklandı` }));
-  if (p.deleted) chips.push(h("span", { class: "chip", text: `${p.deleted} silindi` }));
-  if (p.staged) chips.push(h("span", { class: "chip staged", text: `${p.staged} silinmeyi bekliyor` }));
-  if (p.skipped) chips.push(h("span", { class: "chip skipped", text: `${p.skipped} atlandı` }));
+  if (p.kept) chips.push(h("span", { class: "chip kept", text: `${p.kept} kept` }));
+  if (p.deleted) chips.push(h("span", { class: "chip", text: `${p.deleted} deleted` }));
+  if (p.staged) chips.push(h("span", { class: "chip staged", text: `${p.staged} waiting to delete` }));
+  if (p.skipped) chips.push(h("span", { class: "chip skipped", text: `${p.skipped} skipped` }));
 
   const thumbs = state.thumbs?.get(m.month) || [];
 
@@ -373,12 +393,12 @@ function monthRow(m) {
   },
     h("div", {},
       h("div", { class: "label", text: monthLabel(m.month) }),
-      h("div", { class: "counts", text: `${p.total} dosya` })
+      h("div", { class: "counts", text: `${p.total} files` })
     ),
     h("div", { class: "right" },
       p.done
-        ? h("span", { class: "done-tag", text: "tamam" })
-        : h("span", { text: `${p.remaining} kaldı` })
+        ? h("span", { class: "done-tag", text: "done" })
+        : h("span", { text: `${p.remaining} left` })
     ),
     h("div", { class: `bar${p.done ? " complete" : ""}` }, h("i", { style: `width:${Math.round(p.ratio * 100)}%` })),
     chips.length ? h("div", { class: "chips" }, chips) : null,
@@ -399,18 +419,18 @@ function renderReview() {
     h("span", { text: label }),
     h("span", { class: "bar" }, h("i", { style: `width:${total ? Math.round((pos / total) * 100) : 0}%` })),
     h("span", { text: total ? `${pos} / ${total}` : "0 / 0" }),
-    q.deferred ? h("span", { class: "chip skipped", text: `${q.deferred} atlandı` }) : null
+    q.deferred ? h("span", { class: "chip skipped", text: `${q.deferred} skipped` }) : null
   );
 
   let body;
   if (!state.card) {
     body = h("div", { class: "panel finale" },
       h("div", { class: "big", text: String(q.deferred) }),
-      h("h2", { text: q.deferred ? "Tüm dosyalar tarandı" : "Bu kuyruk bitti" }),
-      h("p", { class: "hint", text: q.deferred ? "Atladıkların aynı turda tekrar karşına çıktı." : "Başka bir ay ya da rastgele mod seçebilirsin." }),
+      h("h2", { text: q.deferred ? "All files scanned" : "This queue is done" }),
+      h("p", { class: "hint", text: q.deferred ? "Skipped ones came back in the same pass." : "Pick another month or random mode." }),
       h("div", { style: "display:flex;gap:8px;justify-content:center;margin-top:12px" },
-        h("button", { class: "btn primary", onclick: backToMonths }, "Aylara dön"),
-        h("button", { class: "btn", onclick: () => openQueue("random", null, "Rastgele") }, "Rastgele devam")
+        h("button", { class: "btn primary", onclick: backToMonths }, "Back to months"),
+        h("button", { class: "btn", onclick: () => openQueue("random", null, "Random") }, "Random continue")
       )
     );
   } else {
@@ -419,15 +439,15 @@ function renderReview() {
 
   const actions = h("div", { class: "actions" },
     h("button", { class: "btn danger", onclick: () => decide(ACTION.DELETE), title: "←" },
-      "Sil ", kbd("←")),
+      "Delete ", kbd("←")),
     h("button", { class: "btn", onclick: () => decide(ACTION.SKIP), title: "↑" },
-      "Atla ", kbd("↑")),
+      "Skip ", kbd("↑")),
     h("button", { class: "btn ok", onclick: () => decide(ACTION.KEEP), title: "→" },
-      "Sakla ", kbd("→")),
-    h("button", { class: "btn ghost", onclick: undo, title: "Ctrl+Z" }, "Geri al ", kbd("Z"))
+      "Keep ", kbd("→")),
+    h("button", { class: "btn ghost", onclick: undo, title: "Ctrl+Z" }, "Undo ", kbd("Z"))
   );
 
-  el.view.replaceChildren(h("div", { class: "review" }, h("div", { class: "wrap" }, head, body, actions)));
+  el.view.replaceChildren(h("div", { class: "review" }, h("div", { class: "wrap" }, head, body, actions, filmstrip())));
   attachGestures();
 }
 
@@ -435,17 +455,53 @@ function kbd(text) {
   return h("kbd", { text });
 }
 
+/**
+ * A scrollable filmstrip of the queue: the previous few decisions, the current
+ * item, and the next few. Clicking an item jumps back to it, so a pass can be
+ * walked without undoing everything.
+ */
+function filmstrip() {
+  const q = state.queue;
+  const ids = q.ids;
+  if (!ids.length) return null;
+  const cursor = Math.min(q.cursor, ids.length - 1);
+  const start = Math.max(0, cursor - 3);
+  const end = Math.min(ids.length, cursor + 5);
+  const items = [];
+  for (let i = start; i < end; i++) {
+    const shot = state.cache.get(ids[i]);
+    const status = shot?.status || "pending";
+    items.push(h("button", {
+      class: `film-item film-${status}${i === cursor ? " current" : ""}`,
+      onclick: () => jumpTo(i),
+    },
+      h("span", { class: "film-thumb" },
+        shot?.viewable ? h("img", { src: convertFileSrc(shot.path), alt: "", loading: "lazy" }) : null),
+      h("span", { class: "film-name", text: shot?.name || `#${ids[i]}` })
+    ));
+  }
+  return h("div", { class: "filmstrip" }, items);
+}
+
+function jumpTo(index) {
+  if (state.view !== "review") return;
+  if (index < 0 || index >= state.queue.ids.length) return;
+  state.queue.cursor = index;
+  state.scope = { ...state.scope };
+  showCurrent();
+}
+
 function card(shot, top = false) {
   const img = shot.viewable
     ? h("img", { src: convertFileSrc(shot.path), alt: shot.name, draggable: "false" })
     : h("div", { class: "noimg" },
-        h("div", { text: `${shot.ext.toUpperCase()} önizlemesi yok` }),
-        h("code", { text: "Bu biçim WebView2 ile açılamıyor; dosya adı ve boyutundan karar verebilirsin." }));
+        h("div", { text: `No ${shot.ext.toUpperCase()} preview` }),
+        h("code", { text: "This format can't be opened by WebView2; decide from the name and size." }));
 
   return h("div", { class: "card", id: top ? "card" : null },
-    h("div", { class: "stamp left", text: "Sil" }),
-    h("div", { class: "stamp right", text: "Sakla" }),
-    h("div", { class: "stamp up", text: "Atla" }),
+    h("div", { class: "stamp left", text: "Delete" }),
+    h("div", { class: "stamp right", text: "Keep" }),
+    h("div", { class: "stamp up", text: "Skip" }),
     h("div", { class: "imgwrap" }, img),
     h("div", { class: "foot" },
       h("div", { class: "fname", text: shot.name }),
@@ -454,7 +510,7 @@ function card(shot, top = false) {
         h("span", { text: formatBytes(shot.size) }),
         h("span", { text: shot.ext.toUpperCase() }),
         h("span", { class: "hint", text: DATE_SOURCE_LABELS[shot.date_source] || shot.date_source }),
-        shot.missing ? h("span", { class: "missing", text: "dosya diskte yok" }) : null
+        shot.missing ? h("span", { class: "missing", text: "file missing on disk" }) : null
       )
     )
   );
@@ -479,7 +535,12 @@ function cardStack() {
   }
   const top = card(current, true);
   top.classList.add("deck-top");
-  top.querySelector(".imgwrap").addEventListener("click", () => openViewer(current));
+  // Clicking the card opens the viewer. The gesture captures the pointer, so
+  // the click lands on the card, not the image — and a swipe must not trigger
+  // it, hence the `dragged` check.
+  top.addEventListener("click", () => {
+    if (!state.dragged) openViewer(current);
+  });
   deck.append(top);
   return deck;
 }
@@ -507,8 +568,8 @@ function openViewer(shot) {
       h("button", { class: "btn sm", onclick: () => zoomBy(1 / 1.25) }, "−"),
       label,
       h("button", { class: "btn sm", onclick: () => zoomBy(1.25) }, "+"),
-      h("button", { class: "btn sm", onclick: resetZoom }, "Sıfırla"),
-      h("button", { class: "btn sm", onclick: closeViewer }, "Kapat (Esc)")
+      h("button", { class: "btn sm", onclick: resetZoom }, "Reset"),
+      h("button", { class: "btn sm", onclick: closeViewer }, "Close (Esc)")
     )
   );
 
@@ -589,24 +650,24 @@ function renderStaged() {
   api("staged_list").then((rows) => {
     if (!rows.length) {
       el.view.replaceChildren(h("div", { class: "empty" },
-        h("h2", { text: "Silinecek dosya yok" }),
-        h("p", { text: "Karta sola kaydırdıkça burada birikir." }),
-        h("button", { class: "btn primary", onclick: backToMonths }, "Aylara dön")));
+        h("h2", { text: "No files to delete" }),
+        h("p", { text: "Swipe left on cards to collect them here." }),
+        h("button", { class: "btn primary", onclick: backToMonths }, "Back to months")));
       return;
     }
     const total = rows.reduce((n, r) => n + r.size, 0);
     el.view.replaceChildren(
       h("div", { class: "panel", style: "padding:14px;margin-bottom:12px" },
-        h("div", { style: "font-weight:620" , text: `${rows.length} dosya · ${formatBytes(total)}` }),
-        h("div", { class: "hint", style: "margin-top:2px", text: "Bu dosyalar henüz diskte. Onaylayana kadar hiçbiri silinmez." })
+        h("div", { style: "font-weight:620" , text: `${rows.length} files · ${formatBytes(total)}` }),
+        h("div", { class: "hint", style: "margin-top:2px", text: "These files are still on disk. Nothing is deleted until you confirm." })
       ),
       h("div", { class: "staged-list" }, rows.map(stagedRow)),
       h("div", { style: "display:flex;gap:8px;margin-top:14px" },
-        h("button", { class: "btn danger", onclick: commit }, "Geri dönüşüm kutusuna taşı"),
-        h("button", { class: "btn", onclick: backToMonths }, "Aylara dön")
+        h("button", { class: "btn danger", onclick: commit }, "Move to Recycle Bin"),
+        h("button", { class: "btn", onclick: backToMonths }, "Back to months")
       )
     );
-  }).catch((e) => toast(`Hata: ${e}`));
+  }).catch((e) => toast(`Error: ${e}`));
 }
 
 function stagedRow(shot) {
@@ -614,14 +675,14 @@ function stagedRow(shot) {
     h("span", { class: "n", text: shot.name }),
     h("span", { class: "s", text: formatDateTime(shot.taken_ms) }),
     h("span", { class: "s", text: formatBytes(shot.size) }),
-    h("button", { class: "btn sm", onclick: () => unstageOne(shot.id) }, "Geri al")
+    h("button", { class: "btn sm", onclick: () => unstageOne(shot.id) }, "Undo")
   );
 }
 
 // ------------------------------------------------------------------- actions
 
 async function decide(action) {
-  if (state.view !== "review" || !state.card || state.busy) return;
+  if (state.view !== "review" || !state.card || state.busy || state.animating) return;
   const shot = state.card;
   const id = shot.id;
 
@@ -632,7 +693,18 @@ async function decide(action) {
   if (action === ACTION.SKIP) state.queue.deferCurrent();
   else state.queue.advance();
   state.card = null;
-  render();
+
+  // No immediate render. A swipe is mid-exit-animation and a re-render now
+  // would cut it short and flash the "queue done" finale; a keyboard/button
+  // decision fades the card out instead. showCurrent() re-renders once the
+  // write lands.
+  if (!state.animating) {
+    const cardEl = document.getElementById("card");
+    if (cardEl) {
+      cardEl.style.transition = "opacity .16s ease";
+      cardEl.style.opacity = "0";
+    }
+  }
 
   let updated;
   try {
@@ -640,11 +712,11 @@ async function decide(action) {
   } catch (e) {
     // Only the write is rolled back. A later refresh failure must not undo a
     // decision that actually persisted.
-    log.error("decide", `${action} ${shot.name} kaydedilemedi`, e);
+    log.error("decide", `${action} ${shot.name} could not be saved`, e);
     state.queue.restore(before);
     state.card = shot;
     render();
-    toast(`Karar kaydedilemedi: ${e}`);
+    toast(`Couldn't save decision: ${e}`);
     return;
   }
 
@@ -656,10 +728,10 @@ async function decide(action) {
       await refreshCounts();
     } catch (e) {
       // The decision saved; only the counter refresh failed.
-      log.warn("decide", `sayılar güncellenemedi: ${e}`);
+      log.warn("decide", `couldn't refresh counts: ${e}`);
     }
-    toast(`${updated.name} silinmeyi bekliyor`, {
-      action: "Geri al",
+    toast(`${updated.name} waiting to delete`, {
+      action: "Undo",
       onAction: () => undo(),
     });
   }
@@ -677,7 +749,7 @@ async function undo() {
   try {
     const shot = await api("undo_last");
     if (!shot) {
-      toast("Geri alınacak bir karar yok");
+      toast("Nothing to undo");
       return;
     }
     state.cache.set(shot.id, shot);
@@ -691,7 +763,7 @@ async function undo() {
         // The undone decision belongs to another queue (the undo stack is
         // session-wide), so it has no place in this one. Drop back to the
         // month list rather than showing an out-of-scope card.
-        log.info("undo", `${shot.name} bu kuyrukta değil, aylara dönülüyor`);
+        log.info("undo", `${shot.name} not in this queue, back to months`);
         state.view = "months";
         await loadMonths();
         render();
@@ -702,10 +774,10 @@ async function undo() {
     }
     await refreshCounts();
     log.info("undo", shot.name);
-    toast(`Geri alındı: ${shot.name}`);
+    toast(`Undone: ${shot.name}`);
   } catch (e) {
-    log.error("undo", "geri alınamadı", e);
-    toast(`Geri alınamadı: ${e}`);
+    log.error("undo", "couldn't undo", e);
+    toast(`Couldn't undo: ${e}`);
   }
 }
 
@@ -715,9 +787,9 @@ async function unstageOne(id) {
     state.cache.set(id, shot);
     await refreshCounts();
     renderStaged();
-    toast(`${shot.name} silme listesinden çıkarıldı`);
+    toast(`${shot.name} removed from delete list`);
   } catch (e) {
-    toast(`Hata: ${e}`);
+    toast(`Error: ${e}`);
   }
 }
 
@@ -725,17 +797,17 @@ async function commit() {
   const n = state.summary?.staged_all || 0;
   if (!n) return;
   const ok = await confirmDialog({
-    title: "Geri dönüşüm kutusuna taşı",
-    message: `${n} dosya geri dönüşüm kutusuna taşınacak. Diskten kalıcı olarak silinmez; geri dönüşüm kutusundan istediğin zaman geri alabilirsin.`,
-    confirmLabel: `${n} dosyayı taşı`,
+    title: "Move to Recycle Bin",
+    message: `${n} files will be moved to the Recycle Bin. They are not permanently deleted; you can restore them from the Recycle Bin at any time.`,
+    confirmLabel: `Move ${n} files`,
     variant: "danger",
   });
   if (!ok) return;
 
   state.busy = true;
   el.commit.disabled = true;
-  el.commit.textContent = "Taşınıyor...";
-  log.info("commit", `${n} dosya geri dönüşüm kutusuna taşınıyor`);
+  el.commit.textContent = "Moving...";
+  log.info("commit", `moving ${n} files to Recycle Bin`);
   try {
     const report = await api("commit_deletes");
     for (const f of report.failed) {
@@ -745,11 +817,11 @@ async function commit() {
       }
     }
     if (report.deleted) {
-      log.info("commit", `${report.deleted} dosya taşındı, ${report.still_staged} bekliyor`);
-      toast(`${report.deleted} dosya geri dönüşüm kutusuna taşındı`);
+      log.info("commit", `${report.deleted} deleted, ${report.still_staged} waiting`);
+      toast(`${report.deleted} files moved to Recycle Bin`);
     }
     if (report.still_staged) {
-      toast(`${report.still_staged} dosya hâlâ bekliyor`, { ms: 6000 });
+      toast(`${report.still_staged} files still waiting`, { ms: 6000 });
     }
     await loadMonths();
     if (state.view === "staged") {
@@ -757,12 +829,12 @@ async function commit() {
       render();
     }
   } catch (e) {
-    log.error("commit", "taşınamadı", e);
-    toast(`Taşınamadı: ${e}`);
+    log.error("commit", "couldn't move", e);
+    toast(`Couldn't move: ${e}`);
   } finally {
     state.busy = false;
     el.commit.disabled = false;
-    el.commit.textContent = "Geri dönüşüm kutusuna taşı";
+    el.commit.textContent = "Move to Recycle Bin";
     await refreshCounts();
   }
 }
@@ -771,32 +843,32 @@ async function addFolder() {
   try {
     const picked = await api("pick_folder");
     if (!picked) return;
-    log.info("folder", `seçildi: ${picked}`);
+    log.info("folder", `picked: ${picked}`);
     state.busy = true;
     render();
     // Scanning is what adds the root to the database, so it has to happen
     // before the root can be found and selected. Picking alone only returns a
     // path; without this the folder silently did nothing.
     const report = await api("scan_root", { path: picked });
-    el.scannedNote.textContent = `${report.found} dosya · ${report.elapsed_ms} ms`;
+    el.scannedNote.textContent = `${report.found} files · ${report.elapsed_ms} ms`;
     await loadRoots();
     const root = state.roots.find((r) => r.path === picked);
     if (!root) {
-      log.warn("folder", `taramaya rağmen kök bulunamadı: ${picked}`);
-      toast(`Klasör eklenemedi: ${picked}`);
+      log.warn("folder", `root not found after scan: ${picked}`);
+      toast(`Couldn't add folder: ${picked}`);
       return;
     }
     state.rootId = root.id;
     state.view = "months";
     await loadMonths();
     render();
-    const bits = [`${report.added} yeni`, `${report.refreshed} güncel`];
-    if (report.unviewable) bits.push(`${report.unviewable} önizlemesiz`);
-    if (report.missing) bits.push(`${report.missing} dosya diskte yok`);
-    toast(`Tarama: ${bits.join(" · ")}`);
+    const bits = [`${report.added} new`, `${report.refreshed} refreshed`];
+    if (report.unviewable) bits.push(`${report.unviewable} no preview`);
+    if (report.missing) bits.push(`${report.missing} missing on disk`);
+    toast(`Scan: ${bits.join(" · ")}`);
   } catch (e) {
-    log.error("folder", "klasör eklenemedi", e);
-    toast(`Klasör eklenemedi: ${e}`);
+    log.error("folder", "couldn't add folder", e);
+    toast(`Couldn't add folder: ${e}`);
   } finally {
     state.busy = false;
     render();
@@ -810,19 +882,19 @@ async function rescan() {
   render();
   try {
     const report = await api("scan_root", { path: root.path });
-    el.scannedNote.textContent = `${report.found} dosya · ${report.elapsed_ms} ms`;
+    el.scannedNote.textContent = `${report.found} files · ${report.elapsed_ms} ms`;
     await loadRoots();
     await loadMonths();
     if (state.view === "loading" || state.view === "setup") state.view = "months";
     render();
-    const bits = [`${report.added} yeni`, `${report.refreshed} güncel`];
-    if (report.unviewable) bits.push(`${report.unviewable} önizlemesiz`);
-    if (report.missing) bits.push(`${report.missing} dosya diskte yok`);
+    const bits = [`${report.added} new`, `${report.refreshed} refreshed`];
+    if (report.unviewable) bits.push(`${report.unviewable} no preview`);
+    if (report.missing) bits.push(`${report.missing} missing on disk`);
     log.info("scan", `${root.path}: ${bits.join(", ")} (${report.elapsed_ms} ms)`);
-    toast(`Tarama: ${bits.join(" · ")}`);
+    toast(`Scan: ${bits.join(" · ")}`);
   } catch (e) {
-    log.error("scan", `${root.path} taranamadı`, e);
-    toast(`Tarama başarısız: ${e}`);
+    log.error("scan", `${root.path} scan failed`, e);
+    toast(`Scan failed: ${e}`);
   } finally {
     state.busy = false;
     render();
@@ -853,6 +925,7 @@ function attachGestures() {
 
   const onDown = (e) => {
     if (state.busy || !state.card || e.button !== 0) return;
+    state.dragged = false;
     state.drag = {
       id: e.pointerId,
       x: e.clientX,
@@ -871,6 +944,7 @@ function attachGestures() {
     d.dx = e.clientX - d.x;
     d.dy = e.clientY - d.y;
     d.active = true;
+    if (Math.abs(d.dx) > 6 || Math.abs(d.dy) > 6) state.dragged = true;
 
     const v = gestureVisual(d.dx, d.dy, GESTURE_THRESHOLD);
     d.action = v.action;
@@ -882,9 +956,17 @@ function attachGestures() {
     const left = cardEl.querySelector(".stamp.left");
     const right = cardEl.querySelector(".stamp.right");
     const up = cardEl.querySelector(".stamp.up");
-    left.style.opacity = v.action === ACTION.DELETE ? String(v.progress) : "0";
-    right.style.opacity = v.action === ACTION.KEEP ? String(v.progress) : "0";
-    up.style.opacity = v.action === ACTION.SKIP ? String(v.progress) : "0";
+    // The active stamp fills with its colour as the drag progresses: red for
+    // delete, green for keep, yellow for skip.
+    const col = { [ACTION.DELETE]: "220,38,38", [ACTION.KEEP]: "21,128,61", [ACTION.SKIP]: "180,83,9" }[v.action];
+    const fill = col ? Math.round(v.progress * 22) : 0;
+    const show = (el, on) => {
+      el.style.opacity = on ? String(0.35 + v.progress * 0.65) : "0";
+      el.style.background = on && col ? `rgba(${col},${fill / 100})` : "transparent";
+    };
+    show(left, v.action === ACTION.DELETE);
+    show(right, v.action === ACTION.KEEP);
+    show(up, v.action === ACTION.SKIP);
   };
 
   const finish = (e) => {
@@ -902,10 +984,17 @@ function attachGestures() {
       return;
     }
     const v = exitVector(action, Math.max(900, window.innerWidth));
-    cardEl.style.transition = "transform .2s cubic-bezier(.2,.7,.3,1), opacity .2s";
+    cardEl.style.transition = "transform .3s cubic-bezier(.2,.7,.3,1), opacity .3s";
     cardEl.style.transform = `translate(-50%, -50%) translate(${v.x}px, ${v.y}px) rotate(${v.x * 0.02}deg)`;
     cardEl.style.opacity = "0";
-    setTimeout(() => decide(action), 130);
+    // Hold the decision until the exit animation finishes, so the card
+    // animates away instead of vanishing. `animating` blocks a second
+    // decision from landing mid-animation.
+    state.animating = true;
+    setTimeout(() => {
+      state.animating = false;
+      decide(action);
+    }, 300);
   };
 
   stage.addEventListener("pointerdown", onDown);
@@ -928,8 +1017,8 @@ document.addEventListener("keydown", (e) => {
   // release build and even while a modal is up.
   if (e.key === "F12" || ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "i")) {
     e.preventDefault();
-    log.info("devtools", "açılıyor");
-    api("open_devtools").catch((err) => log.warn("devtools", `açılamadı: ${err}`));
+    log.info("devtools", "opening");
+    api("open_devtools").catch((err) => log.warn("devtools", `couldn't open: ${err}`));
     return;
   }
   if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "l") {
@@ -1019,21 +1108,21 @@ el.stagedBtn.addEventListener("click", () => {
 });
 
 (async function boot() {
-  log.info("boot", `screenshot sifter ${state.info?.app_version ?? ""} başlatılıyor`);
+  log.info("boot", `screenshot sifter ${state.info?.app_version ?? ""} starting`);
   try {
     state.info = await api("app_info");
     log.info("app_info", `db ${state.info.db_path} (schema ${state.info.schema_version})`);
   } catch (e) {
-    log.error("boot", "arka uç açılamadı", e);
+    log.error("boot", "couldn't open backend", e);
     el.view.replaceChildren(h("div", { class: "empty" },
-      h("h2", { text: "Uygulama arka ucu açılamadı" }),
+      h("h2", { text: "Couldn't open the app backend" }),
       h("p", { text: String(e) })));
     return;
   }
   await loadRoots();
   const active = state.roots.find((r) => r.total > 0) || state.roots[0] || null;
   if (!active) {
-    log.info("boot", "kayıtlı klasör yok, kurulum ekranı");
+    log.info("boot", "no saved folders, setup screen");
     state.view = "setup";
     render();
     return;

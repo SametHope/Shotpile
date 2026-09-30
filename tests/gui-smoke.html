@@ -267,7 +267,7 @@
     finaleShown: () => !!$(".finale"),
     stagedCount: () => $("#staged-n").textContent,
     stagedBtn: () => $("#btn-staged").textContent,
-    footbarHidden: () => $("#footbar").hidden,
+    footbarOn: () => $("#footbar").classList.contains("on"),
     modalHidden: () => $("#modal").hidden,
     modalTitle: () => { const n = $("#modal-title"); return n ? n.textContent.trim() : null; },
     focusedLabel: () => {
@@ -283,7 +283,7 @@
     clickStagedBtn: () => { $("#btn-staged").click(); },
     clickCommit: () => { $("#btn-commit").click(); },
     clickConfirmInModal: () => {
-      const btn = [...document.querySelectorAll("#modal-foot button")].find((b) => /taşı/i.test(b.textContent));
+      const btn = [...document.querySelectorAll("#modal-foot button")].find((b) => /move/i.test(b.textContent));
       if (btn) btn.click();
       return !!btn;
     },
@@ -346,6 +346,18 @@
     },
     openViewer: () => window.__sifterTest.openViewer(),
     closeViewer: () => window.__sifterTest.closeViewer(),
+    clickCard: () => {
+      const c = document.querySelector(".deck .deck-top");
+      if (c) c.click();
+      return !!c;
+    },
+    filmCount: () => document.querySelectorAll(".film-item").length,
+    filmCurrent: () => [...document.querySelectorAll(".film-item")].findIndex((el) => el.classList.contains("current")),
+    clickFilm: (i) => {
+      const items = document.querySelectorAll(".film-item");
+      if (items[i]) { items[i].click(); return true; }
+      return false;
+    },
   };
   </script>
   <script type="module" src="../src/app.js"></script>

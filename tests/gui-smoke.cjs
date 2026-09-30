@@ -178,8 +178,8 @@ const CTRL_SHIFT = 2 | 8;
   // ---- boot ----
   const months = await probe("p.monthRows()");
   ok("boots into the months view", months.length === 2, JSON.stringify(months));
-  ok("months are ordered newest first", /Eylül/.test(months[0] || ""), JSON.stringify(months));
-  ok("month rows carry totals", /3 dosya/.test(months[0] || "") && /1 dosya/.test(months[1] || ""), JSON.stringify(months));
+  ok("months are ordered newest first", /September/.test(months[0] || ""), JSON.stringify(months));
+  ok("month rows carry totals", /3 files/.test(months[0] || "") && /1 files/.test(months[1] || ""), JSON.stringify(months));
   ok("month rows show a thumbnail preview strip", (await probe("p.monthThumbCount()")) > 0, String(await probe("p.monthThumbCount()")));
 
   // ---- open the September queue ----
@@ -196,6 +196,17 @@ const CTRL_SHIFT = 2 | 8;
   ok("the top card is the current one", (await probe("p.deckTopName()")) === first, await probe("p.deckTopName()"));
   const cr = await probe("p.cardRect()");
   ok("the card fills the deck", cr && cr.w > 400 && cr.h > 150, JSON.stringify(cr));
+
+  // ---- queue filmstrip ----
+  ok("filmstrip shows the queue", (await probe("p.filmCount()")) > 0, String(await probe("p.filmCount()")));
+  ok("filmstrip marks the current item", (await probe("p.filmCurrent()")) >= 0, String(await probe("p.filmCurrent()")));
+  const beforeJump = await probe("p.cardName()");
+  await js("p.clickFilm(1);");
+  await sleep(300);
+  ok("clicking a film item jumps to it", (await probe("p.cardName()")) !== beforeJump, `${beforeJump} -> ${await probe("p.cardName()")}`);
+  // Jump back so later tests start from the first card again.
+  await js("p.clickFilm(0);");
+  await sleep(300);
   const nat = await probe("p.imgNatural()");
   ok("the card image loads at full size", nat && nat.w > 100, JSON.stringify(nat));
 
@@ -211,6 +222,14 @@ const CTRL_SHIFT = 2 | 8;
   await js("p.closeViewer();");
   await sleep(200);
   ok("viewer closes", (await probe("p.viewerOpen()")) === false);
+
+  // ---- clicking the card itself opens the viewer ----
+  await js("p.clickCard();");
+  await sleep(300);
+  ok("clicking the card opens the viewer", (await probe("p.viewerOpen()")) === true);
+  await js("p.closeViewer();");
+  await sleep(200);
+  ok("viewer closes after a card click", (await probe("p.viewerOpen()")) === false);
 
   // ---- keep, then undo ----
   await press("ArrowRight");
@@ -250,9 +269,9 @@ const CTRL_SHIFT = 2 | 8;
   await press("ArrowLeft");
   await sleep(300);
   ok("ArrowLeft stages the deletion", (await probe(`p.status(${JSON.stringify(stageA)})`)) === "staged", await probe(`p.status(${JSON.stringify(stageA)})`));
-  ok("footbar appears once something is staged", (await probe("p.footbarHidden()")) === false);
+  ok("footbar appears once something is staged", (await probe("p.footbarOn()")) === true);
   ok("staged counter reads 1", (await probe("p.stagedCount()")) === "1", await probe("p.stagedCount()"));
-  ok("staged button shows the count", /Silinecekler \(1\)/.test(await probe("p.stagedBtn()")), await probe("p.stagedBtn()"));
+  ok("staged button shows the count", /To Delete \(1\)/.test(await probe("p.stagedBtn()")), await probe("p.stagedBtn()"));
 
   const stageB = await probe("p.cardName()");
   ok("view advances after a stage", stageB !== stageA, String(stageB));
@@ -270,7 +289,7 @@ const CTRL_SHIFT = 2 | 8;
   ok("failed write leaves the card on screen", (await probe("p.cardName()")) === cardBefore, `${cardBefore} -> ${await probe("p.cardName()")}`);
   ok("failed write does not advance the counter", (await probe("p.progress()")) === progressBefore, `${progressBefore} -> ${await probe("p.progress()")}`);
   ok("failed write leaves the status untouched", (await probe(`p.status(${JSON.stringify(cardBefore)})`)) === "pending", await probe(`p.status(${JSON.stringify(cardBefore)})`));
-  ok("failed write tells the user", /kaydedilemedi/i.test(await probe("p.toastText()")), await probe("p.toastText()"));
+  ok("failed write tells the user", /Couldn't save decision/i.test(await probe("p.toastText()")), await probe("p.toastText()"));
   await js("p.setFailNextDecide(false);");
 
   // ---- Ctrl+Z also undoes ----
@@ -299,7 +318,7 @@ const CTRL_SHIFT = 2 | 8;
   await js("p.clickCommit();");
   await sleep(250);
   ok("commit dialog opens", (await probe("p.modalHidden()")) === false);
-  ok("focus starts on the safe option", (await probe("p.focusedLabel()")) === "Vazgeç", await probe("p.focusedLabel()"));
+  ok("focus starts on the safe option", (await probe("p.focusedLabel()")) === "Cancel", await probe("p.focusedLabel()"));
 
   await press("Enter");
   await sleep(250);
@@ -331,7 +350,7 @@ const CTRL_SHIFT = 2 | 8;
   await sleep(500);
   ok("commit moved exactly 2 files", (await probe("p.logFilter('commit:')"))[0] === "commit:2", JSON.stringify(await probe("p.logFilter('commit:')")));
   ok("staged counter resets to 0", (await probe("p.stagedCount()")) === "0", await probe("p.stagedCount()"));
-  ok("footbar hides when nothing is staged", (await probe("p.footbarHidden()")) === true);
+  ok("footbar hides when nothing is staged", (await probe("p.footbarOn()")) === false);
   ok("staged button hides when nothing is staged", /\(0\)/.test(await probe("p.stagedBtn()")), await probe("p.stagedBtn()"));
 
   // ---- a re-scan preserves decisions ----
@@ -377,7 +396,7 @@ const CTRL_SHIFT = 2 | 8;
   // ---- picking a folder scans it and lands on the months view ----
   await js("p.resetToSetup();");
   await sleep(300);
-  ok("setup view appears when there are no roots", /Klasör seç/.test(await probe("p.viewText()")), await probe("p.viewText()"));
+  ok("setup view appears when there are no roots", /Choose Folder/.test(await probe("p.viewText()")), await probe("p.viewText()"));
   await js("p.reset();");
   await js("p.addFolder();");
   await sleep(600);
