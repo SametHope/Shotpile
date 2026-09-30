@@ -17,7 +17,6 @@
   --radius: 12px;
   --shadow: 0 1px 2px rgba(13, 18, 24, .06), 0 1px 3px rgba(13, 18, 24, .05);
   --shadow-lg: 0 10px 30px rgba(13, 18, 24, .14), 0 2px 8px rgba(13, 18, 24, .08);
-  --cur-pointer: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='20' height='20'><circle cx='10' cy='10' r='4' fill='black'/></svg>") 10 10, pointer;
   --ease: cubic-bezier(.2, .7, .3, 1);
 }
 
@@ -59,7 +58,7 @@ body::before {
 
 button, input, select { font-family: inherit; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-button { cursor: var(--cur-pointer); }
+button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .5; }
 
 /* ---------- shell ---------- */
@@ -238,7 +237,7 @@ main {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
-  cursor: var(--cur-pointer);
+  cursor: pointer;
   transition: border-color .12s, box-shadow .12s, transform .08s;
   text-align: left;
   font: inherit;
@@ -274,6 +273,18 @@ main {
 .bar.complete > i { background: var(--ok); }
 
 .chips { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 6px; grid-column: 1 / -1; }
+
+/* Preview strip: a few sample thumbnails from the month. */
+.thumbs { display: flex; gap: 5px; margin-top: 8px; grid-column: 1 / -1; }
+.thumbs img {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #f6f8fb;
+  flex: 0 0 auto;
+}
 
 .chip {
   font-size: 11.5px;
@@ -315,12 +326,29 @@ main {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
-  display: grid;
-  place-items: center;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
 }
+
+/* The review deck: the current card on top, the next couple peeking out
+   below it so a swipe always has somewhere to land. */
+.deck { position: absolute; inset: 0; }
+
+.deck .card {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  max-width: min(940px, 100%);
+  transform: translate(-50%, -50%) translateY(var(--deck-dy, 0)) scale(var(--deck-scale, 1));
+  transform-origin: center;
+}
+
+.deck .deck-1 { --deck-dy: 22px; --deck-scale: 0.95; z-index: 1; }
+.deck .deck-2 { --deck-dy: 44px; --deck-scale: 0.90; z-index: 0; }
+.deck .deck-top { z-index: 2; }
+
+.deck .deck-card { pointer-events: none; }
 
 .card {
   position: relative;
@@ -334,6 +362,7 @@ main {
   box-shadow: var(--shadow-lg);
   overflow: hidden;
   will-change: transform;
+  cursor: grab;
 }
 
 .card.dragging { cursor: grabbing; }
@@ -346,6 +375,7 @@ main {
   place-items: center;
   background:
     repeating-conic-gradient(#f6f8fb 0% 25%, #eef1f6 0% 50%) 50% / 18px 18px;
+  cursor: zoom-in;
 }
 
 .card img {
@@ -544,6 +574,70 @@ kbd {
   border-radius: 8px;
   border: 1px solid #232b36;
 }
+
+/* ---------- photo viewer ---------- */
+
+.viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(10, 14, 21, .94);
+  display: flex;
+  flex-direction: column;
+}
+
+.viewer-imgwrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  cursor: zoom-in;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.viewer-imgwrap:active { cursor: grabbing; }
+
+.viewer-imgwrap img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
+  transform-origin: center;
+  will-change: transform;
+}
+
+.viewer-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: rgba(20, 26, 35, .96);
+  border-top: 1px solid #232b36;
+  color: #d7e0ea;
+}
+
+.viewer-bar .viewer-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.viewer-bar .viewer-zoom {
+  font-variant-numeric: tabular-nums;
+  min-width: 52px;
+  text-align: center;
+  color: #9aa7b8;
+}
+
+.viewer-bar .btn { background: #1a2230; border-color: #2c3748; color: #d7e0ea; }
+.viewer-bar .btn:hover { background: #232f42; }
 
 .sr {
   position: absolute;

@@ -55,6 +55,12 @@ pub struct CommitReport {
     pub still_staged: usize,
 }
 
+#[derive(Debug, Serialize)]
+pub struct MonthThumbs {
+    pub month: String,
+    pub paths: Vec<String>,
+}
+
 fn tz_offset_min(tz: Option<i64>) -> i64 {
     tz.unwrap_or(0)
 }
@@ -229,6 +235,24 @@ pub fn months(
     tz: Option<i64>,
 ) -> Result<Vec<MonthStat>, String> {
     lock(&state.db).months(root_id, tz_offset_min(tz))
+}
+
+/// Sample image paths per month, for the preview strip on each month row.
+#[tauri::command]
+pub fn month_thumbs(
+    state: State<'_, AppState>,
+    root_id: Option<i64>,
+    tz: Option<i64>,
+    limit: Option<usize>,
+) -> Result<Vec<MonthThumbs>, String> {
+    let db = lock(&state.db);
+    let limit = limit.unwrap_or(5).min(12);
+    db.month_thumbs(root_id, tz_offset_min(tz), limit)
+        .map(|rows| {
+            rows.into_iter()
+                .map(|(month, paths)| MonthThumbs { month, paths })
+                .collect()
+        })
 }
 
 #[tauri::command]

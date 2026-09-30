@@ -1,0 +1,12 @@
+feat: card deck, photo viewer, month thumbnails, desktop cursors
+
+- Review shows a deck: the next two cards peek out below the current one, so
+  a swipe always has somewhere to land. The upcoming shots are hydrated before
+  the first render so the deck is complete immediately.
+- Clicking an image opens a full-screen photo viewer: scroll zooms to 8x,
+  drag pans, double-click toggles 1x/2x, Esc closes, arrows pan, +/- zoom.
+- Each month row carries a strip of sample thumbnails (new month_thumbs
+  command) instead of numbers only.
+- Replace the custom circle cursor with proper desktop cursors: pointer on
+  buttons and month rows, grab/grabbing on the draggable card, zoom-in on the
+  image.

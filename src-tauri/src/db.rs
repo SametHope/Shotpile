@@ -664,6 +664,52 @@ impl Db {
             .map_err(|e| e.to_string())
     }
 
+    /// Sample image paths per month, newest first, for the month-list preview
+    /// strip. `limit` caps how many thumbnails each month contributes.
+    pub fn month_thumbs(
+        &self,
+        root_id: Option<i64>,
+        tz_offset_min: i64,
+        limit: usize,
+    ) -> Result<Vec<(String, Vec<String>)>, String> {
+        let (filter, args) = root_filter(root_id);
+        let month_expr = format!(
+            "strftime('%Y-%m', (taken_ms + {}) / 1000, 'unixepoch')",
+            tz_offset_min * 60_000
+        );
+        let sql = format!(
+            "SELECT {month_expr} AS m, path FROM screenshots
+             WHERE missing = 0{filter}
+             ORDER BY taken_ms DESC"
+        );
+        let mut stmt = self.conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let refs = to_sql_refs(&args);
+        let rows = stmt
+            .query_map(refs.as_slice(), |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut order: Vec<String> = Vec::new();
+        let mut map: HashMap<String, Vec<String>> = HashMap::new();
+        for row in rows {
+            let (m, path) = row.map_err(|e| e.to_string())?;
+            if !map.contains_key(&m) {
+                order.push(m.clone());
+            }
+            let entry = map.entry(m).or_default();
+            if entry.len() < limit {
+                entry.push(path);
+            }
+        }
+        Ok(order
+            .into_iter()
+            .map(|m| {
+                let paths = map.remove(&m).unwrap_or_default();
+                (m, paths)
+            })
+            .collect())
+    }
+
     /// Staged rows joined with their screenshot paths, oldest first.
     pub fn staged_rows(&self) -> Result<Vec<(i64, String, String)>, String> {
         let mut stmt = self
@@ -798,6 +844,26 @@ mod tests {
         assert_eq!(jan.staged, 1);
         assert_eq!(jan.remaining, 0);
         assert_eq!(jan.reviewed, 1);
+    }
+
+    #[test]
+    fn month_thumbs_returns_sample_paths_per_month() {
+        let db = db();
+        let jan_a = 1_768_476_000_000i64;
+        let jan_b = jan_a + 86_400_000;
+        let mar = jan_a + 60 * 86_400_000;
+        seed(&db, "/photos/1.png", jan_a);
+        seed(&db, "/photos/2.png", jan_b);
+        seed(&db, "/photos/3.png", mar);
+
+        let thumbs = db.month_thumbs(None, 0, 2).unwrap();
+        assert_eq!(thumbs.len(), 2);
+        // Newest month first.
+        assert_eq!(thumbs[0].0, "2026-03");
+        assert_eq!(thumbs[0].1.len(), 1);
+        assert_eq!(thumbs[1].0, "2026-01");
+        // Capped at the limit even though January has two files.
+        assert_eq!(thumbs[1].1.len(), 2);
     }
 
     #[test]

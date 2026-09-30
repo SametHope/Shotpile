@@ -180,6 +180,7 @@ const CTRL_SHIFT = 2 | 8;
   ok("boots into the months view", months.length === 2, JSON.stringify(months));
   ok("months are ordered newest first", /Eylül/.test(months[0] || ""), JSON.stringify(months));
   ok("month rows carry totals", /3 dosya/.test(months[0] || "") && /1 dosya/.test(months[1] || ""), JSON.stringify(months));
+  ok("month rows show a thumbnail preview strip", (await probe("p.monthThumbCount()")) > 0, String(await probe("p.monthThumbCount()")));
 
   // ---- open the September queue ----
   await probe("p.clickFirstMonth()");
@@ -189,6 +190,23 @@ const CTRL_SHIFT = 2 | 8;
   const first = await probe("p.cardName()");
   ok("first card is the oldest pending file", /2026-09-02/.test(first || ""), String(first));
   ok("progress shows position in queue", (await probe("p.progress()")) === "1 / 3", await probe("p.progress()"));
+
+  // ---- the deck shows the upcoming cards below the current one ----
+  ok("deck shows the current card plus two upcoming", (await probe("p.deckCount()")) === 3, String(await probe("p.deckCount()")));
+  ok("the top card is the current one", (await probe("p.deckTopName()")) === first, await probe("p.deckTopName()"));
+
+  // ---- photo viewer ----
+  await js("p.openViewer();");
+  await sleep(300);
+  ok("clicking the image opens the viewer", (await probe("p.viewerOpen()")) === true);
+  ok("viewer shows the current file", (await probe("p.viewerName()")) === first, await probe("p.viewerName()"));
+  ok("viewer starts at 100%", (await probe("p.viewerZoom()")) === "100%", await probe("p.viewerZoom()"));
+  await js("document.querySelector('.viewer-imgwrap').dispatchEvent(new WheelEvent('wheel', { deltaY: -100, clientX: 400, clientY: 300, cancelable: true, bubbles: true }));");
+  await sleep(200);
+  ok("scrolling zooms in", (await probe("p.viewerZoom()")) !== "100%", await probe("p.viewerZoom()"));
+  await js("p.closeViewer();");
+  await sleep(200);
+  ok("viewer closes", (await probe("p.viewerOpen()")) === false);
 
   // ---- keep, then undo ----
   await press("ArrowRight");

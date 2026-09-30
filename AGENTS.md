@@ -47,8 +47,8 @@ src-tauri/src/commands.rs the entire command surface
 
 ```powershell
 npm run test:logic                          # 22 frontend logic tests
-npm run test:gui                            # 57 GUI assertions in headless Chrome
-cd src-tauri; cargo test                    # 38 unit + 2 end-to-end tests
+npm run test:gui                            # 68 GUI assertions in headless Chrome
+cd src-tauri; cargo test                    # 39 unit + 2 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
 ```
@@ -77,6 +77,22 @@ probe there. Chrome must be installed; the script has no npm dependencies.
   `style.css` starts with `[hidden] { display: none !important; }`. Do not
   remove it: without it the modal and header buttons stay on screen and block
   the app even when they are marked `hidden`.
+
+## Review view
+
+- The review shows a **deck**, not a single card: `cardStack()` paints the next
+  couple of shots behind the current one (`.deck-1`, `.deck-2`) so a swipe has
+  somewhere to land. The upcoming shots are hydrated in `showCurrent()` before
+  the first render, otherwise the deck would show only one card until the
+  background preload landed.
+- The deck cards are absolutely positioned and centred via
+  `translate(-50%, -50%)`. The swipe gesture sets `cardEl.style.transform`
+  inline, so every one of those transforms must repeat the
+  `translate(-50%, -50%)` prefix or the card jumps to the corner.
+- Clicking the image opens the **photo viewer** (`.viewer`), a full-screen
+  overlay with scroll-zoom, drag-pan and double-click toggle. While it is open
+  it owns the keyboard: `Esc` closes, arrows pan, `+`/`-` zoom. The viewer is
+  created dynamically in `openViewer()`, so it needs no markup in `index.html`.
 
 ## Environment notes
 

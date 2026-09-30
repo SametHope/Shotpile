@@ -113,6 +113,7 @@ pub fn run() {
             commands::scan_root,
             commands::list_roots,
             commands::months,
+            commands::month_thumbs,
             commands::summary,
             commands::queue_ids,
             commands::items,

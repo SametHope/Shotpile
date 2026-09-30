@@ -123,6 +123,16 @@
         remaining: count(list, "pending"),
       }));
     },
+    month_thumbs: (a) => {
+      const mine = a.rootId == null ? [...shots.values()] : byRoot(a.rootId);
+      const by = new Map();
+      for (const s of mine) {
+        const k = monthKey(s.taken_ms);
+        if (!by.has(k)) by.set(k, []);
+        if (by.get(k).length < (a.limit || 5)) by.get(k).push(s.path);
+      }
+      return [...by.entries()].sort((x, y) => y[0].localeCompare(x[0])).map(([month, paths]) => ({ month, paths }));
+    },
     queue_ids: (a) => {
       let out = a.rootId == null ? [...shots.values()] : byRoot(a.rootId);
       if (a.scope === "month") out = out.filter((s) => monthKey(s.taken_ms) === a.month);
@@ -215,9 +225,9 @@
       const s = [...shots.values()].find((x) => x.name === name);
       return s ? s.status : null;
     },
-    // Read the card's own filename node rather than scraping the whole view.
+    // Read the top card's own filename node (the deck has several .card nodes).
     cardName: () => {
-      const n = $(".card .fname");
+      const n = $(".deck-top .fname");
       return n ? n.textContent.trim() : null;
     },
     cardExt: () => {
@@ -279,6 +289,24 @@
     resetRoots: () => { roots.length = 0; },
     addFolder: () => window.__sifterTest.addFolder(),
     resetToSetup: () => window.__sifterTest.resetToSetup(),
+    // Deck / viewer / thumbnail probes.
+    deckCount: () => document.querySelectorAll(".deck .card").length,
+    deckTopName: () => {
+      const top = document.querySelector(".deck .deck-top .fname");
+      return top ? top.textContent.trim() : null;
+    },
+    monthThumbCount: () => document.querySelectorAll(".month .thumbs img").length,
+    viewerOpen: () => !!document.getElementById("viewer"),
+    viewerZoom: () => {
+      const n = document.querySelector(".viewer-zoom");
+      return n ? n.textContent.trim() : null;
+    },
+    viewerName: () => {
+      const n = document.querySelector(".viewer-name");
+      return n ? n.textContent.trim() : null;
+    },
+    openViewer: () => window.__sifterTest.openViewer(),
+    closeViewer: () => window.__sifterTest.closeViewer(),
   };
   </script>
   <script type="module" src="../src/app.js"></script>

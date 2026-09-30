@@ -50,6 +50,7 @@ const state = {
   rootId: null,
   months: [],
   summary: null,
+  thumbs: null, // month -> [path, path, ...] for the preview strip
   queue: new ReviewQueue(),
   cache: new Map(), // id -> shot
   scope: null, // { scope, month }
@@ -213,12 +214,14 @@ async function loadRoots() {
 }
 
 async function loadMonths() {
-  const [months, summary] = await Promise.all([
+  const [months, summary, thumbs] = await Promise.all([
     api("months", tzArgs()),
     api("summary", tzArgs()),
+    api("month_thumbs", { ...tzArgs(), limit: 5 }),
   ]);
   state.months = months;
   state.summary = summary;
+  state.thumbs = new Map(thumbs.map((t) => [t.month, t.paths]));
   await refreshCounts();
 }
 
@@ -255,6 +258,9 @@ async function showCurrent() {
     const [shot] = await hydrate([id]);
     state.card = shot || null;
   }
+  // Hydrate the upcoming cards before rendering so the deck can show them on
+  // the first paint, not only after the background preload lands.
+  await hydrate(state.queue.upcoming(2, 1));
   render();
   if (id !== null) preload();
 }
@@ -358,6 +364,8 @@ function monthRow(m) {
   if (p.staged) chips.push(h("span", { class: "chip staged", text: `${p.staged} silinmeyi bekliyor` }));
   if (p.skipped) chips.push(h("span", { class: "chip skipped", text: `${p.skipped} atlandı` }));
 
+  const thumbs = state.thumbs?.get(m.month) || [];
+
   return h("button", {
     class: "month",
     disabled: p.total === 0,
@@ -373,7 +381,11 @@ function monthRow(m) {
         : h("span", { text: `${p.remaining} kaldı` })
     ),
     h("div", { class: `bar${p.done ? " complete" : ""}` }, h("i", { style: `width:${Math.round(p.ratio * 100)}%` })),
-    chips.length ? h("div", { class: "chips" }, chips) : null
+    chips.length ? h("div", { class: "chips" }, chips) : null,
+    thumbs.length
+      ? h("div", { class: "thumbs" }, thumbs.map((path) =>
+          h("img", { src: convertFileSrc(path), alt: "", loading: "lazy", draggable: "false" })))
+      : null
   );
 }
 
@@ -402,7 +414,7 @@ function renderReview() {
       )
     );
   } else {
-    body = h("div", { class: "stage", id: "stage" }, card(state.card));
+    body = h("div", { class: "stage", id: "stage" }, cardStack());
   }
 
   const actions = h("div", { class: "actions" },
@@ -423,14 +435,14 @@ function kbd(text) {
   return h("kbd", { text });
 }
 
-function card(shot) {
+function card(shot, top = false) {
   const img = shot.viewable
     ? h("img", { src: convertFileSrc(shot.path), alt: shot.name, draggable: "false" })
     : h("div", { class: "noimg" },
         h("div", { text: `${shot.ext.toUpperCase()} önizlemesi yok` }),
         h("code", { text: "Bu biçim WebView2 ile açılamıyor; dosya adı ve boyutundan karar verebilirsin." }));
 
-  return h("div", { class: "card", id: "card" },
+  return h("div", { class: "card", id: top ? "card" : null },
     h("div", { class: "stamp left", text: "Sil" }),
     h("div", { class: "stamp right", text: "Sakla" }),
     h("div", { class: "stamp up", text: "Atla" }),
@@ -446,6 +458,130 @@ function card(shot) {
       )
     )
   );
+}
+
+/**
+ * The review deck: the current card on top, the next couple peeking out below
+ * it. The upcoming shots are already in the cache because `preload()` hydrates
+ * them when the current card is shown.
+ */
+function cardStack() {
+  const current = state.card;
+  const nextIds = state.queue.upcoming(2, 1);
+  const nextShots = nextIds.map((id) => state.cache.get(id)).filter(Boolean);
+
+  const deck = h("div", { class: "deck" });
+  // Paint the farthest first so the closest upcoming card sits on top.
+  for (let i = nextShots.length - 1; i >= 0; i--) {
+    const el = card(nextShots[i]);
+    el.classList.add("deck-card", `deck-${i + 1}`);
+    deck.append(el);
+  }
+  const top = card(current, true);
+  top.classList.add("deck-top");
+  top.querySelector(".imgwrap").addEventListener("click", () => openViewer(current));
+  deck.append(top);
+  return deck;
+}
+
+// ---------------------------------------------------------------- photo viewer
+
+const viewer = { el: null, img: null, label: null, scale: 1, x: 0, y: 0, drag: null };
+
+function openViewer(shot) {
+  if (!shot?.viewable) return;
+  closeViewer();
+  viewer.scale = 1;
+  viewer.x = 0;
+  viewer.y = 0;
+
+  const img = h("img", { src: convertFileSrc(shot.path), alt: shot.name, draggable: "false" });
+  const label = h("span", { class: "viewer-zoom", text: "100%" });
+  const imgwrap = h("div", { class: "viewer-imgwrap" }, img);
+
+  const overlay = h("div", { class: "viewer", id: "viewer" },
+    imgwrap,
+    h("div", { class: "viewer-bar" },
+      h("span", { class: "viewer-name", text: shot.name }),
+      h("div", { class: "spacer" }),
+      h("button", { class: "btn sm", onclick: () => zoomBy(1 / 1.25) }, "−"),
+      label,
+      h("button", { class: "btn sm", onclick: () => zoomBy(1.25) }, "+"),
+      h("button", { class: "btn sm", onclick: resetZoom }, "Sıfırla"),
+      h("button", { class: "btn sm", onclick: closeViewer }, "Kapat (Esc)")
+    )
+  );
+
+  viewer.el = overlay;
+  viewer.img = img;
+  viewer.label = label;
+  document.body.append(overlay);
+
+  overlay.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12);
+  }, { passive: false });
+
+  imgwrap.addEventListener("pointerdown", (e) => {
+    viewer.drag = { px: e.clientX, py: e.clientY, ox: viewer.x, oy: viewer.y };
+    imgwrap.setPointerCapture(e.pointerId);
+  });
+  imgwrap.addEventListener("pointermove", (e) => {
+    if (!viewer.drag) return;
+    viewer.x = viewer.drag.ox + (e.clientX - viewer.drag.px);
+    viewer.y = viewer.drag.oy + (e.clientY - viewer.drag.py);
+    applyView();
+  });
+  const endDrag = () => { viewer.drag = null; };
+  imgwrap.addEventListener("pointerup", endDrag);
+  imgwrap.addEventListener("pointercancel", endDrag);
+
+  imgwrap.addEventListener("dblclick", () => {
+    if (viewer.scale > 1) resetZoom();
+    else {
+      viewer.scale = 2;
+      viewer.x = 0;
+      viewer.y = 0;
+      applyView();
+    }
+  });
+
+  applyView();
+  log.info("viewer", shot.name);
+}
+
+function closeViewer() {
+  if (!viewer.el) return;
+  viewer.el.remove();
+  viewer.el = null;
+  viewer.img = null;
+  viewer.label = null;
+  viewer.drag = null;
+}
+
+function applyView() {
+  if (!viewer.img) return;
+  viewer.img.style.transform = `translate(${viewer.x}px, ${viewer.y}px) scale(${viewer.scale})`;
+  if (viewer.label) viewer.label.textContent = `${Math.round(viewer.scale * 100)}%`;
+}
+
+function zoomBy(factor) {
+  const next = Math.min(8, Math.max(1, viewer.scale * factor));
+  if (next === viewer.scale) return;
+  // Zoom toward the centre of the viewport.
+  const cx = window.innerWidth / 2;
+  const cy = window.innerHeight / 2;
+  viewer.x = cx - (cx - viewer.x) * (next / viewer.scale);
+  viewer.y = cy - (cy - viewer.y) * (next / viewer.scale);
+  viewer.scale = next;
+  applyView();
+}
+
+function resetZoom() {
+  viewer.scale = 1;
+  viewer.x = 0;
+  viewer.y = 0;
+  applyView();
 }
 
 function renderStaged() {
@@ -740,7 +876,7 @@ function attachGestures() {
     d.action = v.action;
 
     const angle = (v.vertical ? d.dy : d.dx) * 0.035;
-    cardEl.style.transform = `translate(${d.dx}px, ${d.dy}px) rotate(${angle}deg)`;
+    cardEl.style.transform = `translate(-50%, -50%) translate(${d.dx}px, ${d.dy}px) rotate(${angle}deg)`;
     cardEl.classList.add("dragging");
 
     const left = cardEl.querySelector(".stamp.left");
@@ -767,7 +903,7 @@ function attachGestures() {
     }
     const v = exitVector(action, Math.max(900, window.innerWidth));
     cardEl.style.transition = "transform .2s cubic-bezier(.2,.7,.3,1), opacity .2s";
-    cardEl.style.transform = `translate(${v.x}px, ${v.y}px) rotate(${v.x * 0.02}deg)`;
+    cardEl.style.transform = `translate(-50%, -50%) translate(${v.x}px, ${v.y}px) rotate(${v.x * 0.02}deg)`;
     cardEl.style.opacity = "0";
     setTimeout(() => decide(action), 130);
   };
@@ -799,6 +935,22 @@ document.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "l") {
     e.preventDefault();
     showLog();
+    return;
+  }
+
+  // While the photo viewer is open it owns the keyboard: Esc closes, arrows pan.
+  if (viewer.el) {
+    const pan = 60;
+    switch (e.key) {
+      case "Escape": e.preventDefault(); closeViewer(); break;
+      case "ArrowLeft": e.preventDefault(); viewer.x += pan; applyView(); break;
+      case "ArrowRight": e.preventDefault(); viewer.x -= pan; applyView(); break;
+      case "ArrowUp": e.preventDefault(); viewer.y += pan; applyView(); break;
+      case "ArrowDown": e.preventDefault(); viewer.y -= pan; applyView(); break;
+      case "+": case "=": e.preventDefault(); zoomBy(1.25); break;
+      case "-": case "_": e.preventDefault(); zoomBy(1 / 1.25); break;
+      default: break;
+    }
     return;
   }
 
@@ -834,6 +986,8 @@ document.addEventListener("keydown", (e) => {
 // a native dialog. Not used in production.
 window.__sifterTest = {
   addFolder,
+  openViewer: () => openViewer(state.card),
+  closeViewer,
   resetToSetup() {
     state.roots = [];
     state.rootId = null;
