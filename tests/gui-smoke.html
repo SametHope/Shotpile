@@ -206,7 +206,23 @@
 
   window.__TAURI__ = {
     core: {
-      convertFileSrc: (p) => "data:image/gif;base64,R0lGODlhAQABAIAAAAUEBA==",
+      // A large generated image, so the card layout is exercised with a
+      // real-sized photo rather than a 1x1 GIF.
+      convertFileSrc: (p) => {
+        const c = document.createElement("canvas");
+        c.width = 2000;
+        c.height = 1500;
+        const ctx = c.getContext("2d");
+        const g = ctx.createLinearGradient(0, 0, 2000, 1500);
+        g.addColorStop(0, "#3b82f6");
+        g.addColorStop(1, "#1d4ed8");
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, 2000, 1500);
+        ctx.fillStyle = "rgba(255,255,255,.85)";
+        ctx.font = "90px sans-serif";
+        ctx.fillText("TEST", 820, 820);
+        return c.toDataURL("image/png");
+      },
       invoke: async (cmd, args = {}) => {
         LOG.push("invoke:" + cmd);
         const h = handlers[cmd];
@@ -292,8 +308,31 @@
     // Deck / viewer / thumbnail probes.
     deckCount: () => document.querySelectorAll(".deck .card").length,
     deckTopName: () => {
-      const top = document.querySelector(".deck .deck-top .fname");
+      const top = document.querySelector(".deck-top .fname");
       return top ? top.textContent.trim() : null;
+    },
+    cardRect: () => {
+      const c = document.querySelector(".deck .deck-top");
+      if (!c) return null;
+      const r = c.getBoundingClientRect();
+      return { w: Math.round(r.width), h: Math.round(r.height) };
+    },
+    layout: () => {
+      const g = (s) => {
+        const el = document.querySelector(s);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { w: Math.round(r.width), h: Math.round(r.height) };
+      };
+      return {
+        view: g("#view"),
+        stage: g(".stage"),
+        card: g(".deck .deck-top"),
+      };
+    },
+    imgNatural: () => {
+      const img = document.querySelector(".deck .card img");
+      return img ? { w: img.naturalWidth, h: img.naturalHeight, complete: img.complete } : null;
     },
     monthThumbCount: () => document.querySelectorAll(".month .thumbs img").length,
     viewerOpen: () => !!document.getElementById("viewer"),

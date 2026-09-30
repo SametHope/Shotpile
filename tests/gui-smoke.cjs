@@ -194,6 +194,10 @@ const CTRL_SHIFT = 2 | 8;
   // ---- the deck shows the upcoming cards below the current one ----
   ok("deck shows the current card plus two upcoming", (await probe("p.deckCount()")) === 3, String(await probe("p.deckCount()")));
   ok("the top card is the current one", (await probe("p.deckTopName()")) === first, await probe("p.deckTopName()"));
+  const cr = await probe("p.cardRect()");
+  ok("the card fills the deck", cr && cr.w > 400 && cr.h > 150, JSON.stringify(cr));
+  const nat = await probe("p.imgNatural()");
+  ok("the card image loads at full size", nat && nat.w > 100, JSON.stringify(nat));
 
   // ---- photo viewer ----
   await js("p.openViewer();");

@@ -47,7 +47,7 @@ src-tauri/src/commands.rs the entire command surface
 
 ```powershell
 npm run test:logic                          # 22 frontend logic tests
-npm run test:gui                            # 68 GUI assertions in headless Chrome
+npm run test:gui                            # 70 GUI assertions in headless Chrome
 cd src-tauri; cargo test                    # 39 unit + 2 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
@@ -85,6 +85,14 @@ probe there. Chrome must be installed; the script has no npm dependencies.
   somewhere to land. The upcoming shots are hydrated in `showCurrent()` before
   the first render, otherwise the deck would show only one card until the
   background preload landed.
+- The deck is absolutely positioned, so it needs a definite height from
+  somewhere. `#view` is `height: 100%` (so the chain `#view → .review → .wrap
+  → .stage → .deck` resolves) and `.deck .card` is `height: 100%`. Without both,
+  the card collapses to its 2px border and the review shows an empty area. The
+  old grid layout supplied this height for free; absolute positioning does not.
+- `.review .wrap` sets `margin: 0` to override the `.wrap` class's
+  `margin: 0 auto`. On a flex item, auto margins absorb the free space and stop
+  the wrap from stretching, which would leave the card narrow.
 - The deck cards are absolutely positioned and centred via
   `translate(-50%, -50%)`. The swipe gesture sets `cardEl.style.transform`
   inline, so every one of those transforms must repeat the

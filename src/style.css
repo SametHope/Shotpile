@@ -116,8 +116,15 @@ header {
 main {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
   overflow-x: hidden;
+}
+
+/* #view needs a definite height so the review stage (and the absolutely
+   positioned deck inside it) can resolve a height. Without it the whole
+   chain is auto-height and the deck collapses to zero. */
+#view {
+  height: 100%;
+  overflow-y: auto;
 }
 
 .wrap {
@@ -308,7 +315,10 @@ main {
   min-height: 0;
 }
 
-.review .wrap { display: flex; flex-direction: column; min-height: 100%; padding-bottom: 18px; }
+/* `margin: 0` overrides the `.wrap` class's `margin: 0 auto`: on a flex item,
+   auto margins absorb the free space and stop the wrap from stretching to the
+   review's width, which would leave the card narrow. */
+.review .wrap { display: flex; flex-direction: column; min-height: 100%; padding-bottom: 18px; margin: 0; }
 
 .progress-row {
   display: flex;
@@ -339,7 +349,12 @@ main {
   position: absolute;
   left: 50%;
   top: 50%;
-  max-width: min(940px, 100%);
+  width: min(940px, 100%);
+  /* A definite height is required: with `auto` the image's max-height:100%
+     chain (image -> imgwrap -> card) cannot resolve and the card collapses to
+     its border. The old grid layout supplied this height for free. */
+  height: 100%;
+  max-height: 100%;
   transform: translate(-50%, -50%) translateY(var(--deck-dy, 0)) scale(var(--deck-scale, 1));
   transform-origin: center;
 }
