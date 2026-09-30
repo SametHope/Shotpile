@@ -41,10 +41,19 @@ npm run build        # NSIS installer in src-tauri/target/release/bundle
 ## Tests
 
 ```powershell
-npm run test:logic              # frontend logic (node --test)
-cd src-tauri; cargo test        # date inference, database, queue scoping
-cd src-tauri; cargo clippy --all-targets
+npm run test:logic   # 23 frontend logic tests (node --test)
+npm run test:gui     # 49 GUI assertions: the real src/app.js in headless Chrome
+cd src-tauri; cargo test                  # 36 unit + 2 end-to-end tests
+cd src-tauri; cargo clippy --all-targets -- -D warnings
+cd src-tauri; cargo fmt --check
 ```
+
+`npm run test:gui` loads `tests/gui-smoke.html` in headless Chrome, which runs
+the unmodified `src/app.js` against an in-memory stand-in for the Rust commands,
+then drives it with real browser key events. It covers what the Rust tests
+cannot: the rendered card, the keyboard shortcuts, drag-decision rollback, and
+the confirmation dialog. It needs Chrome installed and asserts that Enter does
+**not** confirm a destructive action.
 
 ## Architecture
 
@@ -109,3 +118,5 @@ Tracked but not previewable, shown as a placeholder you can still decide on:
   back does not.
 - The undo stack is not re-seeded when you switch folders.
 - There is no thumbnail grid yet, by design. The month list is numbers only.
+- Staging and the Recycle Bin commit are global across every watched folder,
+  while the month list and per-month counts are per folder.

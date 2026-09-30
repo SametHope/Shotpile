@@ -70,7 +70,7 @@ function tzArgs() {
 
 async function refreshCounts() {
   state.summary = await api("summary", tzArgs());
-  const staged = state.summary.staged || 0;
+  const staged = state.summary.staged_all || 0;
   el.stagedN.textContent = String(staged);
   el.footbar.hidden = staged === 0;
   el.stagedBtn.hidden = staged === 0;
@@ -155,6 +155,10 @@ function confirmDialog({ title, message, confirmLabel, variant = "danger", extra
       if (settled) return;
       settled = true;
       document.removeEventListener("keydown", onKey, true);
+      // Always tear the dialog down here, not just on button clicks: the
+      // Escape and Enter paths settle the promise too, and leaving a live
+      // modal on screen would block the rest of the app.
+      closeModal();
       resolve(value);
     };
     const onKey = (e) => {
@@ -162,10 +166,10 @@ function confirmDialog({ title, message, confirmLabel, variant = "danger", extra
       if (e.key === "Escape") {
         e.preventDefault();
         done(false);
-      } else if (e.key === "Enter") {
-        e.preventDefault();
-        done(true);
       }
+      // Enter is deliberately not handled here. The focused button's own
+      // activation runs instead, and `modal()` focuses the first one ("Vazgeç"),
+      // so the safe option stays the default for a destructive confirm.
     };
     document.addEventListener("keydown", onKey, true);
     modal({
@@ -242,7 +246,7 @@ function render() {
   const busy = state.busy;
   el.scan.disabled = busy;
   el.folder.disabled = busy;
-  el.stagedBtn.hidden = (state.summary?.staged || 0) === 0;
+  el.stagedBtn.hidden = (state.summary?.staged_all || 0) === 0;
 
   if (state.view === "loading") {
     el.view.replaceChildren(h("div", { class: "empty" }, h("span", { class: "busy" })));
@@ -459,7 +463,10 @@ async function decide(action) {
   const shot = state.card;
   const id = shot.id;
 
-  // Move on immediately; the card animates out while the write happens.
+  // Move on immediately; the card animates out while the write happens. The
+  // snapshot lets a failed write put the card back instead of silently dropping
+  // the decision.
+  const before = state.queue.snapshot();
   if (action === ACTION.SKIP) state.queue.deferCurrent();
   else state.queue.advance();
   state.card = null;
@@ -476,7 +483,11 @@ async function decide(action) {
       });
     }
   } catch (e) {
+    state.queue.restore(before);
+    state.card = shot;
+    render();
     toast(`Karar kaydedilemedi: ${e}`);
+    return;
   }
 
   if (state.queue.atEnd()) {
@@ -499,7 +510,9 @@ async function undo() {
     if (state.view !== "review") {
       await loadMonths();
     } else {
-      state.queue.cursor = Math.max(0, state.queue.cursor - 1);
+      // Seek by id, not by stepping the cursor back: a skip was deferred to the
+      // back of the queue, so a plain decrement would show the wrong file.
+      state.queue.focusId(shot.id);
       state.scope = { ...state.scope };
       await showCurrent();
     }
@@ -523,7 +536,7 @@ async function unstageOne(id) {
 }
 
 async function commit() {
-  const n = state.summary?.staged || 0;
+  const n = state.summary?.staged_all || 0;
   if (!n) return;
   const ok = await confirmDialog({
     title: "Geri dönüşüm kutusuna taşı",
@@ -608,9 +621,7 @@ async function selectRoot(root) {
 }
 
 function backToMonths() {
-  if ((state.summary?.staged || 0) > 0 && state.view === "review") {
-    // Leaving a pass is fine; staged files stay put.
-  }
+  // Leaving a pass mid-review is fine; staged files stay on disk.
   state.view = "months";
   loadMonths().then(render);
 }
@@ -725,7 +736,7 @@ document.addEventListener("keydown", (e) => {
 
 // Warn before closing with staged deletes still waiting.
 window.addEventListener("beforeunload", (e) => {
-  if ((state.summary?.staged || 0) > 0 && !state.cleanupDone) {
+  if ((state.summary?.staged_all || 0) > 0 && !state.cleanupDone) {
     e.preventDefault();
     e.returnValue = "";
   }

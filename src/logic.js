@@ -153,6 +153,36 @@ export class ReviewQueue {
     this.ids.splice(this.cursor, 0, id);
   }
 
+  /**
+   * Points the cursor back at `id`, re-inserting it if it is no longer queued.
+   *
+   * Undo cannot simply step the cursor back by one: a skipped item was deferred
+   * to the back of the list, and an item decided outside this queue is gone
+   * entirely. Seeking by id handles every case, and `showCurrent` then re-hydrates
+   * whatever the cursor lands on.
+   */
+  focusId(id) {
+    if (id === null || id === undefined) return null;
+    this.reinsertAfterCursor(id);
+    const index = this.ids.indexOf(id);
+    if (index === -1) return null;
+    this.cursor = index;
+    return id;
+  }
+
+  /** Copy of the queue state, so a failed write can be rolled back. */
+  snapshot() {
+    return { ids: this.ids.slice(), cursor: this.cursor, deferred: this.deferred };
+  }
+
+  /** Restores a `snapshot()`, e.g. when persisting a decision fails. */
+  restore(snap) {
+    if (!snap) return;
+    this.ids = snap.ids.slice();
+    this.cursor = snap.cursor;
+    this.deferred = snap.deferred;
+  }
+
   atEnd() {
     return this.cursor >= this.ids.length;
   }

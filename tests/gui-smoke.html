@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Screenshot Sifter — GUI smoke</title>
+  <link rel="stylesheet" href="../src/style.css" />
+</head>
+<body>
+  <div id="app">
+    <header>
+      <div class="hwrap">
+        <button id="btn-back" class="btn ghost sm" hidden aria-label="Geri">&#8592; Geri</button>
+        <div class="brand"><span class="logo">S</span> Screenshot Sifter</div>
+        <div class="spacer"></div>
+        <span id="scanned-note" class="hint"></span>
+        <button id="btn-scan" class="btn" title="Klasörü yeniden tara">Yeniden tara</button>
+        <button id="btn-folder" class="btn">Klasör ekle</button>
+        <button id="btn-staged" class="btn danger" hidden>Silinecekler</button>
+      </div>
+    </header>
+    <main id="main"><div class="wrap" id="view"></div></main>
+    <div class="footbar" id="footbar" hidden>
+      <div class="wrap">
+        <span class="staged-count"><b id="staged-n">0</b> dosya silinmeyi bekliyor &mdash; dosyalar h&acirc;l&acirc; diskte</span>
+        <div class="spacer"></div>
+        <button id="btn-undo" class="btn" title="Ctrl+Z">Geri al</button>
+        <button id="btn-commit" class="btn danger">Geri dönüşüm kutusuna taşı</button>
+      </div>
+    </div>
+  </div>
+  <div class="backdrop" id="modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <header><div class="hwrap"><div class="brand" id="modal-title">Onay</div></div></header>
+      <div class="body" id="modal-body"></div>
+      <div class="foot" id="modal-foot"></div>
+    </div>
+  </div>
+  <div id="toast"><span class="msg"></span><button class="btn ghost sm" hidden>Geri al</button></div>
+
+  <script>
+  // Fake of the Rust command surface, faithful to src-tauri/src/{db,commands}.rs.
+  // Root A: 3 PNGs in 2026-09 + 1 unviewable HEIC in 2026-08.
+  // Root B: 2 PNGs in 2026-08, used to prove staged counts are global.
+  const LOG = [];
+  const FAILS = [];
+  let nextId = 1;
+  const shots = new Map();
+
+  function addShot(rootId, name, ext, takenMs, viewable) {
+    const id = nextId++;
+    shots.set(id, {
+      id, path: "C:/" + rootId + "/" + name, root_id: rootId, name, ext,
+      size: 120000 + id, taken_ms: takenMs, created_ms: null, modified_ms: null,
+      date_source: "filename", status: "pending", decided_ms: null,
+      missing: false, viewable,
+    });
+    return id;
+  }
+
+  const A = 1, B = 2;
+  const roots = [
+    { id: A, path: "C:/shots-a", last_scan_ms: 1757900000000 },
+    { id: B, path: "C:/shots-b", last_scan_ms: 1757900000000 },
+  ];
+  const sept = Date.UTC(2026, 8, 14);
+  const aug = Date.UTC(2026, 7, 19);
+  // Deliberately seeded out of id order so the taken_ms sort is exercised.
+  addShot(A, "Screenshot 2026-09-14 21-15-41.png", "png", sept + 2000, true);
+  addShot(A, "Screenshot 2026-09-02 09-03-11.png", "png", sept - 86400000, true);
+  addShot(A, "Screenshot 2026-09-14 21-14-05.png", "png", sept + 1000, true);
+  addShot(A, "IMG_20260816_120000.heic", "heic", aug, false);
+  addShot(B, "Screenshot 2026-08-19 18-22-30.png", "png", aug + 1000, true);
+  addShot(B, "Screenshot 2026-08-19 18-24-02.png", "png", aug + 2000, true);
+
+  // The month key the backend produces: local-time year-month.
+  function monthKey(ms) {
+    const l = new Date(ms + (-new Date().getTimezoneOffset() * 60000));
+    return l.getUTCFullYear() + "-" + String(l.getUTCMonth() + 1).padStart(2, "0");
+  }
+  const byRoot = (id) => [...shots.values()].filter((s) => s.root_id === id);
+  const count = (list, st) => list.filter((s) => s.status === st).length;
+
+  const handlers = {
+    app_info: () => ({ data_dir: "x", db_path: "y", schema_version: 1, app_version: "1.0.0", image_exts: ["png"], unviewable_exts: ["heic"] }),
+    list_roots: () => roots.map((r) => {
+      const mine = byRoot(r.id);
+      return { ...r, total: mine.length, pending: count(mine, "pending"), kept: count(mine, "kept"), deleted: count(mine, "deleted"), skipped: count(mine, "skipped"), staged: count(mine, "staged"), missing: 0 };
+    }),
+    summary: (a) => {
+      const mine = a.rootId == null ? [...shots.values()] : byRoot(a.rootId);
+      return {
+        total: mine.length, pending: count(mine, "pending"),
+        staged: count(mine, "staged"),
+        // Global, because staged_list and commit_deletes ignore the root filter.
+        staged_all: [...shots.values()].filter((s) => s.status === "staged").length,
+        kept: count(mine, "kept"), deleted: count(mine, "deleted"),
+        skipped: count(mine, "skipped"), missing: 0,
+        bytes_pending: 0, bytes_total: 0,
+        months: new Set(mine.map((s) => monthKey(s.taken_ms))).size,
+      };
+    },
+    months: (a) => {
+      const mine = a.rootId == null ? [...shots.values()] : byRoot(a.rootId);
+      const by = new Map();
+      for (const s of mine) {
+        const k = monthKey(s.taken_ms);
+        if (!by.has(k)) by.set(k, []);
+        by.get(k).push(s);
+      }
+      return [...by.entries()].sort((x, y) => y[0].localeCompare(x[0])).map(([month, list]) => ({
+        month, total: list.length, reviewed: list.length - count(list, "pending"),
+        kept: count(list, "kept"), deleted: count(list, "deleted"),
+        skipped: count(list, "skipped"), staged: count(list, "staged"),
+        remaining: count(list, "pending"),
+      }));
+    },
+    queue_ids: (a) => {
+      let out = a.rootId == null ? [...shots.values()] : byRoot(a.rootId);
+      if (a.scope === "month") out = out.filter((s) => monthKey(s.taken_ms) === a.month);
+      else if (a.scope === "staged") out = out.filter((s) => s.status === "staged");
+      else if (a.scope === "skipped") out = out.filter((s) => s.status === "skipped");
+      else out = out.filter((s) => s.status === "pending");
+      out.sort((x, y) => x.taken_ms - y.taken_ms);
+      return out.map((s) => s.id);
+    },
+    items: (a) => a.ids.map((id) => shots.get(id)).filter(Boolean),
+    // Mirrors commands::decide — "keep"/"skip" map to the stored status
+    // names, which are not the same as the gesture kind.
+    decide: (a) => {
+      if (FAILS.__failNextDecide) throw new Error("simulated write failure");
+      const s = shots.get(a.id);
+      if (!s) throw new Error("no such id " + a.id);
+      const status = { keep: "kept", skip: "skipped", delete: "staged" }[a.kind];
+      if (!status) throw new Error("gecersiz karar: " + a.kind);
+      s.status = status;
+      s.decided_ms = Date.UTC(2026, 8, 30);
+      LOG.push("decide:" + a.kind + ":" + s.name);
+      return s;
+    },
+    undo_last: () => {
+      let last = null;
+      for (const s of shots.values()) if (s.decided_ms) last = s;
+      if (!last) return null;
+      last.status = "pending";
+      last.decided_ms = null;
+      LOG.push("undo:" + last.name);
+      return last;
+    },
+    unstage: (a) => { const s = shots.get(a.id); s.status = "pending"; return s; },
+    staged_list: () => [...shots.values()].filter((s) => s.status === "staged"),
+    commit_deletes: () => {
+      const staged = [...shots.values()].filter((s) => s.status === "staged");
+      staged.forEach((s) => { s.status = "deleted"; });
+      LOG.push("commit:" + staged.length);
+      return { deleted: staged.length, failed: [], still_staged: 0 };
+    },
+    scan_root: () => ({ root: "C:/shots-a", found: 4, added: 0, refreshed: 4, skipped_other: 2, unreadable: 0, unviewable: 1, missing: 0, total_in_root: 4, elapsed_ms: 12 }),
+    pick_folder: () => "C:/shots-a",
+  };
+
+  window.__FAILS = FAILS;
+  window.__LOG = LOG;
+  window.__shots = shots;
+  window.addEventListener("error", (e) => FAILS.push("window error: " + e.message));
+  window.addEventListener("unhandledrejection", (e) => FAILS.push("unhandled rejection: " + ((e.reason && e.reason.message) || e.reason)));
+
+  window.__TAURI__ = {
+    core: {
+      convertFileSrc: (p) => "data:image/gif;base64,R0lGODlhAQABAIAAAAUEBA==",
+      invoke: async (cmd, args = {}) => {
+        LOG.push("invoke:" + cmd);
+        const h = handlers[cmd];
+        if (!h) throw new Error("unmocked command: " + cmd);
+        return h(args);
+      },
+    },
+  };
+
+  // ---- helpers the Node-side driver calls through CDP ----
+  const $ = (s) => document.querySelector(s);
+  const viewText = () => $("#view").textContent.replace(/\s+/g, " ").trim();
+  window.__probe = {
+    viewText,
+    status: (name) => {
+      const s = [...shots.values()].find((x) => x.name === name);
+      return s ? s.status : null;
+    },
+    // Read the card's own filename node rather than scraping the whole view.
+    cardName: () => {
+      const n = $(".card .fname");
+      return n ? n.textContent.trim() : null;
+    },
+    cardExt: () => {
+      const m = $(".card .fmeta");
+      return m ? m.textContent.replace(/\s+/g, " ").trim() : null;
+    },
+    // "1 / 3" comes from the last span of the progress row.
+    progress: () => {
+      const row = $(".progress-row");
+      if (!row) return null;
+      const spans = row.querySelectorAll(":scope > span");
+      const last = spans[spans.length - 1];
+      return last ? last.textContent.trim() : null;
+    },
+    deferred: () => {
+      const chip = $(".progress-row .chip.skipped");
+      return chip ? chip.textContent.trim() : null;
+    },
+    unviewableShown: () => !!$(".card .noimg"),
+    monthRows: () => [...document.querySelectorAll(".month")].map((n) => n.textContent.replace(/\s+/g, " ").trim()),
+    finaleShown: () => !!$(".finale"),
+    stagedCount: () => $("#staged-n").textContent,
+    stagedBtn: () => $("#btn-staged").textContent,
+    footbarHidden: () => $("#footbar").hidden,
+    modalHidden: () => $("#modal").hidden,
+    modalTitle: () => { const n = $("#modal-title"); return n ? n.textContent.trim() : null; },
+    focusedLabel: () => {
+      const a = document.activeElement;
+      return a && a !== document.body ? a.textContent.trim() : null;
+    },
+    toastText: () => $("#toast").textContent.trim(),
+    stagedRowNames: () => [...document.querySelectorAll(".staged-row .n")].map((n) => n.textContent.trim()),
+    hasCard: () => !!$(".card"),
+    hasImg: () => !!$(".card img"),
+    clickFirstMonth: () => { $(".month").click(); },
+    backToMonths: () => { $("#btn-back").click(); },
+    clickStagedBtn: () => { $("#btn-staged").click(); },
+    clickCommit: () => { $("#btn-commit").click(); },
+    clickConfirmInModal: () => {
+      const btn = [...document.querySelectorAll("#modal-foot button")].find((b) => /taşı/i.test(b.textContent));
+      if (btn) btn.click();
+      return !!btn;
+    },
+    stagedCountInDb: () => [...shots.values()].filter((s) => s.status === "staged").length,
+    setFailNextDecide: (v) => { FAILS.__failNextDecide = v; },
+    logHas: (needle) => LOG.includes(needle),
+    logFilter: (prefix) => LOG.filter((l) => l.startsWith(prefix)),
+    reset: () => { LOG.length = 0; },
+  };
+  </script>
+  <script type="module" src="../src/app.js"></script>
+</body>
+</html>

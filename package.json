@@ -8,7 +8,8 @@
     "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build",
-    "test:logic": "node --test \"tests/**/*.test.mjs\""
+    "test:logic": "node --test \"tests/**/*.test.mjs\"",
+    "test:gui": "node tests/gui-smoke.cjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

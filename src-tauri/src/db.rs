@@ -110,6 +110,9 @@ pub struct Summary {
     pub total: i64,
     pub pending: i64,
     pub staged: i64,
+    /// Staged across every root, because `staged_list` and `commit_deletes`
+    /// are global. `staged` is root-filtered and only used for month rows.
+    pub staged_all: i64,
     pub kept: i64,
     pub deleted: i64,
     pub skipped: i64,
@@ -529,6 +532,7 @@ impl Db {
                     total: row.get(0)?,
                     pending: row.get(1)?,
                     staged: row.get(2)?,
+                    staged_all: 0,
                     kept: row.get(3)?,
                     deleted: row.get(4)?,
                     skipped: row.get(5)?,
@@ -540,7 +544,12 @@ impl Db {
             })
             .map_err(|e| e.to_string())?;
         let months = self.months(root_id, tz_offset_min)?.len() as i64;
-        Ok(Summary { months, ..s })
+        let staged_all = self.staged_rows()?.len() as i64;
+        Ok(Summary {
+            months,
+            staged_all,
+            ..s
+        })
     }
 
     /// Ids for a review queue, in display order.
@@ -971,6 +980,43 @@ mod tests {
         assert_eq!(s.bytes_pending, 400);
         assert_eq!(s.bytes_total, 700);
         assert_eq!(s.months, 1);
+    }
+
+    #[test]
+    fn summary_reports_staged_across_all_roots() {
+        let db = Db::open_in_memory().expect("in-memory db");
+        let a = db.upsert_root("/a").unwrap();
+        let b = db.upsert_root("/b").unwrap();
+        for root in [a, b] {
+            for i in 0..2 {
+                assert!(db
+                    .upsert_shot(
+                        root,
+                        &format!("/{}/shot{i}.png", root),
+                        &format!("shot{i}.png"),
+                        "png",
+                        100,
+                        1_000 + i,
+                        None,
+                        None,
+                        "filename",
+                    )
+                    .unwrap());
+            }
+        }
+        // Stage one file in each root.
+        let a_ids = db.queue_ids("unreviewed", None, Some(a), 0).unwrap();
+        let b_ids = db.queue_ids("unreviewed", None, Some(b), 0).unwrap();
+        db.set_status(a_ids[0], STATUS_STAGED, Some(1)).unwrap();
+        db.set_status(b_ids[0], STATUS_STAGED, Some(2)).unwrap();
+
+        // The root-filtered view is per root...
+        assert_eq!(db.summary(Some(a), 0).unwrap().staged, 1);
+        assert_eq!(db.summary(Some(b), 0).unwrap().staged, 1);
+        // ...but the drawer and the commit are global, so this must be too.
+        assert_eq!(db.summary(Some(a), 0).unwrap().staged_all, 2);
+        assert_eq!(db.summary(Some(b), 0).unwrap().staged_all, 2);
+        assert_eq!(db.summary(None, 0).unwrap().staged_all, 2);
     }
 
     #[test]

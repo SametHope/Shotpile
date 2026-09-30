@@ -135,6 +135,53 @@ test("reinsertAfterCursor restores an undone item without duplicating it", () =>
   assert.deepEqual(q.ids, [1, 2, 99, 3]);
 });
 
+test("focusId finds a deferred item, which a cursor step-back would miss", () => {
+  const q = new ReviewQueue([1, 2, 3]);
+  q.deferCurrent(); // 1 is deferred to the back, cursor still at 2
+  assert.equal(q.current(), 2);
+  // Undo of the skip must land on 1, which now sits at the end.
+  q.focusId(1);
+  assert.equal(q.current(), 1);
+  assert.deepEqual(q.ids, [2, 3, 1]);
+});
+
+test("focusId re-inserts an id that is no longer in the queue", () => {
+  const q = new ReviewQueue([1, 2, 3]);
+  q.advance();
+  q.advance();
+  q.focusId(99);
+  assert.equal(q.current(), 99);
+  assert.equal(q.ids.filter((id) => id === 99).length, 1);
+  assert.equal(q.focusId(null), null);
+  assert.equal(q.focusId(undefined), null);
+});
+
+test("focusId on a keep undo steps back to the decided item", () => {
+  const q = new ReviewQueue([1, 2, 3]);
+  q.advance(); // kept 1, now on 2
+  q.focusId(1);
+  assert.equal(q.current(), 1);
+});
+
+test("snapshot and restore undo a failed advance", () => {
+  const q = new ReviewQueue([1, 2, 3]);
+  const before = q.snapshot();
+  q.advance();
+  q.deferCurrent();
+  assert.equal(q.current(), 3);
+  q.restore(before);
+  assert.deepEqual(q.ids, [1, 2, 3]);
+  assert.equal(q.cursor, 0);
+  assert.equal(q.deferred, 0);
+  assert.equal(q.current(), 1);
+});
+
+test("restore tolerates a missing snapshot", () => {
+  const q = new ReviewQueue([1, 2]);
+  q.restore(null);
+  assert.equal(q.current(), 1);
+});
+
 test("upcoming prefetches following ids", () => {
   const q = new ReviewQueue([1, 2, 3, 4, 5]);
   assert.deepEqual(q.upcoming(2), [2, 3]);

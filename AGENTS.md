@@ -22,12 +22,19 @@ deletion into the Windows Recycle Bin.
   omits `status` and `decided_ms`. Keep it that way.
 - **Date inference is filename-first**, then creation, then modified. Modified
   time alone is wrong for copied folders, so it is the last resort.
+- **The safe option is the default in a dialog.** `confirmDialog` never binds
+  Enter to the destructive action: `modal()` focuses the first button, which is
+  *Vazgeç*, and the native Enter activation closes the dialog without
+  committing. Every exit path, including Escape, must call `closeModal()`, or
+  the modal stays on screen and blocks the app.
 
 ## Layout
 
 ```
 src/logic.js     pure, DOM-free, unit tested in tests/logic.test.mjs
 src/app.js       all DOM, gestures, keyboard, Tauri calls
+tests/gui-smoke.html   real app.js + a fake command surface, loaded by Chrome
+tests/gui-smoke.cjs    CDP driver: asserts on the rendered DOM and real keys
 src-tauri/src/db.rs       schema + queries + month grouping
 src-tauri/src/scan.rs     walkdir + filename date parsing
 src-tauri/src/commands.rs the entire command surface
@@ -39,14 +46,18 @@ src-tauri/src/commands.rs the entire command surface
 ## Verify before claiming done
 
 ```powershell
-npm run test:logic                          # 18 frontend tests
-cd src-tauri; cargo test                    # 35+ Rust tests
+npm run test:logic                          # 23 frontend logic tests
+npm run test:gui                            # 49 GUI assertions in headless Chrome
+cd src-tauri; cargo test                    # 36 unit + 2 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
 ```
 
-A GUI smoke test needs a real folder of images; the automated tests cover date
-parsing, the database and queue scoping, but not the rendered card.
+`npm run test:gui` runs the real `src/app.js` in `tests/gui-smoke.html`, which
+fakes the Rust command surface in memory, then drives it with real Chrome key
+events via CDP. It is where the rendered card, the shortcuts and the confirm
+dialog get covered. If you change a view, a shortcut, or the dialog, add a
+probe there. Chrome must be installed; the script has no npm dependencies.
 
 ## Environment notes
 

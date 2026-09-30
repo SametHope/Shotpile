@@ -1,0 +1,16 @@
+fix: make Enter safe in the confirm dialog, roll back failed writes, undo by id
+
+- confirmDialog no longer binds Enter to the destructive action. The focused
+  button's own activation runs instead, and modal() focuses Vazgec, so the safe
+  option is the default. Every exit path now closes the dialog; Escape used to
+  settle the promise but leave a stuck modal blocking the app.
+- A failed decide write restores the queue snapshot and the card instead of
+  silently dropping the decision.
+- Undo seeks the undone id rather than stepping the cursor back, which showed
+  the wrong file after a skip (the item is deferred to the back of the queue).
+- Summary gained staged_all because staged_list and commit_deletes are global
+  while the visible count was root-filtered, so the drawer count could disagree
+  with what the commit would actually move.
+- Adds tests/gui-smoke.{html,cjs}: the real src/app.js in headless Chrome
+  against a fake command surface, driven with real CDP key events. Covers the
+  rendered card, shortcuts, rollback and the dialog (49 assertions).
