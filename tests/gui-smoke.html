@@ -175,7 +175,14 @@
       LOG.push("commit:" + staged.length);
       return { deleted: staged.length, failed: [], still_staged: 0 };
     },
-    scan_root: () => ({ root: "C:/shots-a", found: 4, added: 0, refreshed: 4, skipped_other: 2, unreadable: 0, unviewable: 1, missing: 0, total_in_root: 4, elapsed_ms: 12 }),
+    // Mirrors the real command: scanning is what adds the root to the database.
+    scan_root: (a) => {
+      if (!roots.some((r) => r.path === a.path)) {
+        roots.push({ id: roots.length + 1, path: a.path, last_scan_ms: 1757900000000 });
+      }
+      LOG.push("scan:" + a.path);
+      return { root: a.path, found: 4, added: 4, refreshed: 0, skipped_other: 2, unreadable: 0, unviewable: 1, missing: 0, total_in_root: 4, elapsed_ms: 12 };
+    },
     pick_folder: () => "C:/shots-a",
     open_devtools: () => { LOG.push("devtools"); return undefined; },
     log_read: () => "fake log line",
@@ -269,6 +276,9 @@
         s.decided_ms = null;
       }
     },
+    resetRoots: () => { roots.length = 0; },
+    addFolder: () => window.__sifterTest.addFolder(),
+    resetToSetup: () => window.__sifterTest.resetToSetup(),
   };
   </script>
   <script type="module" src="../src/app.js"></script>

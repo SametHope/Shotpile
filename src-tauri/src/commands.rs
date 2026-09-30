@@ -166,14 +166,19 @@ pub fn open_devtools(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn pick_folder() -> Result<Option<String>, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+    let picked = tauri::async_runtime::spawn_blocking(|| {
         rfd::FileDialog::new()
             .set_title("Ekran görüntüleri klasörü")
             .pick_folder()
             .map(|p| p.to_string_lossy().to_string())
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    match &picked {
+        Some(p) => crate::log::info("pick_folder", &format!("seçildi: {p}")),
+        None => crate::log::info("pick_folder", "iptal edildi"),
+    }
+    Ok(picked)
 }
 #[tauri::command]
 pub async fn scan_root(state: State<'_, AppState>, path: String) -> Result<ScanReport, String> {

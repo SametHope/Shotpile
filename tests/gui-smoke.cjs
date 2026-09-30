@@ -352,6 +352,16 @@ const CTRL_SHIFT = 2 | 8;
   ok("out-of-scope undo returns to the months view", (await probe("p.monthRows()")).length === 2, JSON.stringify(await probe("p.monthRows()")));
   ok("out-of-scope undo does not show a card", (await probe("p.hasCard()")) === false);
 
+  // ---- picking a folder scans it and lands on the months view ----
+  await js("p.resetToSetup();");
+  await sleep(300);
+  ok("setup view appears when there are no roots", /Klasör seç/.test(await probe("p.viewText()")), await probe("p.viewText()"));
+  await js("p.reset();");
+  await js("p.addFolder();");
+  await sleep(600);
+  ok("picking a folder scans it and shows the months", (await probe("p.monthRows().length")) > 0, JSON.stringify(await probe("p.monthRows()")));
+  ok("the scan is logged", (await probe("p.logFilter('scan:')")).length > 0, JSON.stringify(await probe("p.logFilter('scan:')")));
+
   const pageFails = await js("return window.__FAILS;").catch(() => []);
 
   client.close();

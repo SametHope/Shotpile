@@ -635,11 +635,35 @@ async function addFolder() {
   try {
     const picked = await api("pick_folder");
     if (!picked) return;
+    log.info("folder", `seçildi: ${picked}`);
+    state.busy = true;
+    render();
+    // Scanning is what adds the root to the database, so it has to happen
+    // before the root can be found and selected. Picking alone only returns a
+    // path; without this the folder silently did nothing.
+    const report = await api("scan_root", { path: picked });
+    el.scannedNote.textContent = `${report.found} dosya · ${report.elapsed_ms} ms`;
     await loadRoots();
     const root = state.roots.find((r) => r.path === picked);
-    if (root) await selectRoot(root);
+    if (!root) {
+      log.warn("folder", `taramaya rağmen kök bulunamadı: ${picked}`);
+      toast(`Klasör eklenemedi: ${picked}`);
+      return;
+    }
+    state.rootId = root.id;
+    state.view = "months";
+    await loadMonths();
+    render();
+    const bits = [`${report.added} yeni`, `${report.refreshed} güncel`];
+    if (report.unviewable) bits.push(`${report.unviewable} önizlemesiz`);
+    if (report.missing) bits.push(`${report.missing} dosya diskte yok`);
+    toast(`Tarama: ${bits.join(" · ")}`);
   } catch (e) {
-    toast(`Klasör seçilemedi: ${e}`);
+    log.error("folder", "klasör eklenemedi", e);
+    toast(`Klasör eklenemedi: ${e}`);
+  } finally {
+    state.busy = false;
+    render();
   }
 }
 
@@ -805,6 +829,20 @@ document.addEventListener("keydown", (e) => {
     default: break;
   }
 });
+
+// Test hook for the GUI harness, so the folder-pick flow can be driven without
+// a native dialog. Not used in production.
+window.__sifterTest = {
+  addFolder,
+  resetToSetup() {
+    state.roots = [];
+    state.rootId = null;
+    state.months = [];
+    state.summary = null;
+    state.view = "setup";
+    render();
+  },
+};
 
 // Warn before closing with staged deletes still waiting.
 window.addEventListener("beforeunload", (e) => {
