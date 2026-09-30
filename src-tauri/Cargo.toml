@@ -1,0 +1,32 @@
+[package]
+name = "screenshot-sifter"
+version = "1.0.0"
+description = "Local-first screenshot review with month/random queues, swipe decisions and safe Recycle Bin deletes"
+authors = ["SametHope"]
+edition = "2021"
+rust-version = "1.82"
+
+[lib]
+name = "screenshot_sifter_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+chrono = "0.4.45"
+regex = "1.13.1"
+rfd = "0.17.2"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tauri = { version = "2.11.6", features = ["protocol-asset", "devtools"] }
+trash = "5.2.3"
+walkdir = "2.5.0"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

@@ -1,0 +1,16 @@
+{
+  "name": "screenshot-sifter",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Local-first screenshot review: month/random queues, swipe decisions, safe Recycle Bin deletes.",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "test:logic": "node --test \"tests/**/*.test.mjs\""
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}
