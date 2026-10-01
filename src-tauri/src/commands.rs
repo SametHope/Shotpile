@@ -302,24 +302,24 @@ fn copy_image_file_to_clipboard(path: &Path) -> Result<(), String> {
         Ok(())
     } else if cfg!(target_os = "macos") {
         // On macOS, use pbcopy to copy the image file
-        let image_data = std::fs::read(path)
-            .map_err(|e| format!("couldn't read the image: {e}"))?;
+        let image_data =
+            std::fs::read(path).map_err(|e| format!("couldn't read the image: {e}"))?;
         let mut child = std::process::Command::new("pbcopy")
             .stdin(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| format!("couldn't run pbcopy: {e}"))?;
         if let Some(mut stdin) = child.stdin.take() {
             use std::io::Write;
-            stdin.write_all(&image_data)
+            stdin
+                .write_all(&image_data)
                 .map_err(|e| format!("couldn't write to pbcopy: {e}"))?;
         }
-        child.wait()
-            .map_err(|e| format!("pbcopy failed: {e}"))?;
+        child.wait().map_err(|e| format!("pbcopy failed: {e}"))?;
         Ok(())
     } else {
         // On Linux, use xclip if available, otherwise just copy the path
-        let image_data = std::fs::read(path)
-            .map_err(|e| format!("couldn't read the image: {e}"))?;
+        let image_data =
+            std::fs::read(path).map_err(|e| format!("couldn't read the image: {e}"))?;
         let mut child = std::process::Command::new("xclip")
             .args(["-selection", "clipboard", "-t", "image/png", "-i"])
             .stdin(std::process::Stdio::piped())
@@ -327,11 +327,11 @@ fn copy_image_file_to_clipboard(path: &Path) -> Result<(), String> {
             .map_err(|e| format!("couldn't run xclip: {e}"))?;
         if let Some(mut stdin) = child.stdin.take() {
             use std::io::Write;
-            stdin.write_all(&image_data)
+            stdin
+                .write_all(&image_data)
                 .map_err(|e| format!("couldn't write to xclip: {e}"))?;
         }
-        child.wait()
-            .map_err(|e| format!("xclip failed: {e}"))?;
+        child.wait().map_err(|e| format!("xclip failed: {e}"))?;
         Ok(())
     }
 }
@@ -381,9 +381,7 @@ fn open_in_file_manager(path: &Path) -> Result<(), String> {
         } else {
             path
         };
-        std::process::Command::new("xdg-open")
-            .arg(dir)
-            .spawn()
+        std::process::Command::new("xdg-open").arg(dir).spawn()
     };
     spawned
         .map(|_| ())
