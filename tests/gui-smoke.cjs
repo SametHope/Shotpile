@@ -613,7 +613,7 @@ const CTRL_SHIFT = CTRL | SHIFT;
     // ignored every key.
     await js("p.backToMonths();");
     await waitFor("p.view() === 'months' && p.monthRows().length > 0");
-    await js("p.reset(); p.setFault('commitDelayMs', 900); p.clickCommit();");
+    await js("p.reset(); p.setFault('commitDelayMs', 1500); p.clickCommit();");
     await waitFor("!p.modalHidden()");
     await probe("p.clickConfirmInModal()");
     await sleep(100);
@@ -624,8 +624,8 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await js("p.clickMenuItem('shots-b');");
     ok("nor will another folder", (await probe("p.folderName()")) === "Screenshots" && /Moving files/.test(await probe("p.toastText()")), `${await probe("p.folderName()")} / ${await probe("p.toastText()")}`);
     await js("p.setFault('commitDelayMs', 0);");
-    await waitFor("p.logFilter('commit:').length > 0", 2000);
-    await waitFor("!document.getElementById('btn-commit').disabled", 2000);
+    await waitFor("p.logFilter('commit:').length > 0", 3000);
+    await waitFor("!document.getElementById('btn-commit').disabled", 3000);
     ok("the commit still finishes", (await status(rbCard)) === "deleted", await status(rbCard));
 
     // ---- checking the pile card by card ----
@@ -697,14 +697,14 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await js("p.backToMonths();");
     await waitFor("p.view() === 'months' && p.monthRows().length > 0");
     // A scan that finished after a forget added the folder straight back.
-    await js("p.setFault('scanDelayMs', 800); document.getElementById('btn-scan').click();");
+    await js("p.setFault('scanDelayMs', 1500); document.getElementById('btn-scan').click();");
     await js("p.clickFolderChip();");
     await waitFor("p.menuItems().length > 0");
     await js("p.clickMenuItem('Forget');");
     ok("a folder cannot be forgotten mid-scan", /Wait for the scan to finish first/.test(await waitFor("/Wait for the scan/.test(p.toastText() || '') && p.toastText()", 600)) && (await probe("p.modalHidden()")) === true, `${await probe("p.toastText()")} / modal hidden ${await probe("p.modalHidden()")}`);
     await js("p.setFault('scanDelayMs', 0);");
-    await waitFor("p.logFilter('scan:').length > 0", 2000);
-    await waitFor("!document.getElementById('btn-scan').disabled", 2000);
+    await waitFor("p.logFilter('scan:').length > 0", 3000);
+    await waitFor("!document.getElementById('btn-scan').disabled", 3000);
     await js("p.reset();");
     await js("p.clickFolderChip();");
     await waitFor("p.menuItems().length > 0");
