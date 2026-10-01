@@ -15,8 +15,8 @@ that made these changes); CI runs them on Linux and Windows.
 | Rust | `cd src-tauri; cargo test` | 65 unit + 4 e2e |
 | Rust lint / format | `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` | clean |
 
-Releases are built by `.github/workflows/release.yml` when a `v*` tag is
-pushed; the README links the latest one.
+Releases are built by `.github/workflows/release.yml`, from a pushed `v*` tag
+or a hand-started run that creates the tag; the README links the latest one.
 
 ## What the last session changed
 

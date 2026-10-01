@@ -1,20 +1,22 @@
 name: Release
 
 # Builds the Windows installer and a portable exe and publishes them as a
-# GitHub release. Runs when a version tag is pushed:
+# GitHub release, in either of two ways:
 #
-#   git tag v1.2.0 && git push origin v1.2.0
+# - Push a version tag: git tag v1.2.0 && git push origin v1.2.0
+# - Run it by hand from the Actions tab: pick the branch, enter a new tag
+#   (v1.2.0). The branch's head is built, and the release creates the tag on
+#   it.
 #
-# or by hand from the Actions tab, for a tag that already exists. The tag must
-# match the version in src-tauri/tauri.conf.json, so a release can never ship
-# a binary that reports a different version.
+# The tag must match the version in src-tauri/tauri.conf.json, so a release can
+# never ship a binary that reports a different version.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing tag to build and release, e.g. v1.0.0
+        description: Version tag to create on the chosen branch's head, e.g. v1.2.0
         required: true
 
 permissions:
@@ -30,9 +32,27 @@ jobs:
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
+      # The pushed tag, or the head of the branch the run was started on.
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.TAG }}
+
+      - name: Check the tag
+        shell: bash
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::$TAG does not match version $version in src-tauri/tauri.conf.json"
+            exit 1
+          fi
+          # A hand-started run creates the tag. If it exists already it must
+          # be this very commit, or the release would pair the tag with
+          # binaries built from something else.
+          existing=$(git ls-remote --tags origin "$TAG" | awk -v t="refs/tags/$TAG" '$2 == t "^{}" { p = $1 } $2 == t { l = $1 } END { print (p ? p : l) }')
+          if [ -n "$existing" ] && [ "$existing" != "$GITHUB_SHA" ]; then
+            echo "::error::$TAG already exists at $existing, not at $GITHUB_SHA; bump the version for a new release"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -42,16 +62,6 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
-
-      - name: Check the tag against the app version
-        shell: bash
-        run: |
-          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          if [ "v$version" != "$TAG" ]; then
-            echo "::error::$TAG does not match version $version in src-tauri/tauri.conf.json"
-            exit 1
-          fi
-          echo "VERSION=$version" >> "$GITHUB_ENV"
 
       # tauri build: the release exe, then the NSIS installer around it.
       - run: npm run build
@@ -92,5 +102,6 @@ jobs:
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" release/* --clobber
           else
-            gh release create "$TAG" release/* --verify-tag --title "Screenshot Sifter $VERSION" --notes "$notes" --generate-notes
+            # --target creates the tag on this commit when it does not exist.
+            gh release create "$TAG" release/* --target "$GITHUB_SHA" --title "Screenshot Sifter $VERSION" --notes "$notes" --generate-notes
           fi

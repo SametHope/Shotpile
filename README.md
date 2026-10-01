@@ -152,18 +152,18 @@ the top (which needs ffmpeg on `PATH`).
 
 ### Releases
 
-Pushing a version tag builds the installer and the portable exe on a Windows
-runner and publishes them as a GitHub release
-(`.github/workflows/release.yml`). The tag has to match the version in
-`src-tauri/tauri.conf.json`:
+`.github/workflows/release.yml` builds the installer and the portable exe on a
+Windows runner and publishes them as a GitHub release. Start it either by
+pushing a version tag:
 
 ```powershell
 git tag v1.0.0
 git push origin v1.0.0
 ```
 
-The workflow can also be started by hand from the Actions tab for an existing
-tag.
+or by hand from the Actions tab (*Release*, *Run workflow*): pick the branch
+and enter the new tag, and it tags that branch's head. Either way the tag has
+to match the version in `src-tauri/tauri.conf.json`.
 
 ## Diagnosing problems
 

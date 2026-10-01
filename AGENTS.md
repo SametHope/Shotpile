@@ -105,9 +105,11 @@ library (`seedDemo()` in the fake), which is also what the README pictures show.
   a rerun only differs where the UI did. Keep the alt texts in `README.md` true
   to the pictures.
 - `.github/workflows/release.yml` builds the NSIS installer and a portable exe
-  on `windows-latest` and publishes a GitHub release when a `v*` tag is pushed.
-  It refuses a tag that does not match `src-tauri/tauri.conf.json`, so bump the
-  version there, in `src-tauri/Cargo.toml` and in `package.json` together.
+  on `windows-latest` and publishes a GitHub release, when a `v*` tag is pushed
+  or when it is run by hand with a new tag (it then tags the branch head it
+  built). It refuses a tag that does not match `src-tauri/tauri.conf.json`, or
+  one that already points at another commit, so bump the version there, in
+  `src-tauri/Cargo.toml` and in `package.json` together.
 
 ## Diagnosing
 
