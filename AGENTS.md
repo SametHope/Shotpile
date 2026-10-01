@@ -1,4 +1,4 @@
-# AGENTS.md — Screenshot Sifter
+# AGENTS.md — Shotpile
 
 ## What this is
 
@@ -39,6 +39,13 @@ deletion into the Windows Recycle Bin.
   committing. Every exit path (a button, Escape, a backdrop click) goes through
   the modal's cancel or button handlers and closes it, or the modal stays on
   screen and blocks the app.
+- **The license is PolyForm Noncommercial 1.0.0** (`LICENSE`, with the
+  required notice on top). Do not add a dependency whose licence is not in
+  `src-tauri/about.toml`; the release fails on one, by design.
+- **Never drop the legacy data move.** `adopt_legacy_db()` in `lib.rs` moves a
+  1.0.0 database (`com.hope.screenshotsifter\sifter.db`) over by renaming it.
+  The identifier `com.samethope.shotpile` decides the data folder; changing it
+  again needs the same kind of move.
 - **UI text is English only**, and so is every backend log line and error
   string (errors surface in toasts).
 
@@ -78,14 +85,14 @@ is always `db`, then `undo`.
 ```powershell
 npm run test:logic                          # 44 frontend logic tests
 npm run test:gui                            # 227 GUI assertions in headless Chrome
-cd src-tauri; cargo test                    # 69 unit + 4 end-to-end tests
+cd src-tauri; cargo test                    # 70 unit + 4 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
 ```
 
 CI runs all of them (`.github/workflows/ci.yml`), Rust on Linux and Windows.
 
-`HANDOFF.md` records the current state and the open items. Read it first in a
+`HANDOFF.md` lists the open items. Read it first in a
 fresh session.
 
 `npm run test:gui` serves the real `src/index.html` with `tests/fake-backend.js`
@@ -111,9 +118,10 @@ library (`seedDemo()` in the fake), which is also what the README pictures show.
 - `.github/workflows/release.yml` builds the NSIS installer and a portable exe
   on `windows-latest` and publishes a GitHub release, when a `v*` tag is pushed
   or when it is run by hand with a new tag (it then tags the branch head it
-  built). It refuses a tag that does not match `src-tauri/tauri.conf.json`, or
-  one that already points at another commit, so bump the version there, in
-  `src-tauri/Cargo.toml` and in `package.json` together. A branch push that
+  built). It refuses a tag that does not match the version in
+  `src-tauri/Cargo.toml` (the single source: `tauri.conf.json` and
+  `package.json` deliberately have none), or one that already points at
+  another commit. A branch push that
   changes the workflow is a dry run (builds, uploads an artifact, publishes
   nothing).
 
@@ -121,12 +129,12 @@ library (`seedDemo()` in the fake), which is also what the README pictures show.
 
 - **Frontend** logs to the console through `src/log.js` (levels debug/info/warn/
   error, plus a 500-entry ring buffer). DevTools opens with `F12` or
-  `Ctrl+Shift+I`; `__sifterLog.dump()` prints the ring. `?log=debug` on the URL
+  `Ctrl+Shift+I`; `__shotpileLog.dump()` prints the ring. `?log=debug` on the URL
   lowers the level floor. Warnings and errors (including uncaught errors and
   unhandled rejections) are also sent to the file log with `log_write`,
   rate-limited, under a `ui:` scope.
 - **Backend** appends dated lines to
-  `%APPDATA%\com.hope.screenshotsifter\logs\sifter.log` via
+  `%APPDATA%\com.samethope.shotpile\logs\shotpile.log` via
   `src-tauri/src/log.rs` (rotated at 2 MiB). A panic hook writes panics there
   before the process aborts. `Ctrl+Shift+L` shows the tail in a modal; the
   `log_read` command backs it.
@@ -260,7 +268,7 @@ library (`seedDemo()` in the fake), which is also what the README pictures show.
 - Tauri generates `src-tauri/gen/schemas/`, which is gitignored; the capability
   file references it via `$schema` for editor completion only.
 - Icons: edit `tools/app-icon.svg`, then `npx tauri icon tools/app-icon.svg`
-  regenerates every size in `src-tauri/icons/`. The glyph is the `sieve` mark
+  regenerates every size in `src-tauri/icons/`. The glyph is the `pile` mark
   from `src/icons.js`; keep the two in step.
 
 ## Style

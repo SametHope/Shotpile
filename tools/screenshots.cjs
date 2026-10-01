@@ -55,7 +55,7 @@ async function main() {
   fs.mkdirSync(OUT, { recursive: true });
   const server = await start(0);
   const base = `http://127.0.0.1:${server.address().port}/src/index.html?demo=1`;
-  const chrome = await launchChrome({ port: CDP_PORT, windowSize: `${SIZE.width},${SIZE.height}`, profile: "sifter-chrome-shots-profile" });
+  const chrome = await launchChrome({ port: CDP_PORT, windowSize: `${SIZE.width},${SIZE.height}`, profile: "shotpile-chrome-shots-profile" });
   const c = chrome.client;
   const done = () => { chrome.close(); server.close(); };
   process.on("exit", done);
@@ -205,7 +205,7 @@ async function main() {
   // the page repaints), and turns the frames into a looping animated WebP with
   // ffmpeg. Unlike a GIF it keeps the gradients and costs a fraction of the size.
   async function record(name, script) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sifter-demo-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "shotpile-demo-"));
     const frames = [];
     c.on("Page.screencastFrame", (f) => {
       frames.push({ data: f.data, t: f.metadata.timestamp });
@@ -284,32 +284,15 @@ async function main() {
   await settle(900);
   await still("summary.webp", { height: 470 });
 
-  // 5. The deletion pile, and the confirmation that lists every file.
+  // 5. The deletion pile.
   await click("#btn-staged");
   await until("p.pileNames().length > 0");
   await settle(700);
   await still("pile.webp", { height: 600 });
-  await click("#btn-pile-commit");
-  await until("!p.modalHidden()");
-  await settle(600);
-  await still("confirm.webp");
-  await key("Escape");
 
-  // 6. Dark mode follows Windows.
+  // 6. The library again, in the dark theme.
   await open({ dark: true });
-  await js("p.clickMonth('2026-09');");
-  await until("p.hasCard() && p.deckCount() === 3");
-  await settle(700);
-  await showCursor();
-  const atDark = await cardCenter();
-  await moveTo(atDark.x, atDark.y + 40, { ms: 0 });
-  await press();
-  await moveTo(atDark.x - 160, atDark.y + 30, { ms: 300, down: true });
-  await settle(250);
-  await still("review-dark.webp");
-  await moveTo(atDark.x, atDark.y + 40, { ms: 200, down: true });
-  await release();
-  await hideCursor();
+  await still("library-dark.webp");
 
   // 7. The animated demo: two swipes, then the keyboard, with an undo.
   if (!hasFfmpeg) {

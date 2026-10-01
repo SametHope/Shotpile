@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Shotpile: third-party licences</title>
+<style>
+  body { font: 14px/1.5 "Segoe UI", system-ui, sans-serif; max-width: 860px; margin: 32px auto; padding: 0 16px; color: #0a0e15; }
+  pre { white-space: pre-wrap; background: #f7f8fb; border: 1px solid #e0e4ea; border-radius: 8px; padding: 12px; font-size: 12px; }
+  li { margin: 2px 0; }
+</style>
+</head>
+<body>
+<h1>Third-party licences</h1>
+<p>Shotpile itself is under the PolyForm Noncommercial License 1.0.0. It is built with the open-source
+components below, which keep their own licences. Each licence text is listed once, with every component that uses it.</p>
+<h2>Overview</h2>
+<ul>
+{{#each overview}}<li>{{name}}: {{count}} component(s)</li>
+{{/each}}
+</ul>
+{{#each licenses}}
+<h2 id="{{id}}">{{name}}</h2>
+<p>Used by:</p>
+<ul>
+{{#each used_by}}<li>{{crate.name}} {{crate.version}}</li>
+{{/each}}
+</ul>
+<pre>{{text}}</pre>
+{{/each}}
+<h2>Not from crates.io</h2>
+<p>SQLite is compiled into the app through rusqlite and is in the public domain. Microsoft Edge WebView2 is part of Windows
+and is not distributed with Shotpile.</p>
+</body>
+</html>

@@ -172,7 +172,7 @@
       }));
       return true;
     },
-    resetCardZoom: () => window.__sifterTest.resetCardZoom(),
+    resetCardZoom: () => window.__shotpileTest.resetCardZoom(),
     cardZoomScale: () => {
       const i = top()?.querySelector(".imgwrap img");
       const m = /scale\(([\d.]+)\)/.exec(i?.style.transform || "");
@@ -212,8 +212,8 @@
     viewerZoom: () => text($(".viewer-zoom")),
     viewerName: () => text($(".viewer-name")),
     viewerDims: () => text($(".viewer-dims")),
-    openViewer: () => window.__sifterTest.openViewer(),
-    closeViewer: () => window.__sifterTest.closeViewer(),
+    openViewer: () => window.__shotpileTest.openViewer(),
+    closeViewer: () => window.__shotpileTest.closeViewer(),
     clickCard: () => {
       const c = top();
       if (!c) return false;
@@ -248,9 +248,6 @@
       return !!btn;
     },
     logModalText: () => text($(".logview")),
-    delGridCount: () => $$(".del-cell").length,
-    delGridNames: () => $$(".del-cell figcaption").map(text),
-    delModalWide: () => $("#modal .modal")?.classList.contains("wide") || false,
 
     // ---- the deletion pile ----
     pileNames: () => $$(".tile .tile-name").map(text),
@@ -269,9 +266,9 @@
     setFault: (name, value) => { window.__faults[name] = value; },
     failCommitFor: (name) => { const s = shot(name); if (s) s.__failCommit = true; },
     setMissing: (name, v) => { const s = shot(name); if (s) s.missing = v; },
-    addFolder: () => window.__sifterTest.addFolder(),
-    resetToSetup: () => window.__sifterTest.resetToSetup(),
-    appState: () => window.__sifterTest.snapshot(),
+    addFolder: () => window.__shotpileTest.addFolder(),
+    resetToSetup: () => window.__shotpileTest.resetToSetup(),
+    appState: () => window.__shotpileTest.snapshot(),
     bodyBg: () => getComputedStyle(document.body).backgroundColor,
     // Enough older months to make the library scroll; removed again after.
     addOldMonths: (n) => {
@@ -290,7 +287,7 @@
     focusedIs: (sel) => document.activeElement === $(sel),
     hasSel: (sel) => !!$(sel),
     attr: (sel, name) => $(sel)?.getAttribute(name) ?? null,
-    dropCache: () => window.__sifterTest.dropCache(),
+    dropCache: () => window.__shotpileTest.dropCache(),
     viewScroll: () => document.getElementById("view").scrollTop,
     setViewScroll: (y) => { document.getElementById("view").scrollTop = y; },
   };

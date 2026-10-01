@@ -40,7 +40,7 @@ const CTRL_SHIFT = CTRL | SHIFT;
 
 (async () => {
   const server = await start(PORT);
-  const chrome = await launchChrome({ port: CDP_PORT, profile: "sifter-chrome-smoke-profile" });
+  const chrome = await launchChrome({ port: CDP_PORT, profile: "shotpile-chrome-smoke-profile" });
   const client = chrome.client;
   const cleanup = () => { chrome.close(); server.close(); };
   process.on("exit", cleanup);
@@ -242,7 +242,7 @@ const CTRL_SHIFT = CTRL | SHIFT;
     // so the box is NOT the photo: measure the contained photo, undoing the
     // current zoom to recover the untransformed box.
     const anchor = await probe(`(() => {
-      window.__sifterTest.resetCardZoom();
+      window.__shotpileTest.resetCardZoom();
       const img = document.querySelector('#card .imgwrap img');
       const wrap = document.querySelector('#card .imgwrap');
       const contentRect = () => {
@@ -538,9 +538,9 @@ const CTRL_SHIFT = CTRL | SHIFT;
     // confirmation's preview and the commit.
     ok("a dialog puts away the toast and its Undo", toastBefore === true && (await probe("p.toastOn()")) === false && (await waitFor("p.visibility('#toast') === 'hidden'", 800)) === true, `before ${toastBefore}, after ${await probe("p.toastOn()")} ${await probe("p.visibility('#toast')")}`);
     ok("focus starts on the safe option", (await probe("p.focusedLabel()")) === "Cancel", await probe("p.focusedLabel()"));
-    ok("the delete confirmation lists previews", (await probe("p.delGridCount()")) === 2, String(await probe("p.delGridCount()")));
-    ok("the delete confirmation names the files", (await probe("p.delGridNames()")).includes(FIRST), JSON.stringify(await probe("p.delGridNames()")));
-    ok("the delete confirmation is a wide dialog", (await probe("p.delModalWide()")) === true);
+    // The pile page is the preview; the dialog does not repeat it.
+    ok("the delete confirmation does not repeat the grid", (await probe("document.querySelectorAll('#modal .tile, #modal img').length")) === 0);
+    ok("the delete confirmation says how many and how much", /2 screenshots \(/.test(await probe("document.getElementById('modal-body').textContent")), await probe("document.getElementById('modal-body').textContent"));
     ok("the confirm button counts the files", /Move 2 files/.test(await probe("document.querySelector('#modal-foot .danger').textContent")), await probe("document.querySelector('#modal-foot .danger').textContent"));
     await press("Enter");
     await waitFor("p.modalHidden()");
@@ -630,10 +630,13 @@ const CTRL_SHIFT = CTRL | SHIFT;
     // ignored every key.
     await js("p.backToMonths();");
     await waitFor("p.view() === 'months' && p.monthRows().length > 0");
-    await js("p.reset(); p.setFault('commitDelayMs', 1500); p.clickCommit();");
+    await js("p.reset(); p.clickCommit();");
+    ok("the footer's delete button opens the pile first", (await waitFor("p.view() === 'staged' && p.pileNames().length > 0")) === true, await probe("p.view()"));
+    await js("p.setFault('commitDelayMs', 1500); p.clickPileCommit();");
     await waitFor("!p.modalHidden()");
     await probe("p.clickConfirmInModal()");
-    await sleep(100);
+    await js("p.backToMonths();");
+    await waitFor("p.view() === 'months'");
     await probe("p.clickMonth('2026-09')");
     ok("a month will not open while files are being moved", /Moving files to the Recycle Bin/.test(await waitFor("/Moving files/.test(p.toastText() || '') && p.toastText()", 600)) && (await probe("p.view()")) === "months", `${await probe("p.toastText()")} / ${await probe("p.view()")}`);
     await js("p.clickFolderChip();");
@@ -767,7 +770,7 @@ const CTRL_SHIFT = CTRL | SHIFT;
     ok("the options show the versions", /2\.11\.6/.test(await probe("document.querySelector('.about-list').textContent")), await probe("document.querySelector('.about-list')?.textContent"));
     await js("document.querySelector('.segmented [data-theme=light]').click();");
     ok("choosing Light overrides a dark system", (await probe("document.documentElement.dataset.theme")) === "light", await probe("document.documentElement.dataset.theme"));
-    ok("the choice is saved", /"theme":"light"/.test(await probe("localStorage.getItem('sifter.prefs')")), await probe("localStorage.getItem('sifter.prefs')"));
+    ok("the choice is saved", /"theme":"light"/.test(await probe("localStorage.getItem('shotpile.prefs')")), await probe("localStorage.getItem('shotpile.prefs')"));
     await js("document.querySelector('.segmented [data-theme=system]').click();");
     ok("System follows the system again", (await probe("document.documentElement.dataset.theme")) === "dark", await probe("document.documentElement.dataset.theme"));
     await js("[...document.querySelectorAll('.options-sheet .btn')].find((b) => b.textContent === 'Open').click();");
@@ -780,7 +783,7 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await press("-", CTRL);
     await press("-", CTRL);
     ok("Ctrl+- zooms out", (await probe("document.documentElement.style.zoom")) === "0.9", await probe("document.documentElement.style.zoom"));
-    ok("the zoom is saved", /"zoom":0.9/.test(await probe("localStorage.getItem('sifter.prefs')")), await probe("localStorage.getItem('sifter.prefs')"));
+    ok("the zoom is saved", /"zoom":0.9/.test(await probe("localStorage.getItem('shotpile.prefs')")), await probe("localStorage.getItem('shotpile.prefs')"));
     await press("0", CTRL);
     ok("Ctrl+0 resets the zoom", (await probe("document.documentElement.style.zoom")) === "1", await probe("document.documentElement.style.zoom"));
 

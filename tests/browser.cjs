@@ -106,7 +106,7 @@ function connect(wsUrl) {
  * Starts headless Chrome and connects to its first page. Resolves to
  * `{ client, close }`; `close()` disconnects and kills the browser.
  */
-async function launchChrome({ port = 9222, windowSize = "1180,880", profile = "sifter-chrome-profile" } = {}) {
+async function launchChrome({ port = 9222, windowSize = "1180,880", profile = "shotpile-chrome-profile" } = {}) {
   const chromePath = findChrome();
   if (!chromePath) throw new Error("no Chrome/Chromium found; set CHROME=/path/to/chrome");
   const proc = spawn(chromePath, [

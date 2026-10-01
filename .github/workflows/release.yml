@@ -8,7 +8,8 @@ name: Release
 #   (v1.2.0). The branch's head is built, and the release creates the tag on
 #   it.
 #
-# The tag must match the version in src-tauri/tauri.conf.json, so a release can
+# The tag must match the version in src-tauri/Cargo.toml (the only place it is
+# written; tauri.conf.json takes it from there), so a release can
 # never ship a binary that reports a different version.
 #
 # A branch push that changes this file is a dry run: it builds everything and
@@ -46,14 +47,14 @@ jobs:
       - name: Check the tag
         shell: bash
         run: |
-          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          version=$(awk -F'"' '/^version *=/ { print $2; exit }' src-tauri/Cargo.toml)
           echo "VERSION=$version" >> "$GITHUB_ENV"
           if [ "$DRY_RUN" = true ]; then
             echo "Dry run on $GITHUB_REF_NAME: builds $version, publishes nothing"
             exit 0
           fi
           if [ "v$version" != "$TAG" ]; then
-            echo "::error::$TAG does not match version $version in src-tauri/tauri.conf.json"
+            echo "::error::$TAG does not match version $version in src-tauri/Cargo.toml"
             exit 1
           fi
           # A hand-started run creates the tag. If it exists already it must
@@ -74,6 +75,9 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
 
       # tauri build: the release exe, then the NSIS installer around it.
       - run: npm run build
@@ -81,17 +85,21 @@ jobs:
       - name: Collect the release files
         shell: bash
         run: |
-          # The Cargo package name, unless the CLI named it after the product.
-          exe=src-tauri/target/release/screenshot-sifter.exe
-          [ -f "$exe" ] || exe="src-tauri/target/release/Screenshot Sifter.exe"
+          # The Cargo package name (Windows paths ignore case, so this also finds
+          # the product-named Shotpile.exe).
+          exe=src-tauri/target/release/shotpile.exe
           setup=(src-tauri/target/release/bundle/nsis/*-setup.exe)
           if [ ! -f "$exe" ] || [ ${#setup[@]} -ne 1 ] || [ ! -f "${setup[0]}" ]; then
             echo "::error::missing build output; release dir has: $(ls src-tauri/target/release src-tauri/target/release/bundle/nsis)"
             exit 1
           fi
           mkdir release
-          cp "${setup[0]}" "release/Screenshot-Sifter_${VERSION}_x64-setup.exe"
-          cp "$exe" "release/Screenshot-Sifter_${VERSION}_x64-portable.exe"
+          # The licence texts of every Rust dependency, which their MIT and
+          # Apache licences require next to the binaries. Fails on a licence
+          # src-tauri/about.toml does not accept.
+          (cd src-tauri && cargo about generate about.hbs -o ../release/THIRD-PARTY-LICENSES.html)
+          cp "${setup[0]}" "release/Shotpile_${VERSION}_x64-setup.exe"
+          cp "$exe" "release/Shotpile_${VERSION}_x64-portable.exe"
           cd release
           sha256sum -- * > SHA256SUMS.txt
           cat SHA256SUMS.txt
@@ -100,7 +108,7 @@ jobs:
         if: env.DRY_RUN == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: Screenshot-Sifter-${{ env.VERSION }}-dry-run
+          name: Shotpile-${{ env.VERSION }}-dry-run
           path: release/
 
       - name: Publish the release
@@ -112,8 +120,10 @@ jobs:
           notes=$(cat <<EOF
           For Windows 10 or 11, 64-bit.
 
-          - **Screenshot-Sifter_${VERSION}_x64-setup.exe** installs the app for your user, with a Start menu entry and an uninstaller.
-          - **Screenshot-Sifter_${VERSION}_x64-portable.exe** runs without installing.
+          - **Shotpile_${VERSION}_x64-setup.exe** installs the app for your user, with a Start menu entry and an uninstaller.
+          - **Shotpile_${VERSION}_x64-portable.exe** runs without installing.
+
+          Free for noncommercial use under the PolyForm Noncommercial License 1.0.0. \`THIRD-PARTY-LICENSES.html\` lists the open-source components inside, with their licences.
 
           The files are not code-signed yet, so Windows SmartScreen may say *Windows protected your PC*: choose **More info**, then **Run anyway**. The app needs Microsoft Edge WebView2, which current Windows already has; the installer fetches it if it is missing. \`SHA256SUMS.txt\` has the checksums.
           EOF
@@ -123,5 +133,5 @@ jobs:
             gh release upload "$TAG" release/* --clobber
           else
             # --target creates the tag on this commit when it does not exist.
-            gh release create "$TAG" release/* --target "$GITHUB_SHA" --title "Screenshot Sifter $VERSION" --notes "$notes" --generate-notes
+            gh release create "$TAG" release/* --target "$GITHUB_SHA" --title "Shotpile $VERSION" --notes "$notes" --generate-notes
           fi

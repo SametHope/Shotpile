@@ -79,22 +79,55 @@ pub fn commit_deletes_for_tests(
     commands::apply_commit(db, undo, outcome)
 }
 
+/// The data folder and database name before the app was renamed to Shotpile.
+const LEGACY_DIR: &str = "com.hope.screenshotsifter";
+const LEGACY_DB: &str = "sifter.db";
+
+/// Moves a database left by the app under its old name (v1.0.0, "Screenshot
+/// Sifter") into `dir`, so an update keeps every decision. A rename only:
+/// nothing is deleted, and an existing `shotpile.db` is never replaced.
+/// Returns the folder it came from, if it moved one.
+fn adopt_legacy_db(dir: &std::path::Path) -> std::io::Result<Option<String>> {
+    let target = dir.join("shotpile.db");
+    let Some(old_dir) = dir.parent().map(|p| p.join(LEGACY_DIR)) else {
+        return Ok(None);
+    };
+    let old = old_dir.join(LEGACY_DB);
+    if target.exists() || !old.exists() {
+        return Ok(None);
+    }
+    std::fs::rename(&old, &target)?;
+    // SQLite's side files belong with the database; without them the last
+    // writes of a crashed session would be lost.
+    for ext in ["-wal", "-shm"] {
+        let side = old_dir.join(format!("{LEGACY_DB}{ext}"));
+        if side.exists() {
+            std::fs::rename(side, dir.join(format!("shotpile.db{ext}")))?;
+        }
+    }
+    Ok(Some(old_dir.display().to_string()))
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
-            let log_path = dir.join("logs").join("sifter.log");
+            let log_path = dir.join("logs").join("shotpile.log");
             if let Some(parent) = log_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
             log::init(&log_path);
             log::install_panic_hook();
-            log::info(
-                "boot",
-                &format!("screenshot sifter {}", env!("CARGO_PKG_VERSION")),
-            );
-            let db = match Db::open(&dir.join("sifter.db")) {
+            log::info("boot", &format!("shotpile {}", env!("CARGO_PKG_VERSION")));
+            match adopt_legacy_db(&dir) {
+                Ok(Some(from)) => {
+                    log::info("boot", &format!("moved the database over from {from}"))
+                }
+                Ok(None) => {}
+                Err(e) => log::warn("boot", &format!("couldn't move the old database over: {e}")),
+            }
+            let db = match Db::open(&dir.join("shotpile.db")) {
                 Ok(db) => db,
                 Err(e) => {
                     log::error("boot", &format!("couldn't open the database: {e}"));
@@ -103,7 +136,7 @@ pub fn run() {
             };
             log::info(
                 "boot",
-                &format!("database opened: {}", dir.join("sifter.db").display()),
+                &format!("database opened: {}", dir.join("shotpile.db").display()),
             );
             // The window starts hidden and the page shows it once painted; if
             // the page never does (a script error, say), show it anyway.
@@ -143,5 +176,35 @@ pub fn run() {
             commands::app_ready,
         ])
         .run(tauri::generate_context!())
-        .expect("Screenshot Sifter failed to start");
+        .expect("Shotpile failed to start");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_legacy_database_moves_over_once_and_never_replaces_a_new_one() {
+        let base = std::env::temp_dir().join(format!("shotpile-legacy-{}", std::process::id()));
+        let old_dir = base.join(LEGACY_DIR);
+        let dir = base.join("com.samethope.shotpile");
+        std::fs::create_dir_all(&old_dir).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(old_dir.join(LEGACY_DB), b"old").unwrap();
+        std::fs::write(old_dir.join("sifter.db-wal"), b"wal").unwrap();
+
+        assert!(adopt_legacy_db(&dir).unwrap().is_some());
+        assert_eq!(std::fs::read(dir.join("shotpile.db")).unwrap(), b"old");
+        assert_eq!(std::fs::read(dir.join("shotpile.db-wal")).unwrap(), b"wal");
+        assert!(!old_dir.join(LEGACY_DB).exists());
+
+        // A second start, or a fresh old file next to an existing database,
+        // changes nothing.
+        std::fs::write(old_dir.join(LEGACY_DB), b"stray").unwrap();
+        assert!(adopt_legacy_db(&dir).unwrap().is_none());
+        assert_eq!(std::fs::read(dir.join("shotpile.db")).unwrap(), b"old");
+
+        // Tests may clean up the temp folders they create themselves.
+        std::fs::remove_dir_all(&base).unwrap();
+    }
 }
