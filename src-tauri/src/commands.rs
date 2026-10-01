@@ -27,6 +27,9 @@ pub struct AppInfo {
     pub tauri_version: String,
     pub webview_version: String,
     pub sqlite_version: String,
+    /// What this OS calls the bin and the file manager, for the UI text.
+    pub trash_name: String,
+    pub file_manager: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -35,6 +38,9 @@ pub struct ScanReport {
     pub found: usize,
     pub added: usize,
     pub refreshed: usize,
+    /// Committed files found on disk again (restored from the Recycle Bin),
+    /// now kept.
+    pub restored: usize,
     pub skipped_other: usize,
     pub unreadable: usize,
     pub unviewable: usize,
@@ -138,7 +144,7 @@ pub fn store_scan(
     );
     let root_id = db.upsert_root(path)?;
     db.flag_root_missing(root_id)?;
-    let (added, refreshed) = db.upsert_shots_bulk(root_id, &files)?;
+    let (added, refreshed, restored) = db.upsert_shots_bulk(root_id, &files)?;
     let total_in_root = db.count_in_root(root_id)?;
     let missing = db.count_missing_in_root(root_id)?;
     db.touch_root(root_id, scan::now_ms())?;
@@ -148,6 +154,7 @@ pub fn store_scan(
         found: stats.found,
         added,
         refreshed,
+        restored,
         skipped_other: stats.skipped_other,
         unreadable: stats.unreadable,
         unviewable,
@@ -193,11 +200,25 @@ pub fn app_info(state: State<'_, AppState>) -> Result<AppInfo, String> {
         tauri_version: tauri::VERSION.to_string(),
         webview_version: tauri::webview_version().unwrap_or_else(|_| "unknown".to_string()),
         sqlite_version: rusqlite::version().to_string(),
+        trash_name: if cfg!(windows) {
+            "Recycle Bin"
+        } else {
+            "Trash"
+        }
+        .to_string(),
+        file_manager: if cfg!(windows) {
+            "File Explorer"
+        } else if cfg!(target_os = "macos") {
+            "Finder"
+        } else {
+            "the file manager"
+        }
+        .to_string(),
     })
 }
 
 /// The project page that Options > About opens.
-const REPO_URL: &str = "https://github.com/SametHope/Screenshot-Sifter";
+const REPO_URL: &str = "https://github.com/SametHope/Shotpile";
 
 /// Shows a known place: the data folder, the logs folder, or one screenshot
 /// (selected in its folder) in the file manager, or the project page in the
@@ -619,9 +640,9 @@ pub fn unstage(state: State<'_, AppState>, id: i64) -> Result<Shot, String> {
 }
 
 #[tauri::command]
-pub fn staged_list(state: State<'_, AppState>) -> Result<Vec<Shot>, String> {
+pub fn staged_list(state: State<'_, AppState>, root_id: Option<i64>) -> Result<Vec<Shot>, String> {
     let db = lock(&state.db);
-    let ids = db.queue_ids("staged", None, None, 0)?;
+    let ids = db.queue_ids("staged", None, root_id, 0)?;
     db.items(&ids)
 }
 
@@ -653,10 +674,11 @@ pub fn trash_staged(rows: Vec<StagedRow>) -> TrashOutcome {
 /// Writes a Recycle Bin pass back to the database. Moved files become
 /// `deleted`, and so does a file that had already vanished, since there is
 /// nothing left to move. Anything else that failed stays staged so the user
-/// can retry or unstage it.
+/// can retry or unstage it. `root_id` is the pile the rows came from.
 pub fn apply_commit(
     db: &Db,
     undo: &mut UndoStack,
+    root_id: Option<i64>,
     outcome: TrashOutcome,
 ) -> Result<CommitReport, String> {
     let TrashOutcome { moved, failed } = outcome;
@@ -674,7 +696,7 @@ pub fn apply_commit(
         db.set_status(id, STATUS_DELETED, Some(now))?;
     }
 
-    let (still_staged, _) = db.staged_totals()?;
+    let (still_staged, _) = db.staged_totals(root_id)?;
     let report = CommitReport {
         deleted: moved.len(),
         bytes_freed: moved.iter().map(|r| r.size).sum(),
@@ -695,19 +717,23 @@ pub fn apply_commit(
     Ok(report)
 }
 
-/// Sends every staged file to the Recycle Bin.
+/// Sends the deletion pile of one folder (or, without `root_id`, every
+/// folder) to the Recycle Bin.
 ///
 /// Reading the staged list and writing the results back are fast queries done
 /// under the lock; the Recycle Bin calls in between (which shell out and can
 /// block) run on a worker without it.
 #[tauri::command]
-pub async fn commit_deletes(state: State<'_, AppState>) -> Result<CommitReport, String> {
-    let rows = lock(&state.db).staged_rows()?;
+pub async fn commit_deletes(
+    state: State<'_, AppState>,
+    root_id: Option<i64>,
+) -> Result<CommitReport, String> {
+    let rows = lock(&state.db).staged_rows(root_id)?;
     let outcome = tauri::async_runtime::spawn_blocking(move || trash_staged(rows))
         .await
         .map_err(|e| e.to_string())?;
     let db = lock(&state.db);
-    apply_commit(&db, &mut lock(&state.undo), outcome)
+    apply_commit(&db, &mut lock(&state.undo), root_id, outcome)
 }
 
 #[cfg(test)]
@@ -742,7 +768,7 @@ mod tests {
     /// What `trash_staged` reports when every staged file moves.
     fn all_moved(db: &Db) -> TrashOutcome {
         TrashOutcome {
-            moved: db.staged_rows().unwrap(),
+            moved: db.staged_rows(None).unwrap(),
             failed: Vec::new(),
         }
     }
@@ -802,7 +828,7 @@ mod tests {
 
         let shot = apply_unstage(&db, &mut undo, 2).unwrap();
         assert_eq!(shot.status, STATUS_PENDING);
-        assert!(db.staged_rows().unwrap().is_empty());
+        assert!(db.staged_rows(None).unwrap().is_empty());
 
         let shot = apply_undo(&db, &mut undo).unwrap().unwrap();
         assert_eq!(
@@ -810,7 +836,7 @@ mod tests {
             (STATUS_STAGED, staged_at)
         );
         assert_eq!(
-            db.staged_rows().unwrap().len(),
+            db.staged_rows(None).unwrap().len(),
             1,
             "back on the staged list"
         );
@@ -831,7 +857,7 @@ mod tests {
         let (db, mut undo) = setup();
         apply_decision(&db, &mut undo, 1, "keep").unwrap();
         apply_decision(&db, &mut undo, 2, "delete").unwrap();
-        let report = apply_commit(&db, &mut undo, all_moved(&db)).unwrap();
+        let report = apply_commit(&db, &mut undo, None, all_moved(&db)).unwrap();
         assert_eq!(report.deleted, 1);
         assert_eq!(report.bytes_freed, 200);
         assert_eq!(report.still_staged, 0);
@@ -841,7 +867,7 @@ mod tests {
         assert_eq!(apply_undo(&db, &mut undo).unwrap().unwrap().id, 1);
         assert!(apply_undo(&db, &mut undo).unwrap().is_none());
         assert_eq!(status(&db, 2).0, STATUS_DELETED);
-        assert!(db.staged_rows().unwrap().is_empty());
+        assert!(db.staged_rows(None).unwrap().is_empty());
     }
 
     #[test]
@@ -859,7 +885,7 @@ mod tests {
     fn a_committed_row_cannot_be_decided_or_unstaged_again() {
         let (db, mut undo) = setup();
         apply_decision(&db, &mut undo, 2, "delete").unwrap();
-        apply_commit(&db, &mut undo, all_moved(&db)).unwrap();
+        apply_commit(&db, &mut undo, None, all_moved(&db)).unwrap();
         for kind in ["keep", "skip", "delete"] {
             assert!(apply_decision(&db, &mut undo, 2, kind).is_err());
         }
@@ -874,7 +900,7 @@ mod tests {
         for id in 1..=3 {
             apply_decision(&db, &mut undo, id, "delete").unwrap();
         }
-        let rows = db.staged_rows().unwrap();
+        let rows = db.staged_rows(None).unwrap();
         let (moved, gone, stuck) = (&rows[0], &rows[1], &rows[2]);
         let outcome = TrashOutcome {
             moved: vec![moved.clone()],
@@ -894,7 +920,7 @@ mod tests {
             ],
         };
 
-        let report = apply_commit(&db, &mut undo, outcome).unwrap();
+        let report = apply_commit(&db, &mut undo, None, outcome).unwrap();
         assert_eq!(report.deleted, 1);
         assert_eq!(report.bytes_freed, moved.size, "a gone file freed nothing");
         assert_eq!(report.failed.len(), 2);

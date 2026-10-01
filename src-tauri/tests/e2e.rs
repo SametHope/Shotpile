@@ -129,9 +129,9 @@ fn full_review_cycle() {
 
     // ---- unstage, then stage again ---------------------------------------
     db.set_status(queue[1], "pending", None).unwrap();
-    assert!(db.staged_rows().unwrap().is_empty());
+    assert!(db.staged_rows(None).unwrap().is_empty());
     db.set_status(queue[1], "staged", Some(now_ms())).unwrap();
-    assert_eq!(db.staged_rows().unwrap().len(), 1);
+    assert_eq!(db.staged_rows(None).unwrap().len(), 1);
 
     // ---- the file on disk is still there before commit ---------------------
     let staged_path = db.shot(queue[1]).unwrap().unwrap().path;
@@ -162,7 +162,7 @@ fn full_review_cycle() {
     );
     let shot = db.shot(queue[1]).unwrap().unwrap();
     assert_eq!(shot.status, "deleted");
-    assert!(db.staged_rows().unwrap().is_empty());
+    assert!(db.staged_rows(None).unwrap().is_empty());
 
     // Committing again is a harmless no-op.
     let empty = shotpile_lib::commit_deletes_for_tests(&db, &mut undo).expect("empty commit");
@@ -197,7 +197,7 @@ fn decisions_survive_reopening_the_database() {
     assert_eq!(summary.pending, 4);
 
     // The staged row survived too, so the pending delete is still recoverable.
-    let staged = db.staged_rows().unwrap();
+    let staged = db.staged_rows(None).unwrap();
     assert_eq!(staged.len(), 1);
     assert!(
         Path::new(&staged[0].path).exists(),
@@ -205,7 +205,7 @@ fn decisions_survive_reopening_the_database() {
     );
 
     db.set_status(staged[0].id, "pending", None).unwrap();
-    assert!(db.staged_rows().unwrap().is_empty());
+    assert!(db.staged_rows(None).unwrap().is_empty());
 
     std::fs::remove_dir_all(&root).ok();
     for suffix in ["", "-wal", "-shm"] {
@@ -254,7 +254,7 @@ fn undo_never_resurrects_a_committed_file() {
 
     let shot = db.shot(binned).unwrap().unwrap();
     assert_eq!(shot.status, "deleted", "the committed row stays deleted");
-    assert!(db.staged_rows().unwrap().is_empty());
+    assert!(db.staged_rows(None).unwrap().is_empty());
     // A stale card cannot bring it back either.
     assert!(shotpile_lib::decide_for_tests(&db, &mut undo, binned, "keep").is_err());
     assert_eq!(db.shot(binned).unwrap().unwrap().status, "deleted");
@@ -277,12 +277,12 @@ fn forgetting_a_folder_leaves_its_files_on_disk() {
 
     let ids = db.queue_ids("unreviewed", None, None, 0).unwrap();
     shotpile_lib::decide_for_tests(&db, &mut undo, ids[0], "delete").unwrap();
-    let staged_path = db.staged_rows().unwrap()[0].path.clone();
+    let staged_path = db.staged_rows(None).unwrap()[0].path.clone();
     let root_id = db.list_roots().unwrap()[0].id;
 
     shotpile_lib::forget_root_for_tests(&db, &mut undo, root_id).expect("forget");
     assert!(db.list_roots().unwrap().is_empty());
-    assert!(db.staged_rows().unwrap().is_empty());
+    assert!(db.staged_rows(None).unwrap().is_empty());
     assert_eq!(db.summary(None, 0).unwrap().total, 0);
     assert!(shotpile_lib::undo_last_for_tests(&db, &mut undo)
         .unwrap()

@@ -62,6 +62,7 @@ test("scanSummary describes a scan in one line", () => {
     "12 new · 1,400 already known · 2 without preview"
   );
   assert.equal(scanSummary({ added: 0, refreshed: 0, missing: 3 }), "no screenshots found · 3 missing on disk");
+  assert.equal(scanSummary({ added: 0, refreshed: 5, restored: 2 }), "5 already known · 2 restored, now kept");
   assert.equal(scanSummary(null), "");
 });
 

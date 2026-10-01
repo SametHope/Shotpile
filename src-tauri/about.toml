@@ -17,6 +17,11 @@ accepted = [
   "CC0-1.0",
   "0BSD",
 ]
-targets = ["x86_64-pc-windows-msvc"]
+targets = [
+  "x86_64-pc-windows-msvc",
+  "x86_64-unknown-linux-gnu",
+  "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
+]
 # Shotpile itself (publish = false) is not a third party.
 private = { ignore = true }
