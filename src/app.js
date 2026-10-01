@@ -10,8 +10,12 @@ import {
   ACTION,
   DATE_SOURCE_LABELS,
   GESTURE_THRESHOLD,
+  MAX_ZOOM,
   ReviewQueue,
+  ZOOM_PAN_THRESHOLD,
+  anchorZoom,
   classifyGesture,
+  clampScale,
   exitVector,
   formatBytes,
   formatDateTime,
@@ -56,8 +60,12 @@ const state = {
   scope: null, // { scope, month }
   card: null, // current shot
   drag: null,
+  pan: null, // active panning gesture on a zoomed card
   dragged: false, // true once the current gesture moved, so a click isn't a swipe
   animating: false, // true while a swipe exit animation is playing
+  entering: false, // true when the next card should animate in
+  cardZoom: null, // { zoom, apply, panning } for the current card, if zoomable
+  zoomReadout: null,
   busy: false,
   toastTimer: null,
 };
@@ -102,7 +110,7 @@ function h(tag, attrs = {}, ...children) {
     else if (k === "dataset") Object.assign(node.dataset, v);
     else node.setAttribute(k, v === true ? "" : String(v));
   }
-  for (const c of children.flat()) {
+  for (const c of children.flat(Infinity)) {
     if (c === null || c === undefined || c === false) continue;
     node.append(c instanceof Node ? c : document.createTextNode(String(c)));
   }
@@ -134,9 +142,12 @@ function hideToast() {
   clearTimeout(state.toastTimer);
 }
 
-function modal({ title, body, actions }) {
+function modal({ title, body, actions, wide = false }) {
   el.modalTitle.textContent = title;
-  el.modalBody.replaceChildren(...[body].flat().filter(Boolean));
+  // `flat()` with no argument only flattens one level, which turned a nested
+  // body (e.g. the delete preview grid inside its summary) into
+  // "[object HTMLDivElement]". Flatten fully.
+  el.modalBody.replaceChildren(...[body].flat(Infinity).filter(Boolean));
   el.modalFoot.replaceChildren(
     ...actions.map((a) =>
       h("button", {
@@ -148,6 +159,9 @@ function modal({ title, body, actions }) {
       }, a.label)
     )
   );
+  // `el.modal` is the backdrop; the sizing modifier belongs on the dialog box
+  // inside it.
+  el.modal.querySelector(".modal")?.classList.toggle("wide", !!wide);
   el.modal.hidden = false;
   el.modalFoot.querySelector("button")?.focus();
 }
@@ -176,7 +190,7 @@ async function showLog() {
   });
 }
 
-function confirmDialog({ title, message, confirmLabel, variant = "danger", extra }) {
+function confirmDialog({ title, message, confirmLabel, variant = "danger", extra, body, wide }) {
   return new Promise((resolve) => {
     let settled = false;
     const done = (value) => {
@@ -202,7 +216,8 @@ function confirmDialog({ title, message, confirmLabel, variant = "danger", extra
     document.addEventListener("keydown", onKey, true);
     modal({
       title,
-      body: [h("div", { text: message }), extra].filter(Boolean),
+      body: [h("div", { text: message }), body, extra].filter(Boolean),
+      wide,
       actions: [
         { label: "Cancel", onClick: () => done(false) },
         { label: confirmLabel, variant, onClick: () => done(true) },
@@ -255,7 +270,7 @@ async function openQueue(scope, month = null, label = "") {
   await showCurrent();
 }
 
-async function showCurrent() {
+async function showCurrent({ entering = false } = {}) {
   const id = state.queue.current();
   state.card = id === null ? null : state.cache.get(id) || null;
   if (id !== null && !state.card) {
@@ -265,6 +280,7 @@ async function showCurrent() {
   // Hydrate the upcoming cards before rendering so the deck can show them on
   // the first paint, not only after the background preload lands.
   await hydrate(state.queue.upcoming(2, 1));
+  state.entering = entering;
   render();
   if (id !== null) preload();
 }
@@ -447,8 +463,49 @@ function renderReview() {
     h("button", { class: "btn ghost", onclick: undo, title: "Ctrl+Z" }, "Undo ", kbd("Z"))
   );
 
-  el.view.replaceChildren(h("div", { class: "review" }, h("div", { class: "wrap" }, head, body, actions, filmstrip())));
+  // The zoom readout lives in the existing progress row, not as its own line, so
+  // it costs the stage no height.
+  if (state.card) head.append(zoomReadout());
+  const wrap = h("div", { class: "wrap" }, head, body, actions);
+  if (state.card) wrap.append(filmstrip());
+  el.view.replaceChildren(h("div", { class: "review" }, wrap));
   attachGestures();
+
+  // The incoming card animates in when it replaces one the user just decided,
+  // so advancing through a queue reads as continuous rather than a snap. It is
+  // a pure CSS animation on an already-painted element, so nothing blocks.
+  if (state.entering && state.card) {
+    const top = document.getElementById("card");
+    if (top) {
+      top.classList.add("enter");
+      const done = () => {
+        top.classList.remove("enter");
+        top.removeEventListener("animationend", done);
+      };
+      top.addEventListener("animationend", done);
+      // Fallback in case the animation never fires (reduced motion, or a
+      // display quirk), so the card cannot be stuck mid-transition.
+      setTimeout(done, 420);
+    }
+  }
+  state.entering = false;
+}
+
+/** Live zoom percentage for the current card, shown only while zoomed. */
+function zoomReadout() {
+  const node = h("span", { class: "zoom-readout", text: "100%" });
+  state.zoomReadout = node;
+  return node;
+}
+
+/** Resets the current card's zoom to 100%, used by the test harness. */
+function resetCardZoom() {
+  const z = state.cardZoom;
+  if (!z) return;
+  z.zoom.scale = 1;
+  z.zoom.x = 0;
+  z.zoom.y = 0;
+  z.apply();
 }
 
 function kbd(text) {
@@ -471,16 +528,23 @@ function filmstrip() {
   for (let i = start; i < end; i++) {
     const shot = state.cache.get(ids[i]);
     const status = shot?.status || "pending";
+    // The status is carried on a child so the `.current` ring can never be
+    // overridden by the status colour, which was the whole reason a decided
+    // item looked unselected.
     items.push(h("button", {
-      class: `film-item film-${status}${i === cursor ? " current" : ""}`,
+      class: `film-item${i === cursor ? " current" : ""}`,
+      dataset: { status },
       onclick: () => jumpTo(i),
+      title: shot?.name || `#${ids[i]}`,
+      "aria-current": i === cursor ? "true" : null,
     },
+      h("span", { class: "film-mark" }),
       h("span", { class: "film-thumb" },
         shot?.viewable ? h("img", { src: convertFileSrc(shot.path), alt: "", loading: "lazy" }) : null),
       h("span", { class: "film-name", text: shot?.name || `#${ids[i]}` })
     ));
   }
-  return h("div", { class: "filmstrip" }, items);
+  return h("div", { class: "filmstrip", dataset: { start: String(start) } }, items);
 }
 
 function jumpTo(index) {
@@ -488,32 +552,144 @@ function jumpTo(index) {
   if (index < 0 || index >= state.queue.ids.length) return;
   state.queue.cursor = index;
   state.scope = { ...state.scope };
+  // Jumping back is a deliberate navigation, not a decision, so no entry
+  // animation and no direction carry-over.
+  state.advanceDir = null;
   showCurrent();
 }
 
 function card(shot, top = false) {
-  const img = shot.viewable
-    ? h("img", { src: convertFileSrc(shot.path), alt: shot.name, draggable: "false" })
-    : h("div", { class: "noimg" },
-        h("div", { text: `No ${shot.ext.toUpperCase()} preview` }),
-        h("code", { text: "This format can't be opened by WebView2; decide from the name and size." }));
+  const imgwrap = h("div", { class: "imgwrap" });
+  let img = null;
+  if (shot.viewable) {
+    img = h("img", { src: convertFileSrc(shot.path), alt: shot.name, draggable: "false" });
+    imgwrap.append(img);
+  } else {
+    imgwrap.append(h("div", { class: "noimg" },
+      h("div", { text: `No ${shot.ext.toUpperCase()} preview` }),
+      h("code", { text: "This format can't be opened by WebView2; decide from the name and size." })));
+  }
 
-  return h("div", { class: "card", id: top ? "card" : null },
+  // The date-source diagnostic only lives in the tooltip now. It was noise in
+  // the meta row on every single card.
+  const when = h("span", {
+    text: formatDateTime(shot.taken_ms),
+    title: `Date ${DATE_SOURCE_LABELS[shot.date_source] || shot.date_source}`,
+  });
+
+  const node = h("div", { class: "card", id: top ? "card" : null },
+    // Tints the card (not the image) so the whole surface shifts colour as the
+    // drag progresses. Kept as its own layer so it can sit under the stamps
+    // and above the image without tinting the photo heavily.
+    h("div", { class: "tint" }),
     h("div", { class: "stamp left", text: "Delete" }),
     h("div", { class: "stamp right", text: "Keep" }),
     h("div", { class: "stamp up", text: "Skip" }),
-    h("div", { class: "imgwrap" }, img),
+    imgwrap,
     h("div", { class: "foot" },
       h("div", { class: "fname", text: shot.name }),
       h("div", { class: "fmeta" },
-        h("span", { text: formatDateTime(shot.taken_ms) }),
+        when,
         h("span", { text: formatBytes(shot.size) }),
         h("span", { text: shot.ext.toUpperCase() }),
-        h("span", { class: "hint", text: DATE_SOURCE_LABELS[shot.date_source] || shot.date_source }),
         shot.missing ? h("span", { class: "missing", text: "file missing on disk" }) : null
       )
     )
   );
+
+  if (top && img) {
+    state.cardZoom = attachCardZoom(node, imgwrap, img);
+  }
+  node.classList.add(`enter-${state.advanceDir || "left"}`);
+  return node;
+}
+
+/**
+ * In-card zoom: the wheel zooms the card's own image around the cursor without
+ * opening the full-screen viewer.
+ *
+ * Past ZOOM_PAN_THRESHOLD a drag pans the zoomed image instead of swiping, so
+ * the swipe gesture is untouched at rest. `state.cardZoom` is null when the
+ * current card has no viewable image, which the gesture code treats as
+ * "always swipe".
+ */
+function attachCardZoom(cardEl, imgwrap, img) {
+  const zoom = { scale: 1, x: 0, y: 0 };
+  state.cardZoom = null;
+
+  const apply = () => {
+    img.style.transform = `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`;
+    cardEl.classList.toggle("zoomed", zoom.scale > 1.001);
+    cardEl.classList.toggle("pannable", zoom.scale >= ZOOM_PAN_THRESHOLD);
+    const readout = state.zoomReadout;
+    if (readout) {
+      readout.textContent = `${Math.round(zoom.scale * 100)}%`;
+      readout.classList.toggle("on", zoom.scale > 1.001);
+    }
+  };
+
+  const zoomBy = (factor, cx, cy) => {
+    const next = clampScale(zoom.scale, factor);
+    if (next === zoom.scale) return;
+    const rect = imgwrap.getBoundingClientRect();
+    const next2 = anchorZoom(
+      (cx ?? rect.left + rect.width / 2) - (rect.left + rect.width / 2),
+      (cy ?? rect.top + rect.height / 2) - (rect.top + rect.height / 2),
+      zoom.x,
+      zoom.y,
+      next,
+      zoom.scale
+    );
+    zoom.x = next2.x;
+    zoom.y = next2.y;
+    zoom.scale = next;
+    clampPan();
+    apply();
+  };
+
+  // Keep the image from being dragged entirely off the card once it is bigger
+  // than the frame.
+  const clampPan = () => {
+    if (zoom.scale <= 1.001) {
+      zoom.x = 0;
+      zoom.y = 0;
+      return;
+    }
+    const rect = imgwrap.getBoundingClientRect();
+    const w = img.offsetWidth || rect.width;
+    const hgt = img.offsetHeight || rect.height;
+    const maxX = Math.max(0, (w * zoom.scale - rect.width) / 2);
+    const maxY = Math.max(0, (hgt * zoom.scale - rect.height) / 2);
+    zoom.x = Math.min(maxX, Math.max(-maxX, zoom.x));
+    zoom.y = Math.min(maxY, Math.max(-maxY, zoom.y));
+  };
+
+  imgwrap.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY);
+  }, { passive: false });
+
+  imgwrap.addEventListener("dblclick", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (zoom.scale > 1) {
+      zoom.scale = 1;
+      zoom.x = 0;
+      zoom.y = 0;
+    } else {
+      zoomBy(2);
+    }
+    apply();
+  });
+
+  state.cardZoom = {
+    zoom,
+    apply,
+    panning: () => zoom.scale >= ZOOM_PAN_THRESHOLD,
+  };
+  apply();
+  return state.cardZoom;
 }
 
 /**
@@ -547,14 +723,23 @@ function cardStack() {
 
 // ---------------------------------------------------------------- photo viewer
 
-const viewer = { el: null, img: null, label: null, scale: 1, x: 0, y: 0, drag: null };
+const viewer = { el: null, img: null, imgwrap: null, label: null, scale: 1, x: 0, y: 0, drag: null };
 
 function openViewer(shot) {
   if (!shot?.viewable) return;
+  // The full-screen viewer opens at the card's current zoom, so inspecting at
+  // 3x in the card and then opening it does not throw the zoom away.
+  const inherited = state.cardZoom?.zoom;
   closeViewer();
-  viewer.scale = 1;
-  viewer.x = 0;
-  viewer.y = 0;
+  if (inherited && inherited.scale > 1.001) {
+    viewer.scale = inherited.scale;
+    viewer.x = inherited.x;
+    viewer.y = inherited.y;
+  } else {
+    viewer.scale = 1;
+    viewer.x = 0;
+    viewer.y = 0;
+  }
 
   const img = h("img", { src: convertFileSrc(shot.path), alt: shot.name, draggable: "false" });
   const label = h("span", { class: "viewer-zoom", text: "100%" });
@@ -575,17 +760,18 @@ function openViewer(shot) {
 
   viewer.el = overlay;
   viewer.img = img;
+  viewer.imgwrap = imgwrap;
   viewer.label = label;
   document.body.append(overlay);
 
   overlay.addEventListener("wheel", (e) => {
     e.preventDefault();
-    zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12);
+    zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY);
   }, { passive: false });
 
   imgwrap.addEventListener("pointerdown", (e) => {
     viewer.drag = { px: e.clientX, py: e.clientY, ox: viewer.x, oy: viewer.y };
-    imgwrap.setPointerCapture(e.pointerId);
+    capture(imgwrap, e.pointerId);
   });
   imgwrap.addEventListener("pointermove", (e) => {
     if (!viewer.drag) return;
@@ -597,14 +783,14 @@ function openViewer(shot) {
   imgwrap.addEventListener("pointerup", endDrag);
   imgwrap.addEventListener("pointercancel", endDrag);
 
-  imgwrap.addEventListener("dblclick", () => {
-    if (viewer.scale > 1) resetZoom();
-    else {
-      viewer.scale = 2;
-      viewer.x = 0;
-      viewer.y = 0;
-      applyView();
+  imgwrap.addEventListener("dblclick", (e) => {
+    e.preventDefault();
+    if (viewer.scale > 1) {
+      resetZoom();
+      return;
     }
+    // Double-click zooms in around the click point, not the centre.
+    zoomBy(2, e.clientX, e.clientY);
   });
 
   applyView();
@@ -616,8 +802,12 @@ function closeViewer() {
   viewer.el.remove();
   viewer.el = null;
   viewer.img = null;
+  viewer.imgwrap = null;
   viewer.label = null;
   viewer.drag = null;
+  viewer.scale = 1;
+  viewer.x = 0;
+  viewer.y = 0;
 }
 
 function applyView() {
@@ -626,14 +816,27 @@ function applyView() {
   if (viewer.label) viewer.label.textContent = `${Math.round(viewer.scale * 100)}%`;
 }
 
-function zoomBy(factor) {
-  const next = Math.min(8, Math.max(1, viewer.scale * factor));
+/**
+ * Zooms the viewer by `factor`, keeping the point under (cx, cy) fixed.
+ * Falls back to the viewport centre when no cursor position is given, which is
+ * what the +/- buttons and the keyboard shortcut want.
+ */
+function zoomBy(factor, cx = null, cy = null) {
+  const next = clampScale(viewer.scale, factor);
   if (next === viewer.scale) return;
-  // Zoom toward the centre of the viewport.
-  const cx = window.innerWidth / 2;
-  const cy = window.innerHeight / 2;
-  viewer.x = cx - (cx - viewer.x) * (next / viewer.scale);
-  viewer.y = cy - (cy - viewer.y) * (next / viewer.scale);
+  const rect = viewer.imgwrap?.getBoundingClientRect();
+  const ox = rect ? rect.left + rect.width / 2 : window.innerWidth / 2;
+  const oy = rect ? rect.top + rect.height / 2 : window.innerHeight / 2;
+  const nextPos = anchorZoom(
+    (cx ?? ox) - ox,
+    (cy ?? oy) - oy,
+    viewer.x,
+    viewer.y,
+    next,
+    viewer.scale
+  );
+  viewer.x = nextPos.x;
+  viewer.y = nextPos.y;
   viewer.scale = next;
   applyView();
 }
@@ -697,12 +900,13 @@ async function decide(action) {
   // No immediate render. A swipe is mid-exit-animation and a re-render now
   // would cut it short and flash the "queue done" finale; a keyboard/button
   // decision fades the card out instead. showCurrent() re-renders once the
-  // write lands.
+  // write lands, and animates the replacement card in.
   if (!state.animating) {
     const cardEl = document.getElementById("card");
     if (cardEl) {
-      cardEl.style.transition = "opacity .16s ease";
+      cardEl.style.transition = "opacity .16s ease, transform .16s ease";
       cardEl.style.opacity = "0";
+      cardEl.style.transform = "translate(-50%, -50%) scale(.88)";
     }
   }
 
@@ -741,7 +945,10 @@ async function decide(action) {
     await loadMonths();
     render();
   } else {
-    await showCurrent();
+    // Animating in: the card that replaces this one slides up from slightly
+    // smaller and faded, matching the direction it was decided in.
+    state.advanceDir = action === ACTION.SKIP ? "up" : action === ACTION.KEEP ? "right" : "left";
+    await showCurrent({ entering: true });
   }
 }
 
@@ -793,15 +1000,64 @@ async function unstageOne(id) {
   }
 }
 
+/** How many staged files get a thumbnail in the confirm grid. */
+const DELETE_GRID_LIMIT = 60;
+
+/**
+ * The final look before deletion: a scrollable grid of small previews of
+ * everything staged, with a count and total size. This is the last chance to
+ * spot a file that should not be there.
+ */
+function deletePreviewGrid(rows, total) {
+  const shown = rows.slice(0, DELETE_GRID_LIMIT);
+  const grid = h("div", { class: "del-grid" }, shown.map(shot =>
+    h("figure", { class: "del-cell", title: `${shot.name} · ${formatBytes(shot.size)}` },
+      h("div", { class: "del-thumb" },
+        shot.viewable
+          ? h("img", { src: convertFileSrc(shot.path), alt: shot.name, loading: "lazy" })
+          : h("span", { class: "del-noimg", text: shot.ext.toUpperCase() })),
+      h("figcaption", { text: shot.name })
+    )));
+  if (rows.length > shown.length) {
+    grid.append(h("div", { class: "del-more", text: `+${rows.length - shown.length} more` }));
+  }
+  return [
+    h("div", { class: "del-summary" },
+      h("div", { class: "del-count", text: `${rows.length} file${rows.length === 1 ? "" : "s"} · ${formatBytes(total)}` }),
+      h("div", { class: "hint", text: "These go to the Recycle Bin, not permanent deletion. You can restore them from there." })),
+    grid,
+  ];
+}
+
 async function commit() {
   const n = state.summary?.staged_all || 0;
   if (!n) return;
-  const ok = await confirmDialog({
-    title: "Move to Recycle Bin",
-    message: `${n} files will be moved to the Recycle Bin. They are not permanently deleted; you can restore them from the Recycle Bin at any time.`,
-    confirmLabel: `Move ${n} files`,
-    variant: "danger",
-  });
+
+  // Fetch the actual list so the confirm dialog can show previews, not just a
+  // count. If this fails, fall back to the plain count confirmation rather than
+  // blocking deletion on a read error.
+  let rows = null;
+  try {
+    rows = await api("staged_list");
+  } catch (e) {
+    log.warn("commit", `couldn't load staged list for preview: ${e}`);
+  }
+
+  const ok = rows?.length
+    ? await confirmDialog({
+        title: "Move to Recycle Bin",
+        body: deletePreviewGrid(rows, rows.reduce((sum, r) => sum + r.size, 0)),
+        message: `${n} files will be moved to the Recycle Bin.`,
+        confirmLabel: `Move ${n} files`,
+        variant: "danger",
+        wide: true,
+      })
+    : await confirmDialog({
+        title: "Move to Recycle Bin",
+        message: `${n} files will be moved to the Recycle Bin. They are not permanently deleted; you can restore them from the Recycle Bin at any time.`,
+        confirmLabel: `Move ${n} files`,
+        variant: "danger",
+      });
   if (!ok) return;
 
   state.busy = true;
@@ -918,14 +1174,67 @@ function backToMonths() {
 
 // ------------------------------------------------------------------ gestures
 
+/**
+ * Pointer capture is only an optimisation: it lets a drag continue past the
+ * card edge. It throws NotFoundError when the pointer is already gone, which
+ * happens with synthetic events and after a capture is lost, and that must not
+ * abort the gesture.
+ */
+function capture(node, pointerId) {
+  try {
+    node.setPointerCapture?.(pointerId);
+  } catch {
+    /* non-fatal: the drag still tracks as long as the pointer stays inside */
+  }
+}
+
+// RGB triples for the three drag outcomes, used for both the card tint and
+// the stamp fills.
+const DRAG_RGB = {
+  [ACTION.DELETE]: "220,38,38",
+  [ACTION.KEEP]: "21,128,61",
+  [ACTION.SKIP]: "180,83,9",
+};
+
 function attachGestures() {
   const stage = document.getElementById("stage");
   const cardEl = document.getElementById("card");
   if (!stage || !cardEl) return;
 
+  const tint = cardEl.querySelector(".tint");
+  const stamps = {
+    [ACTION.DELETE]: cardEl.querySelector(".stamp.left"),
+    [ACTION.KEEP]: cardEl.querySelector(".stamp.right"),
+    [ACTION.SKIP]: cardEl.querySelector(".stamp.up"),
+  };
+
+  /** Clears every drag visual so a released card never keeps a stale tint. */
+  const clearDragVisuals = () => {
+    cardEl.classList.remove("dragging");
+    cardEl.classList.remove("tinted");
+    for (const s of Object.values(stamps)) {
+      if (!s) continue;
+      s.style.opacity = "0";
+      s.style.background = "transparent";
+    }
+    if (tint) tint.style.opacity = "0";
+  };
+
   const onDown = (e) => {
     if (state.busy || !state.card || e.button !== 0) return;
+
+    // A zoomed card pans with the drag instead of swiping, so the user cannot
+    // accidentally decide a photo they were inspecting closely.
+    if (state.cardZoom?.panning()) {
+      const z = state.cardZoom.zoom;
+      state.pan = { id: e.pointerId, px: e.clientX, py: e.clientY, ox: z.x, oy: z.y };
+      state.dragged = false;
+      capture(cardEl, e.pointerId);
+      return;
+    }
+
     state.dragged = false;
+    state.pan = null;
     state.drag = {
       id: e.pointerId,
       x: e.clientX,
@@ -935,10 +1244,20 @@ function attachGestures() {
       action: null,
       active: false,
     };
-    cardEl.setPointerCapture?.(e.pointerId);
+    capture(cardEl, e.pointerId);
   };
 
   const onMove = (e) => {
+    const p = state.pan;
+    if (p && p.id === e.pointerId) {
+      const z = state.cardZoom.zoom;
+      z.x = p.ox + (e.clientX - p.px);
+      z.y = p.oy + (e.clientY - p.py);
+      if (Math.abs(e.clientX - p.px) > 4 || Math.abs(e.clientY - p.py) > 4) state.dragged = true;
+      state.cardZoom.apply();
+      return;
+    }
+
     const d = state.drag;
     if (!d || d.id !== e.pointerId) return;
     d.dx = e.clientX - d.x;
@@ -949,32 +1268,47 @@ function attachGestures() {
     const v = gestureVisual(d.dx, d.dy, GESTURE_THRESHOLD);
     d.action = v.action;
 
+    // The card shrinks as it is dragged away, so it reads as receding rather
+    // than just sliding. Capped at 12% so the photo stays legible.
+    const shrink = 1 - Math.min(0.12, v.progress * 0.12);
     const angle = (v.vertical ? d.dy : d.dx) * 0.035;
-    cardEl.style.transform = `translate(-50%, -50%) translate(${d.dx}px, ${d.dy}px) rotate(${angle}deg)`;
+    cardEl.style.transform =
+      `translate(-50%, -50%) translate(${d.dx}px, ${d.dy}px) rotate(${angle}deg) scale(${shrink})`;
     cardEl.classList.add("dragging");
 
-    const left = cardEl.querySelector(".stamp.left");
-    const right = cardEl.querySelector(".stamp.right");
-    const up = cardEl.querySelector(".stamp.up");
-    // The active stamp fills with its colour as the drag progresses: red for
-    // delete, green for keep, yellow for skip.
-    const col = { [ACTION.DELETE]: "220,38,38", [ACTION.KEEP]: "21,128,61", [ACTION.SKIP]: "180,83,9" }[v.action];
-    const fill = col ? Math.round(v.progress * 22) : 0;
-    const show = (el, on) => {
-      el.style.opacity = on ? String(0.35 + v.progress * 0.65) : "0";
-      el.style.background = on && col ? `rgba(${col},${fill / 100})` : "transparent";
-    };
-    show(left, v.action === ACTION.DELETE);
-    show(right, v.action === ACTION.KEEP);
-    show(up, v.action === ACTION.SKIP);
+    // Tint the card surface (a dedicated layer under the image) and keep the
+    // photo itself mostly untinted, per the requested look.
+    const col = DRAG_RGB[v.action];
+    if (tint) {
+      if (col) {
+        cardEl.classList.add("tinted");
+        tint.style.background = `rgba(${col},1)`;
+        tint.style.opacity = String(v.progress * 0.3);
+      } else {
+        cardEl.classList.remove("tinted");
+        tint.style.opacity = "0";
+      }
+    }
+
+    // The stamps stay on top of the tint and fill with their colour.
+    const fill = col ? Math.round(v.progress * 34) : 0;
+    for (const [action, node] of Object.entries(stamps)) {
+      if (!node) continue;
+      const on = action === v.action;
+      node.style.opacity = on ? String(0.45 + v.progress * 0.55) : "0";
+      node.style.background = on ? `rgba(${col},${fill / 100})` : "transparent";
+    }
   };
 
   const finish = (e) => {
+    if (state.pan && state.pan.id === e.pointerId) {
+      state.pan = null;
+      return;
+    }
     const d = state.drag;
     if (!d || d.id !== e.pointerId) return;
     state.drag = null;
-    cardEl.classList.remove("dragging");
-    for (const s of cardEl.querySelectorAll(".stamp")) s.style.opacity = "0";
+    clearDragVisuals();
 
     const action = classifyGesture(d.dx, d.dy, GESTURE_THRESHOLD);
     if (!action) {
@@ -985,12 +1319,16 @@ function attachGestures() {
     }
     const v = exitVector(action, Math.max(900, window.innerWidth));
     cardEl.style.transition = "transform .3s cubic-bezier(.2,.7,.3,1), opacity .3s";
-    cardEl.style.transform = `translate(-50%, -50%) translate(${v.x}px, ${v.y}px) rotate(${v.x * 0.02}deg)`;
+    // Shrink further as it exits, so the card dissolves away rather than
+    // flying off at full size.
+    cardEl.style.transform =
+      `translate(-50%, -50%) translate(${v.x}px, ${v.y}px) rotate(${v.x * 0.02}deg) scale(.72)`;
     cardEl.style.opacity = "0";
     // Hold the decision until the exit animation finishes, so the card
     // animates away instead of vanishing. `animating` blocks a second
     // decision from landing mid-animation.
     state.animating = true;
+    state.entering = false;
     setTimeout(() => {
       state.animating = false;
       decide(action);
@@ -1003,9 +1341,10 @@ function attachGestures() {
   stage.addEventListener("pointercancel", (e) => {
     const d = state.drag;
     state.drag = null;
-    cardEl.classList.remove("dragging");
+    state.pan = null;
+    clearDragVisuals();
     cardEl.style.transform = "";
-    if (d) for (const s of cardEl.querySelectorAll(".stamp")) s.style.opacity = "0";
+    if (d) state.dragged = false;
   });
   stage.addEventListener("dragstart", (e) => e.preventDefault());
 }
@@ -1060,6 +1399,22 @@ document.addEventListener("keydown", (e) => {
   }
   if (state.view !== "review") return;
 
+  // While the current card is zoomed in, the arrows pan the image instead of
+  // deciding the photo. Back to swiping the moment zoom resets.
+  if (state.cardZoom?.panning()) {
+    const pan = 60;
+    const z = state.cardZoom.zoom;
+    switch (e.key) {
+      case "ArrowLeft": e.preventDefault(); z.x += pan; state.cardZoom.apply(); break;
+      case "ArrowRight": e.preventDefault(); z.x -= pan; state.cardZoom.apply(); break;
+      case "ArrowUp": e.preventDefault(); z.y += pan; state.cardZoom.apply(); break;
+      case "ArrowDown": e.preventDefault(); z.y -= pan; state.cardZoom.apply(); break;
+      case "0": e.preventDefault(); z.scale = 1; z.x = 0; z.y = 0; state.cardZoom.apply(); break;
+      default: return;
+    }
+    return;
+  }
+
   switch (e.key) {
     case "ArrowLeft": e.preventDefault(); decide(ACTION.DELETE); break;
     case "ArrowRight": e.preventDefault(); decide(ACTION.KEEP); break;
@@ -1077,6 +1432,7 @@ window.__sifterTest = {
   addFolder,
   openViewer: () => openViewer(state.card),
   closeViewer,
+  resetCardZoom,
   resetToSetup() {
     state.roots = [];
     state.rootId = null;

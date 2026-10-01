@@ -416,23 +416,70 @@ main {
 .card.dragging { cursor: grabbing; }
 .card.settling { transition: transform .22s var(--ease); }
 
+/* Drag tint: sits over the card surface but under the photo, so the card
+   changes colour while the image itself stays mostly untinted. */
+.card .tint {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .1s linear;
+  border-radius: inherit;
+}
+
+.card img {
+  position: relative;
+  z-index: 0;
+}
+
 .card .imgwrap {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
   place-items: center;
+  position: relative;
+  overflow: hidden;
   /* A soft solid wash instead of a hard checkerboard: a small image would
      otherwise sit in a huge transparent-pattern area and read as excessive. */
   background: linear-gradient(180deg, #f8fafc 0%, #edf1f6 100%);
   cursor: zoom-in;
 }
 
+.card.zoomed .imgwrap { cursor: grab; }
+.card.zoomed.pannable .imgwrap { cursor: grab; }
+
 .card img {
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
   display: block;
+  transform-origin: center;
+  will-change: transform;
   -webkit-user-drag: none;
+}
+
+/* Live zoom readout, parked in the progress row so it costs the stage no
+   height. Hidden until the card is actually zoomed. */
+.zoom-readout {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--line-soft);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0;
+  transition: opacity .12s;
+}
+
+.zoom-readout.on { opacity: 1; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+/* `.on` is set from JS when the card is actually zoomed past 100%, so the pill
+   is only visible when it has something to say. */
+.zoom-readout.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .card .noimg {
@@ -444,24 +491,56 @@ main {
 
 .card .noimg code { font-size: 12px; }
 
+/* Stamps are deliberately loud: the old thin 3px outline at 45% opacity was
+   effectively invisible over a screenshot. Solid fill, white text, heavy
+   weight, and a real shadow so they read against any photo. */
 .stamp {
   position: absolute;
-  top: 16px;
-  padding: 6px 12px;
-  border-radius: 8px;
-  font-weight: 750;
-  font-size: 15px;
-  letter-spacing: .06em;
+  top: 14px;
+  z-index: 2;
+  padding: 7px 14px;
+  border-radius: 9px;
+  font-weight: 800;
+  font-size: 17px;
+  letter-spacing: .08em;
   text-transform: uppercase;
-  border: 3px solid currentColor;
   opacity: 0;
   pointer-events: none;
   transition: opacity .12s, background .12s;
+  box-shadow: 0 3px 14px rgba(13, 18, 24, .3);
 }
 
-.stamp.left { left: 18px; color: var(--danger); transform: rotate(-12deg); }
-.stamp.right { right: 18px; color: var(--ok); transform: rotate(12deg); }
-.stamp.up { top: 50%; left: 50%; color: var(--warn); transform: translate(-50%, -50%) rotate(-4deg); }
+.stamp.left { left: 16px; color: #fff; background: var(--danger); transform: rotate(-10deg); }
+.stamp.right { right: 16px; color: #fff; background: var(--ok); transform: rotate(10deg); }
+.stamp.up {
+  top: 50%;
+  left: 50%;
+  color: #fff;
+  background: var(--warn);
+  transform: translate(-50%, -50%) rotate(-4deg);
+}
+
+/* ---------- entry animation ---------- */
+
+/* When a card replaces one just decided, it settles in from the direction the
+   decision went, so the queue reads as continuous. Purely CSS: nothing waits on
+   it and input stays live. */
+@keyframes cardEnterLeft {
+  from { opacity: 0; transform: translate(-50%, -50%) translateX(-26px) scale(.9); }
+  to { opacity: 1; transform: translate(-50%, -50%) translateX(0) scale(1); }
+}
+@keyframes cardEnterRight {
+  from { opacity: 0; transform: translate(-50%, -50%) translateX(26px) scale(.9); }
+  to { opacity: 1; transform: translate(-50%, -50%) translateX(0) scale(1); }
+}
+@keyframes cardEnterUp {
+  from { opacity: 0; transform: translate(-50%, -50%) translateY(26px) scale(.9); }
+  to { opacity: 1; transform: translate(-50%, -50%) translateY(0) scale(1); }
+}
+
+.card.enter.enter-left { animation: cardEnterLeft .26s var(--ease); }
+.card.enter.enter-right { animation: cardEnterRight .26s var(--ease); }
+.card.enter.enter-up { animation: cardEnterUp .26s var(--ease); }
 
 .card .foot {
   flex: 0 0 auto;
@@ -494,27 +573,36 @@ main {
   display: flex;
   gap: 9px;
   justify-content: center;
-  padding-top: 12px;
+  /* Clear separation from the filmstrip below, which was sitting right on top
+     of the buttons. */
+  padding-top: 10px;
+  padding-bottom: 10px;
 }
 
 .actions .btn { min-width: 118px; justify-content: center; padding: 10px 14px; font-size: 14px; }
 
 /* ---------- queue filmstrip ---------- */
 
+/* Full-bleed horizontally: the old `flex: 0 0 auto` let the strip size itself
+   to its content, so it stopped well short of the right edge and read as a
+   partial strip rather than a scrollable list. */
 .filmstrip {
   display: flex;
-  gap: 5px;
+  gap: 6px;
   overflow-x: auto;
-  padding: 2px 2px 6px;
+  overscroll-behavior-x: contain;
+  padding: 2px 2px 4px;
   flex: 0 0 auto;
+  width: 100%;
   scrollbar-width: none;
 }
 
 .film-item {
-  flex: 0 0 auto;
-  width: 66px;
+  position: relative;
+  flex: 1 1 0;
+  min-width: 74px;
   border: 2px solid var(--line);
-  border-radius: 9px;
+  border-radius: 10px;
   background: #fff;
   padding: 3px;
   cursor: pointer;
@@ -525,18 +613,42 @@ main {
 }
 
 .film-item:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
-.film-item.current { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.film-item.film-kept { border-color: var(--ok); }
-.film-item.film-staged { border-color: var(--danger); }
-.film-item.film-skipped { border-color: var(--warn); }
+
+/* The current item gets its own ring. Declared after the status rules below and
+   with a stronger selector, so a decided-but-selected item still reads as
+   selected: status is a small corner mark, selection is the frame. */
+.filmstrip .film-item.current {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  transform: translateY(-2px);
+}
+
+/* Status as a corner mark, not the frame colour, so it cannot fight the
+   selection ring. */
+.film-mark {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  z-index: 2;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  border: 1.5px solid #fff;
+  box-shadow: 0 0 0 1px rgba(13, 18, 24, .18);
+}
+
+.film-item[data-status="pending"] .film-mark { background: var(--muted); }
+.film-item[data-status="kept"] .film-mark { background: var(--ok); }
+.film-item[data-status="staged"] .film-mark { background: var(--danger); }
+.film-item[data-status="skipped"] .film-mark { background: var(--warn); }
 
 .film-thumb {
   display: block;
-  height: 38px;
-  border-radius: 5px;
+  height: 32px;
+  border-radius: 6px;
   background: #f1f5f9;
   overflow: hidden;
-  margin-bottom: 3px;
+  margin-bottom: 2px;
 }
 
 .film-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -581,6 +693,66 @@ kbd {
 
 .staged-row .n { flex: 1; min-width: 0; word-break: break-all; font-size: 13px; }
 .staged-row .s { color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* ---------- delete confirmation preview grid ---------- */
+
+.modal.wide { width: min(880px, 100%); }
+
+.del-summary { margin-bottom: 2px; }
+.del-count { font-weight: 640; font-size: 15px; }
+
+.del-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+  max-height: 46vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+.del-cell { margin: 0; }
+
+.del-thumb {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #eef1f6;
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+}
+
+.del-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.del-noimg {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  color: var(--muted);
+}
+
+.del-cell figcaption {
+  font-size: 10.5px;
+  color: var(--muted);
+  margin-top: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.del-more {
+  display: grid;
+  place-items: center;
+  min-height: 78px;
+  border: 1px dashed var(--line-2);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
 
 /* ---------- footer bar ---------- */
 

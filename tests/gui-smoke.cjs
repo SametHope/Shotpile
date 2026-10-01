@@ -207,6 +207,77 @@ const CTRL_SHIFT = 2 | 8;
   // Jump back so later tests start from the first card again.
   await js("p.clickFilm(0);");
   await sleep(300);
+
+  // ---- the filmstrip spans the full width ----
+  const stripBox = await probe(`(() => { const s = document.querySelector('.filmstrip'); const w = document.querySelector('.review .wrap'); const a = s.getBoundingClientRect(), b = w.getBoundingClientRect(); return { strip: Math.round(a.width), wrap: Math.round(b.width), items: s.children.length }; })()`);
+  ok("the filmstrip fills the width", stripBox.strip >= stripBox.wrap - 40, JSON.stringify(stripBox));
+  // `flex: 1 1 0` means the items grow to cover the row instead of stopping
+  // short of the right edge. With only three files there is nothing to scroll,
+  // so assert the growth and the scroll container rather than scrollWidth.
+  const grow = await probe(`(() => { const items = [...document.querySelectorAll('.film-item')]; const s = document.querySelector('.filmstrip'); return { itemW: Math.round(items[0].getBoundingClientRect().width), overflowX: getComputedStyle(s).overflowX, flex: getComputedStyle(items[0]).flexGrow }; })()`);
+  ok("filmstrip items grow to cover the row", grow.itemW > 80 && grow.flex === "1", JSON.stringify(grow));
+  ok("filmstrip is a horizontal scroller", grow.overflowX === "auto", JSON.stringify(grow));
+
+  // ---- the date-source diagnostic is out of the meta row ----
+  ok("no date-source text in the card meta", (await probe("p.dateSourceInMeta()")).length === 0, JSON.stringify(await probe("p.dateSourceInMeta()")));
+  ok("the date still explains its source on hover", /from filename/i.test(await probe("p.dateTooltip()") || ""), String(await probe("p.dateTooltip()")));
+
+  // ---- drag feedback: card tint, shrinking scale, loud stamps ----
+  // Drag distances are absolute offsets from where the drag started, and each
+  // direction must clear GESTURE_THRESHOLD (90) before a decision is implied.
+  await js("p.dragStart();");
+  await js("p.dragTo(120, 0);");
+  ok("the card tints on a right drag", (await probe("p.tintOpacity()")) > 0, String(await probe("p.tintOpacity()")));
+  ok("the card shrinks as it is dragged", (await probe("p.cardScale()")) < 1, String(await probe("p.cardScale()")));
+  ok("the keep stamp shows on a right drag", (await probe("p.stampOpacity('right')")) > 0.5, String(await probe("p.stampOpacity('right')")));
+  ok("the delete stamp stays hidden", (await probe("p.stampOpacity('left')")) === 0, String(await probe("p.stampOpacity('left')")));
+  await js("p.dragTo(-120, 0);");
+  ok("the tint follows a left drag", (await probe("p.tintOpacity()")) > 0, String(await probe("p.tintOpacity()")));
+  ok("the delete stamp shows on a left drag", (await probe("p.stampOpacity('left')")) > 0.5, String(await probe("p.stampOpacity('left')")));
+  await js("p.dragTo(0, -120);");
+  ok("the tint follows an up drag", (await probe("p.tintOpacity()")) > 0, String(await probe("p.tintOpacity()")));
+  ok("the skip stamp shows on an up drag", (await probe("p.stampOpacity('up')")) > 0.5, String(await probe("p.stampOpacity('up')")));
+  await js("p.dragTo(10, 10);");
+  ok("no tint before the threshold is crossed", (await probe("p.tintOpacity()")) === 0, String(await probe("p.tintOpacity()")));
+  // Release below the threshold: the card must snap back and clear every
+  // visual, so a rejected drag leaves no tint or transform behind.
+  await js("p.dragEnd();");
+  await sleep(320);
+  ok("a cancelled drag clears the tint", (await probe("p.tintOpacity()")) === 0, String(await probe("p.tintOpacity()")));
+  ok("a cancelled drag restores the card size", (await probe("p.cardScale()")) === 1, String(await probe("p.cardScale()")));
+
+  // ---- in-card zoom, no full screen needed ----
+  ok("the card starts unzoomed", (await probe("p.cardZoomScale()")) === 1, String(await probe("p.cardZoomScale()")));
+  await js("p.wheelCard(0, 0);");
+  const z1 = await probe("p.cardZoomScale()");
+  ok("the wheel zooms the card in place", z1 > 1, String(z1));
+  ok("zooming shows a readout", /%/.test(await probe("p.zoomReadout()") || ""), String(await probe("p.zoomReadout()")));
+  await js("p.wheelCard(0, 0);");
+  await js("p.wheelCard(0, 0);");
+  ok("a meaningful zoom makes the card pannable", (await probe("p.cardIsPannable()")) === true, String(await probe("p.cardZoomScale()")));
+
+  // Zoom is anchored at the cursor: the pixel under the cursor must stay under
+  // the cursor. Measured from 100% so there is no carried-over panning.
+  const anchor = await probe(`(() => {
+    window.__sifterTest.resetCardZoom();
+    const img = document.querySelector('#card .imgwrap img');
+    const wrap = document.querySelector('#card .imgwrap');
+    const w = wrap.getBoundingClientRect();
+    const cx = w.left + w.width * 0.72, cy = w.top + w.height * 0.4;
+    const before = img.getBoundingClientRect();
+    // Which fraction across the image sits under the cursor right now.
+    const frac = (cx - before.left) / before.width;
+    wrap.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, deltaY: -100 }));
+    const after = img.getBoundingClientRect();
+    // Where that same pixel ended up.
+    const landed = after.left + frac * after.width;
+    return { drift: Math.round(landed - cx), cx: Math.round(cx), frac: Number(frac.toFixed(3)), beforeW: Math.round(before.width), afterW: Math.round(after.width) };
+  })()`);
+  ok("zoom anchors on the cursor, not the corner", Math.abs(anchor.drift) < 12, JSON.stringify(anchor));
+
+  // Reset before the tests that follow, which need a swipe-able card again.
+  await js("p.resetCardZoom();");
+  ok("resetting restores 100% and swiping", (await probe("p.cardZoomScale()")) === 1 && (await probe("p.cardIsPannable()")) === false, String(await probe("p.cardZoomScale()")));
   const nat = await probe("p.imgNatural()");
   ok("the card image loads at full size", nat && nat.w > 100, JSON.stringify(nat));
 
@@ -280,6 +351,21 @@ const CTRL_SHIFT = 2 | 8;
   ok("a second card can be staged", (await probe(`p.status(${JSON.stringify(stageB)})`)) === "staged", String(stageB));
   ok("staged counter reads 2", (await probe("p.stagedCount()")) === "2", await probe("p.stagedCount()"));
 
+  // ---- a decided item that is also the cursor must still read as selected ----
+  // Status used to paint the frame colour and won on specificity, so selecting
+  // an already-decided item looked like it had not been selected at all.
+  const frontier = await probe("p.cardName()");
+  await js("p.clickFilm(0);");
+  await sleep(300);
+  ok("jumping back selects the decided item", (await probe("p.filmCurrent()")) === 0, `current=${await probe("p.filmCurrent()")}`);
+  const sel = await probe(`(() => { const i = document.querySelectorAll('.film-item')[0]; const s = getComputedStyle(i); return { border: s.borderTopColor, shadow: s.boxShadow !== 'none', aria: i.getAttribute('aria-current'), status: i.dataset.status }; })()`);
+  ok("the selected decided item keeps its ring", sel.shadow === true && sel.aria === "true", JSON.stringify(sel));
+  ok("the selected decided item keeps its status marker", sel.status === "staged", JSON.stringify(sel));
+  ok("the selected frame is the accent colour, not the status colour", sel.border === "rgb(29, 78, 216)", JSON.stringify(sel));
+  await js("p.clickFilm(2);");
+  await sleep(300);
+  ok("returning lands on the frontier card again", (await probe("p.cardName()")) === frontier, String(await probe("p.cardName()")));
+
   // ---- a failed write must not advance the queue ----
   const progressBefore = await probe("p.progress()");
   const cardBefore = await probe("p.cardName()");
@@ -319,6 +405,11 @@ const CTRL_SHIFT = 2 | 8;
   await sleep(250);
   ok("commit dialog opens", (await probe("p.modalHidden()")) === false);
   ok("focus starts on the safe option", (await probe("p.focusedLabel()")) === "Cancel", await probe("p.focusedLabel()"));
+  // Last look before deletion: every staged file as a small preview.
+  ok("the delete confirmation lists previews", (await probe("p.delGridCount()")) > 0, String(await probe("p.delGridCount()")));
+  ok("the delete confirmation names the files", (await probe("p.delGridNames()")).includes("Screenshot 2026-09-02 09-03-11.png"), JSON.stringify(await probe("p.delGridNames()")));
+  ok("the delete confirmation is a wide dialog", (await probe("p.delModalWide()")) === true);
+  ok("every staged file has a preview", Number(await probe("p.delGridCount()")) === Number(await probe("p.stagedCount()")), `${await probe("p.delGridCount()")} vs ${await probe("p.stagedCount()")}`);
 
   await press("Enter");
   await sleep(250);

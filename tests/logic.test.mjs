@@ -4,8 +4,12 @@ import assert from "node:assert/strict";
 import {
   ACTION,
   GESTURE_THRESHOLD,
+  MAX_ZOOM,
   ReviewQueue,
+  ZOOM_PAN_THRESHOLD,
+  anchorZoom,
   classifyGesture,
+  clampScale,
   exitVector,
   formatBytes,
   gestureVisual,
@@ -201,4 +205,49 @@ test("progressOf reports completion and tolerates a zero total", () => {
   assert.deepEqual(progressOf({ total: 0 }).ratio, 0);
   assert.equal(progressOf(null).done, false);
   assert.equal(progressOf(undefined).total, 0);
+});
+
+test("anchorZoom keeps the point under the cursor fixed", () => {
+  // Zooming in 2x with the cursor 100px right of and 40px below the centre.
+  // The cursor's offset from the image centre must double, which is what makes
+  // the pixel under the cursor stay put.
+  const r = anchorZoom(100, 40, 0, 0, 2, 1);
+  assert.equal(r.x, -100);
+  assert.equal(r.y, -40);
+  assert.equal(100 - r.x, 200, "offset from centre doubles");
+  assert.equal(40 - r.y, 80);
+});
+
+test("anchorZoom from an already-zoomed state stays anchored", () => {
+  // Second step: from scale 2 at (-100,-40) up to scale 4, same cursor point.
+  const first = anchorZoom(100, 40, 0, 0, 2, 1);
+  const second = anchorZoom(100, 40, first.x, first.y, 4, 2);
+  assert.equal(100 - second.x, 400, "offset quadruples from the original");
+  assert.equal(40 - second.y, 160);
+});
+
+test("anchorZoom is a no-op at an unchanged scale", () => {
+  assert.deepEqual(anchorZoom(10, 10, 5, 7, 3, 3), { x: 5, y: 7 });
+});
+
+test("anchorZoom zooms out toward the cursor too", () => {
+  // Halving must pull the image back so the same pixel stays under the cursor.
+  const r = anchorZoom(100, 0, -100, 0, 0.5, 1);
+  assert.equal(r.x, 0);
+  assert.equal(100 - r.x, 100, "offset halves from 200");
+});
+
+test("clampScale keeps the zoom inside 1x..MAX_ZOOM", () => {
+  assert.equal(clampScale(1, 1.25), 1.25);
+  assert.equal(clampScale(1, 0.5), 1, "never zooms out past 100%");
+  assert.equal(clampScale(MAX_ZOOM, 2), MAX_ZOOM);
+  assert.equal(clampScale(MAX_ZOOM - 1, 4), MAX_ZOOM);
+  assert.equal(MAX_ZOOM, 8);
+});
+
+test("the pan threshold is a real zoom, not a hair", () => {
+  // Past 20% a drag pans instead of swiping.
+  assert.equal(ZOOM_PAN_THRESHOLD, 1.2);
+  assert.equal(1.19 < ZOOM_PAN_THRESHOLD, true);
+  assert.equal(1.21 >= ZOOM_PAN_THRESHOLD, true);
 });

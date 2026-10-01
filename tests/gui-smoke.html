@@ -254,9 +254,11 @@
     progress: () => {
       const row = $(".progress-row");
       if (!row) return null;
-      const spans = row.querySelectorAll(":scope > span");
-      const last = spans[spans.length - 1];
-      return last ? last.textContent.trim() : null;
+      // The zoom readout also lives in this row, so skip it and take the
+      // "n / n" counter specifically.
+      const spans = [...row.querySelectorAll(":scope > span")].filter((s) => !s.classList.contains("zoom-readout"));
+      const counter = spans.find((s) => /^\d+\s*\/\s*\d+$/.test(s.textContent.trim()));
+      return counter ? counter.textContent.trim() : null;
     },
     deferred: () => {
       const chip = $(".progress-row .chip.skipped");
@@ -348,8 +350,16 @@
     closeViewer: () => window.__sifterTest.closeViewer(),
     clickCard: () => {
       const c = document.querySelector(".deck .deck-top");
-      if (c) c.click();
-      return !!c;
+      if (!c) return false;
+      // A real click is always preceded by a pointerdown, which is what clears
+      // the "this was a drag" flag. Without it a preceding synthetic drag would
+      // suppress the viewer.
+      const r = c.getBoundingClientRect();
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      c.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: x, clientY: y, button: 0, pointerId: 9, isPrimary: true }));
+      c.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, clientX: x, clientY: y, button: 0, pointerId: 9, isPrimary: true }));
+      c.click();
+      return true;
     },
     filmCount: () => document.querySelectorAll(".film-item").length,
     filmCurrent: () => [...document.querySelectorAll(".film-item")].findIndex((el) => el.classList.contains("current")),
@@ -357,6 +367,83 @@
       const items = document.querySelectorAll(".film-item");
       if (items[i]) { items[i].click(); return true; }
       return false;
+    },
+
+    // --- drag/tint/scale feedback ---
+    dragStart: () => {
+      const c = document.querySelector("#card");
+      const r = c.getBoundingClientRect();
+      window.__probe._drag = { el: c, x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      c.dispatchEvent(new PointerEvent("pointerdown", {
+        bubbles: true, clientX: window.__probe._drag.x, clientY: window.__probe._drag.y, button: 0, pointerId: 7, isPrimary: true,
+      }));
+      return true;
+    },
+    dragTo: (dx, dy) => {
+      const d = window.__probe._drag;
+      document.getElementById("stage").dispatchEvent(new PointerEvent("pointermove", {
+        bubbles: true, clientX: d.x + dx, clientY: d.y + dy, button: 0, pointerId: 7, isPrimary: true,
+      }));
+      return true;
+    },
+    dragEnd: () => {
+      const d = window.__probe._drag;
+      document.getElementById("stage").dispatchEvent(new PointerEvent("pointerup", {
+        bubbles: true, clientX: d.x, clientY: d.y, button: 0, pointerId: 7, isPrimary: true,
+      }));
+      window.__probe._drag = null;
+      return true;
+    },
+    tintOpacity: () => {
+      const t = document.querySelector("#card .tint");
+      return t ? Number(t.style.opacity || 0) : null;
+    },
+    cardScale: () => {
+      const c = document.querySelector("#card");
+      const m = /scale\(([\d.]+)\)/.exec(c.style.transform || "");
+      return m ? Number(m[1]) : 1;
+    },
+    stampOpacity: (dir) => {
+      const s = document.querySelector(`#card .stamp.${dir}`);
+      return s ? Number(s.style.opacity || 0) : null;
+    },
+
+    // --- card zoom ---
+    wheelCard: (dx, dy, up = true) => {
+      const w = document.querySelector("#card .imgwrap");
+      w.dispatchEvent(new WheelEvent("wheel", {
+        bubbles: true, cancelable: true, clientX: dx, clientY: dy, deltaY: up ? -100 : 100, deltaMode: 0,
+      }));
+      return true;
+    },
+    resetCardZoom: () => window.__sifterTest.resetCardZoom(),
+    cardZoomScale: () => {
+      const i = document.querySelector("#card .imgwrap img");
+      const m = /scale\(([\d.]+)\)/.exec(i?.style.transform || "");
+      return m ? Number(m[1]) : 1;
+    },
+    cardZoomTransform: () => document.querySelector("#card .imgwrap img")?.style.transform || "",
+    cardIsPannable: () => document.querySelector("#card")?.classList.contains("pannable") || false,
+    zoomReadout: () => document.querySelector(".zoom-readout")?.textContent || null,
+    dateSourceInMeta: () => {
+      const metas = [...document.querySelectorAll("#card .fmeta .hint")];
+      return metas.map((m) => m.textContent.trim());
+    },
+    dateTooltip: () => document.querySelector("#card .fmeta span")?.getAttribute("title") || null,
+
+    // --- delete preview grid ---
+    openDeleteConfirm: async () => {
+      document.getElementById("btn-commit").click();
+      await new Promise((r) => setTimeout(r, 60));
+      return true;
+    },
+    delGridCount: () => document.querySelectorAll(".del-cell").length,
+    delGridNames: () => [...document.querySelectorAll(".del-cell figcaption")].map((f) => f.textContent.trim()),
+    delModalWide: () => document.querySelector("#modal .modal")?.classList.contains("wide") || false,
+    delModalHidden: () => document.getElementById("modal").hidden,
+    closeDeleteConfirm: () => {
+      document.querySelector("#modal-foot button")?.click();
+      return true;
     },
   };
   </script>

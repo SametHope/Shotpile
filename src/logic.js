@@ -6,6 +6,18 @@
 export const GESTURE_THRESHOLD = 90;
 export const AXIS_LOCK_RATIO = 1.2;
 
+/** Zoom ceiling, shared by the card and the full-screen viewer. */
+export const MAX_ZOOM = 8;
+
+/**
+ * Past this zoom a drag pans the image instead of swiping the card.
+ *
+ * A drag on a card means "decide this photo", so it cannot also mean "move the
+ * zoomed image" at rest. Requiring a real zoom first keeps the swipe gesture
+ * exactly as it was until the user has deliberately zoomed in.
+ */
+export const ZOOM_PAN_THRESHOLD = 1.2;
+
 export const ACTION = {
   KEEP: "keep",
   DELETE: "delete",
@@ -61,6 +73,33 @@ export function gestureVisual(dx, dy, threshold = GESTURE_THRESHOLD) {
     /** 0 for horizontal, 1 for vertical; drives the rotation angle. */
     vertical: Math.abs(dy) > Math.abs(dx) ? 1 : 0,
   };
+}
+
+/**
+ * Cursor-anchored zoom.
+ *
+ * The image is laid out centred in its wrapper and moved with
+ * `translate(x, y) scale(s)`, so `transform-origin: center` scales about the
+ * image's own centre. `dx`/`dy` are the cursor's offset from that centre and
+ * `k` is the new/old scale ratio.
+ *
+ * The point under the cursor has to stay under the cursor, so the offset from
+ * the image centre must grow by exactly `k`. Solving for the translate that
+ * does that gives `x' = dx - (dx - x) * k`.
+ *
+ * This is the bug this replaces: the old formula used the raw cursor
+ * coordinate as if it were an offset from centre, which pinned every zoom to
+ * the bottom-right of the viewport.
+ */
+export function anchorZoom(dx, dy, x, y, nextScale, scale) {
+  if (scale === nextScale) return { x, y };
+  const k = nextScale / scale;
+  return { x: dx - (dx - x) * k, y: dy - (dy - y) * k };
+}
+
+/** Clamps a scale to the 1x..MAX_ZOOM range the viewer and card both use. */
+export function clampScale(scale, factor, min = 1, max = MAX_ZOOM) {
+  return Math.min(max, Math.max(min, scale * factor));
 }
 
 export function formatBytes(bytes) {
