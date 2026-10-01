@@ -85,7 +85,7 @@ Both are always on, including in release builds.
 
 ```powershell
 npm run test:logic   # 28 frontend logic tests (node --test)
-npm run test:gui     # 134 GUI assertions: the real src/app.js in headless Chrome
+npm run test:gui     # 135 GUI assertions: the real src/app.js in headless Chrome
 cd src-tauri; cargo test                  # 39 unit + 2 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check

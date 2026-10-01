@@ -685,9 +685,8 @@ function jumpTo(index) {
   if (index < 0 || index >= state.queue.ids.length) return;
   state.queue.cursor = index;
   state.scope = { ...state.scope };
-  // Jumping back is a deliberate navigation, not a decision, so no entry
-  // animation and no direction carry-over.
-  state.advanceDir = null;
+  // Jumping back is a deliberate navigation, not a decision, so the card that
+  // was already on screen fades in rather than sliding.
   showCurrent();
 }
 
@@ -736,9 +735,10 @@ function card(shot, top = false) {
   // must not inherit the previous card's zoom, or the gesture code would treat
   // it as pannable and the drag would decide nothing.
   state.cardZoom = top && img ? attachCardZoom(node, imgwrap, img) : null;
-  // Only the card actually entering needs a direction class; deck cards behind
-  // it would otherwise carry a stale one.
-  if (top && state.entering) node.classList.add(`enter-${state.advanceDir || "left"}`);
+  // Only the card actually entering needs the class; deck cards behind it would
+  // otherwise carry a stale one. There is no direction: promotion is continuous,
+  // so an entry can only mean a card that genuinely appeared (queue open/jump).
+  if (top && state.entering) node.classList.add("enter");
   return node;
 }
 
@@ -1114,7 +1114,6 @@ async function decide(action) {
     // outgoing one and slid forward by the drag, so it is promoted in place
     // instead of being rebuilt and faded in. That is what makes advancing read
     // as continuous rather than as a flicker-and-snap.
-    state.advanceDir = null;
     await advanceDeck();
   }
 }

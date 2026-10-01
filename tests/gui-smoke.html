@@ -457,6 +457,19 @@ stampOpacity: (dir) => {
     deckChildCount: () => document.querySelectorAll(".deck .card").length,
     stageIsSame: (mark) => document.querySelector(".deck")?.dataset.probeMark === mark,
     deckInert: () => !!document.querySelector(".deck.inert"),
+    // Reads the *computed* value, so it fails if the `.deck.inert` selector is
+    // malformed. Asserting the class alone would pass even when the rule is
+    // dropped and the guard silently does nothing.
+    deckPointerEvents: () => {
+      const deck = document.querySelector(".deck");
+      if (!deck) return null;
+      const before = getComputedStyle(deck).pointerEvents;
+      deck.classList.add("inert");
+      const during = getComputedStyle(deck).pointerEvents;
+      deck.classList.remove("inert");
+      const after = getComputedStyle(deck).pointerEvents;
+      return `${before}|${during}|${after}`;
+    },
     markStage: () => {
       const d = document.querySelector(".deck");
       if (!d) return null;

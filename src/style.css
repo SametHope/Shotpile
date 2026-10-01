@@ -408,7 +408,7 @@ main {
    an inert deck means a stray click cannot land on a half-wired card. */
 .deck .deck-1, .deck .deck-2 { transition: transform .26s var(--ease); }
 .deck.stacking .deck-1, .deck.stacking .deck-2 { transition: none; }
-..deck.inert { pointer-events: none; }
+.deck.inert { pointer-events: none; }
 
 .deck .deck-card { pointer-events: none; }
 
@@ -548,13 +548,9 @@ main {
 
    Opacity only. Animating transform here would fight the deck's own
    positioning, which is what produced the "pops in, then snaps" effect. */
-@keyframes cardEnterLeft { from { opacity: 0; } to { opacity: 1; } }
-@keyframes cardEnterRight { from { opacity: 0; } to { opacity: 1; } }
-@keyframes cardEnterUp { from { opacity: 0; } to { opacity: 1; } }
+@keyframes cardEnter { from { opacity: 0; } to { opacity: 1; } }
 
-.card.enter.enter-left { animation: cardEnterLeft .26s var(--ease); }
-.card.enter.enter-right { animation: cardEnterRight .26s var(--ease); }
-.card.enter.enter-up { animation: cardEnterUp .26s var(--ease); }
+.card.enter { animation: cardEnter .26s var(--ease); }
 
 /* Info bar: overlay, not part of the image's layout, so the photo keeps the
    card's full height. It fades out towards its top edge instead of being a

@@ -24,7 +24,7 @@ deletion into the Windows Recycle Bin.
   time alone is wrong for copied folders, so it is the last resort.
 - **The safe option is the default in a dialog.** `confirmDialog` never binds
   Enter to the destructive action: `modal()` focuses the first button, which is
-  *Vazgeç*, and the native Enter activation closes the dialog without
+  *Cancel*, and the native Enter activation closes the dialog without
   committing. Every exit path, including Escape, must call `closeModal()`, or
   the modal stays on screen and blocks the app.
 
@@ -47,11 +47,14 @@ src-tauri/src/commands.rs the entire command surface
 
 ```powershell
 npm run test:logic                          # 28 frontend logic tests
-npm run test:gui                            # 134 GUI assertions in headless Chrome
+npm run test:gui                            # 135 GUI assertions in headless Chrome
 cd src-tauri; cargo test                    # 39 unit + 2 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
 ```
+
+`HANDOFF.md` records the current state and the open items. Read it first in a
+fresh session.
 
 `npm run test:gui` runs the real `src/app.js` in `tests/gui-smoke.html`, which
 fakes the Rust command surface in memory, then drives it with real Chrome key
@@ -137,10 +140,17 @@ probe there. Chrome must be installed; the script has no npm dependencies.
     attached explicitly.
   - `advanceDeck()` falls back to `showCurrent()` whenever the DOM is not in the
     expected shape, so a stale deck cannot wedge the review.
-- The `cardEnter*` keyframes are **opacity-only** and now fire only on a first
-  paint (opening a queue, or jumping to a card that was not on the deck). They
-  used to animate transform, which fought the deck's positioning and produced the
-  "pops in, then snaps" look.
+  - The `.deck.inert` selector has to be exactly `.deck.inert`. A typo
+    (`..deck.inert`) silently drops the rule and the guard does nothing, and no
+    visual symptom shows up — `deckPointerEvents()` in the GUI probe asserts the
+    *computed* value for exactly this reason. Do not "simplify" a test to
+    assert the class is present/absent instead of the computed style.
+- `.card.enter` uses a single **opacity-only** `cardEnter` keyframe, and fires
+  only on a first paint (opening a queue, or jumping to a card that was not on
+  the deck). It used to animate transform across three directional keyframes,
+  which fought the deck's positioning and produced the "pops in, then snaps"
+  look. There is deliberately no entry direction any more: advancing is
+  continuous, so an entry can only mean a card that genuinely appeared.
 - `deck.inert` disables pointer events on the deck for one animation frame after
   a promotion, so a click aimed at the card that just left cannot land on the
   half-wired node taking its place.
@@ -189,7 +199,9 @@ probe there. Chrome must be installed; the script has no npm dependencies.
 
 ## Style
 
-- UI text is English only. Do not reintroduce Turkish strings.
+- UI text is English only. Do not reintroduce Turkish strings. A few backend
+  log/error strings are still Turkish (`db açıldı`, `geçersiz kuyruk`,
+  `açılamadı`); they are tracked in `HANDOFF.md` and are not UI copy.
 - Visual tokens live at the top of `src/style.css` and deliberately mirror the
   existing single-page QoL apps (`--accent:#1d4ed8`, `--line`, `--radius:12px`,
   the same soft gradient wash). Keep new colours in that palette.

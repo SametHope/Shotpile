@@ -381,6 +381,11 @@ await js("p.dragTo(120, 0);");
   ok("a swipe leaves the new top fully opaque", Number(await probe("p.topOpacity()")) === 1, String(await probe("p.topOpacity()")));
   ok("a swipe leaves no drag transform on the new top", (await probe("p.topInlineTransform()")) === "", String(await probe("p.topInlineTransform()")));
   ok("the deck accepts input again after a swipe", (await probe("p.deckInert()")) === false, String(await probe("p.deckInert()")));
+  // Guards the `.deck.inert` CSS rule itself, not just the class toggle. A typo
+  // in that selector (e.g. `..deck.inert`) drops the whole rule, which leaves
+  // the promotion guard silently inert.
+  const pe = String(await probe("p.deckPointerEvents()"));
+  ok("the inert class really disables pointer events", pe === "auto|none|auto", pe);
   // Put the queue back where the remaining tests expect it.
   await press("z");
   await sleep(320);
