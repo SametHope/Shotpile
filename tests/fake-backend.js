@@ -23,6 +23,7 @@
   const undoStack = [];
   const redoStack = [];
   const UNDO_LIMIT = 200;
+  const counters = {}; // Local statistics counters
 
   // Fault injection, for the edge cases the logic tests cannot reach.
   const faults = { decide: false, summary: false, undoOutOfScope: false, scanDelayMs: 0, itemsDelayMs: 0, commitDelayMs: 0 };
@@ -243,6 +244,7 @@
         case "random": out = shuffled(out.filter((s) => s.status === "pending").sort(byTaken(1))); break;
         case "skipped": out = out.filter((s) => s.status === "skipped").sort(byTaken(1)); break;
         case "staged": out = out.filter((s) => s.status === "staged").sort(byTaken(1)); break;
+        case "kept": out = out.filter((s) => s.status === "kept" && monthKey(s.taken_ms) === a.month).sort(byTaken(1)); break;
         default: throw new Error("invalid queue scope: " + a.scope);
       }
       return out.map((s) => s.id);
@@ -259,27 +261,9 @@
       pushUndo({ id: s.id, prev: s.status, prev_decided_ms: s.decided_ms, next: status });
       s.status = status;
       s.decided_ms = Date.UTC(2026, 8, 30);
-
       // Increment counter for this decision type
       const counterName = { keep: "decision:kept", skip: "decision:skipped", delete: "decision:staged" }[a.kind];
       if (counterName) counters[counterName] = (counters[counterName] || 0) + 1;
-
-      // Track swipe direction if available
-      if (a.swipe_dx != null && a.swipe_dy != null) {
-        const adx = Math.abs(a.swipe_dx);
-        const ady = Math.abs(a.swipe_dy);
-        if (adx >= 80) {
-          if (a.swipe_dx < 0) {
-            counters["swipe:left"] = (counters["swipe:left"] || 0) + 1;
-          } else {
-            counters["swipe:right"] = (counters["swipe:right"] || 0) + 1;
-          }
-        }
-        if (ady >= 80 && a.swipe_dy < 0) {
-          counters["swipe:up"] = (counters["swipe:up"] || 0) + 1;
-        }
-      }
-
       LOG.push("decide:" + a.kind + ":" + s.name);
       return { ...s };
     },
@@ -321,17 +305,18 @@
         if (!s || s.status !== e.prev || s.status === "deleted") continue;
         s.status = e.next;
         s.decided_ms = e.next_decided_ms;
-        // Increment counter for the decision being redone
+        undoStack.push(e);
+        // Increment counter for the redone decision
         const counterName = { kept: "decision:kept", skipped: "decision:skipped", staged: "decision:staged" }[e.next];
         if (counterName) counters[counterName] = (counters[counterName] || 0) + 1;
         counters["session:redos"] = (counters["session:redos"] || 0) + 1;
-        undoStack.push(e);
         LOG.push("redo:" + s.name);
         return { ...s };
       }
       return null;
     },
     reveal: (a) => { LOG.push("reveal:" + a.target + (a.id != null ? ":" + a.id : "")); return null; },
+    copy_image: (a) => { LOG.push("copy-image:" + a.id); return null; },
     // The real command zooms the WebView; CSS zoom is the closest stand-in.
     set_zoom: (a) => { document.documentElement.style.zoom = String(a.factor); LOG.push("zoom:" + a.factor); return null; },
     app_ready: () => { LOG.push("ready"); return null; },
@@ -352,7 +337,7 @@
       const staged = inRoot(a.rootId).filter((s) => s.status === "staged");
       const moved = staged.filter((s) => !s.__failCommit);
       const failed = staged.filter((s) => s.__failCommit).map((s) => ({ id: s.id, name: s.name, error: "simulated: the file is in use", gone: false }));
-      const bytes_freed = bytes(moved);
+      const bytesFreed = bytes(moved);
       for (const s of moved) {
         s.status = "deleted";
         s.decided_ms = Date.UTC(2026, 8, 30);
@@ -360,14 +345,12 @@
       const ids = new Set(moved.map((s) => s.id));
       for (let i = undoStack.length - 1; i >= 0; i--) if (ids.has(undoStack[i].id)) undoStack.splice(i, 1);
       for (let i = redoStack.length - 1; i >= 0; i--) if (ids.has(redoStack[i].id)) redoStack.splice(i, 1);
-
-      // Track deletion counters
+      // Increment deletion counters
       counters["deletion:files_deleted"] = (counters["deletion:files_deleted"] || 0) + moved.length;
-      counters["deletion:bytes_deleted"] = (counters["deletion:bytes_deleted"] || 0) + bytes_freed;
+      counters["deletion:bytes_deleted"] = (counters["deletion:bytes_deleted"] || 0) + bytesFreed;
       counters["session:commits"] = (counters["session:commits"] || 0) + 1;
-
       LOG.push("commit:" + moved.length);
-      return { deleted: moved.length, failed, still_staged: failed.length, bytes_freed };
+      return { deleted: moved.length, failed, still_staged: failed.length, bytes_freed: bytesFreed };
     },
     // Mirrors the real command: scanning is what adds the root to the database.
     scan_root: (a) => {
@@ -398,70 +381,22 @@
     log_write: (a) => { UI_LOG.push(a); return null; },
     get_counters: () => {
       const groups = [];
-
-      // Decision counters
-      const decisionCounters = Object.entries(counters)
-        .filter(([k]) => k.startsWith("decision:"))
-        .map(([k, v]) => [k.replace("decision:", ""), v]);
-      if (decisionCounters.length > 0) {
-        groups.push({ name: "decision", label: "Decisions", counters: decisionCounters });
-      }
-
-      // Deletion counters
-      const deletionCounters = Object.entries(counters)
-        .filter(([k]) => k.startsWith("deletion:"))
-        .map(([k, v]) => [k.replace("deletion:", ""), v]);
-      if (deletionCounters.length > 0) {
-        groups.push({ name: "deletion", label: "Deletion", counters: deletionCounters });
-      }
-
-      // Swipe counters
-      const swipeCounters = Object.entries(counters)
-        .filter(([k]) => k.startsWith("swipe:"))
-        .map(([k, v]) => [k.replace("swipe:", ""), v]);
-      if (swipeCounters.length > 0) {
-        groups.push({ name: "swipe", label: "Swipes", counters: swipeCounters });
-      }
-
-      // Session counters
-      const sessionCounters = Object.entries(counters)
-        .filter(([k]) => k.startsWith("session:"))
-        .map(([k, v]) => [k.replace("session:", ""), v]);
-      if (sessionCounters.length > 0) {
-        groups.push({ name: "session", label: "Session", counters: sessionCounters });
-      }
-
-      // Interaction counters
-      const interactionCounters = Object.entries(counters)
-        .filter(([k]) => k.startsWith("interaction:"))
-        .map(([k, v]) => [k.replace("interaction:", ""), v]);
-      if (interactionCounters.length > 0) {
-        groups.push({ name: "interaction", label: "Interaction", counters: interactionCounters });
-      }
-
-      // Review counters
-      const reviewCounters = Object.entries(counters)
-        .filter(([k]) => k.startsWith("review:"))
-        .map(([k, v]) => [k.replace("review:", ""), v]);
-      if (reviewCounters.length > 0) {
-        groups.push({ name: "review", label: "Review", counters: reviewCounters });
-      }
-
+      const decision = Object.entries(counters).filter(([k]) => k.startsWith("decision:")).map(([k, v]) => [k.replace("decision:", ""), v]);
+      if (decision.length > 0) groups.push({ name: "decision", label: "Decisions", counters: decision });
+      const deletion = Object.entries(counters).filter(([k]) => k.startsWith("deletion:")).map(([k, v]) => [k.replace("deletion:", ""), v]);
+      if (deletion.length > 0) groups.push({ name: "deletion", label: "Deletion", counters: deletion });
+      const session = Object.entries(counters).filter(([k]) => k.startsWith("session:")).map(([k, v]) => [k.replace("session:", ""), v]);
+      if (session.length > 0) groups.push({ name: "session", label: "Session", counters: session });
       return groups;
     },
     reset_counters: (a) => {
       if (a.group) {
-        // Reset a specific group
-        Object.keys(counters).forEach((k) => {
-          if (k.startsWith(a.group + ":")) {
-            delete counters[k];
-          }
-        });
+        for (const k of Object.keys(counters)) {
+          if (k.startsWith(a.group + ":")) delete counters[k];
+        }
       } else {
-        // Reset all counters
-        Object.keys(counters).forEach((k) => delete counters[k]);
+        for (const k of Object.keys(counters)) delete counters[k];
       }
-      LOG.push("reset_counters" + (a.group ? ":" + a.group : ":all"));
       return null;
     },
   };
@@ -606,7 +541,22 @@
         const fn = handlers[cmd];
         if (!fn) throw new Error("unmocked command: " + cmd);
         if (cmd === "items" && faults.itemsDelayMs) await new Promise((r) => setTimeout(r, faults.itemsDelayMs));
-        if (cmd === "commit_deletes" && faults.commitDelayMs) await new Promise((r) => setTimeout(r, faults.commitDelayMs));
+        if (cmd === "commit_deletes" && faults.commitDelayMs) {
+          // Simulate commit progress events
+          const staged = inRoot(args.rootId).filter((s) => s.status === "staged");
+          const steps = Math.max(3, Math.ceil(staged.length / 5));
+          for (let i = 0; i < steps; i++) {
+            const current = Math.floor((i / steps) * staged.length);
+            await new Promise((r) => setTimeout(r, faults.commitDelayMs / steps));
+            if (staged[current]) {
+              emit("commit-progress", {
+                current,
+                total: staged.length,
+                current_file: staged[current].name,
+              });
+            }
+          }
+        }
         if (cmd === "scan_root" && faults.scanDelayMs) {
           // A slow scan reports progress the way scan_root's events do.
           for (const found of [37, 412, 1280]) {

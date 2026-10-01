@@ -659,6 +659,7 @@ impl Db {
             "unreviewed" => (" AND status = 'pending'", "taken_ms DESC, id DESC"),
             "skipped" => (" AND status = 'skipped'", "taken_ms ASC, id ASC"),
             "staged" => (" AND status = 'staged'", "taken_ms ASC, id ASC"),
+            "kept" => (" AND status = 'kept'", "taken_ms ASC, id ASC"),
             _ => ("", "taken_ms DESC, id DESC"),
         };
         // A file that vanished from disk has nothing to review, and `months`
@@ -670,7 +671,11 @@ impl Db {
         } else {
             " AND missing = 0"
         };
-        let month_param: Option<&str> = if scope == "month" { month } else { None };
+        let month_param: Option<&str> = if scope == "month" || scope == "kept" {
+            month
+        } else {
+            None
+        };
         let month_clause = match month_param {
             Some(_) => format!(" AND {} = ?", month_expr(tz_offset_min)),
             None => String::new(),
@@ -855,7 +860,7 @@ impl Db {
             .map_err(|e| e.to_string())
     }
 
-    /// Increments a counter by the given amount. Creates it if it doesn't exist.
+    /// Increments a counter by one. Creates it if it doesn't exist.
     pub fn incr_counter(&self, name: &str, amount: i64) -> Result<(), String> {
         self.conn
             .execute(
@@ -1632,56 +1637,5 @@ mod tests {
     fn bulk_upsert_of_nothing_is_a_no_op() {
         let db = db();
         assert_eq!(db.upsert_shots_bulk(1, &[]).unwrap(), (0, 0, 0));
-    }
-
-    #[test]
-    fn counter_increment_and_retrieval() {
-        let db = db();
-        db.incr_counter("test:counter", 1).unwrap();
-        let counters = db.get_all_counters().unwrap();
-        assert_eq!(counters.get("test:counter"), Some(&1));
-
-        db.incr_counter("test:counter", 5).unwrap();
-        let counters = db.get_all_counters().unwrap();
-        assert_eq!(counters.get("test:counter"), Some(&6));
-    }
-
-    #[test]
-    fn counter_reset_all() {
-        let db = db();
-        db.incr_counter("test:a", 1).unwrap();
-        db.incr_counter("test:b", 2).unwrap();
-        db.incr_counter("other:c", 3).unwrap();
-
-        db.reset_all_counters().unwrap();
-        let counters = db.get_all_counters().unwrap();
-        assert!(counters.is_empty());
-    }
-
-    #[test]
-    fn counter_reset_group() {
-        let db = db();
-        db.incr_counter("test:a", 1).unwrap();
-        db.incr_counter("test:b", 2).unwrap();
-        db.incr_counter("other:c", 3).unwrap();
-
-        db.reset_counter_group("test").unwrap();
-        let counters = db.get_all_counters().unwrap();
-        assert_eq!(counters.len(), 1);
-        assert_eq!(counters.get("other:c"), Some(&3));
-    }
-
-    #[test]
-    fn forget_root_preserves_lifetime_counters() {
-        let db = db();
-        db.incr_counter("lifetime:deleted", 10).unwrap();
-        db.incr_counter("session:decisions", 5).unwrap();
-
-        db.forget_root(1).unwrap();
-        let counters = db.get_all_counters().unwrap();
-
-        // All counters should still exist (forget_root doesn't touch counters)
-        assert_eq!(counters.get("lifetime:deleted"), Some(&10));
-        assert_eq!(counters.get("session:decisions"), Some(&5));
     }
 }

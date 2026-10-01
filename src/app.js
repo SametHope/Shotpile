@@ -10,7 +10,9 @@
 
 import {
   ACTION,
+  ACTIONS,
   DATE_SOURCE_LABELS,
+  DEFAULT_KEYS,
   GESTURE_THRESHOLD,
   PassTally,
   ReviewQueue,
@@ -21,18 +23,23 @@ import {
   classifyGesture,
   containedSize,
   countOf,
+  detectKeyConflict,
   dragTilt,
   exitVector,
   formatBytes,
   formatCount,
   formatDateTime,
+  getKeyBindings,
+  getKeysForAction,
   gestureVisual,
   groupByYear,
   monthLabel,
   nextMonthWithWork,
   panLimit,
   progressOf,
+  resetKeyBindings,
   scanSummary,
+  setKeyBindings,
   statusSegments,
   timeAgo,
   tzOffsetMinutes,
@@ -428,7 +435,7 @@ function renderLibrary() {
           : [icon("check-circle", { size: 16, cls: "ok" }), " Everything here is sorted", facts.length ? ` · ${facts.join(" · ")}` : ""])),
       h("div", { class: "overview-actions" },
         h("button", { class: "btn", id: "btn-filter", title: "Filter the month list", onclick: showFilters },
-          icon("filter", { size: 16 }), "Filter", prefs.get().showDone ? null : h("span", { class: "btn-dot", "aria-hidden": "true" })),
+          icon("filter", { size: 16 }), "Filter"),
         pending
           ? h("button", { class: "btn primary lg", id: "btn-sort-all", onclick: () => openQueue("unreviewed", null, "All unsorted") },
               icon("play", { size: 16 }), decided ? "Continue sorting" : "Start sorting", h("span", { class: "btn-count", text: formatCount(pending) }))
@@ -472,7 +479,7 @@ function monthRow(m) {
     class: `month${p.done ? " is-done" : ""}`,
     dataset: { month: m.month },
     "aria-label": `${label}: ${countOf(p.total, "screenshot")}, ${p.done ? "sorted" : `${formatCount(p.remaining)} left`}`,
-    onclick: () => (p.done ? toast(`${label} is already sorted`) : openQueue("month", m.month, label)),
+    onclick: () => (p.done ? openQueue("kept", m.month, `Kept from ${label}`) : openQueue("month", m.month, label)),
   },
     h("span", { class: `fan n${thumbs.length}` },
       thumbs.length
@@ -534,12 +541,17 @@ function renderReview() {
   if (!state.card) return renderFinale();
 
   const stage = h("div", { class: "stage", id: "stage" }, buildDeck());
-  el.view.replaceChildren(h("div", { class: "review", dataset: { scope: state.scope?.scope || "" } },
+  const review = h("div", { class: "review", dataset: { scope: state.scope?.scope || "" } },
     reviewHead(),
     stage,
     reviewActions(),
-    h("div", { class: "filmstrip", id: "filmstrip", role: "group", "aria-label": "Queue" })));
+    h("div", { class: "filmstrip-wrapper" },
+      h("div", { class: "filmstrip-handle", id: "filmstrip-handle" }),
+      h("div", { class: "filmstrip", id: "filmstrip", role: "group", "aria-label": "Queue" })));
+  el.view.replaceChildren(review);
+  review.style.setProperty("--filmstrip-height", `${prefs.get().filmstripHeight}px`);
   wireStage(stage);
+  wireFilmstripResize(document.getElementById("filmstrip-handle"));
   renderReviewChrome();
   paintZoomReadout(1);
 
@@ -1058,6 +1070,50 @@ function wireStage(stage) {
   stage.addEventListener("dragstart", (e) => e.preventDefault());
 }
 
+function wireFilmstripResize(handle) {
+  if (!handle) return;
+  let startY = 0;
+  let startHeight = 0;
+
+  handle.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    startY = e.clientY;
+    startHeight = prefs.get().filmstripHeight;
+    handle.setPointerCapture(e.pointerId);
+  });
+
+  handle.addEventListener("pointermove", (e) => {
+    if (startHeight === 0) return;
+    const delta = e.clientY - startY;
+    // Resize filmstrip down when moving down, giving the deck less space
+    const newHeight = startHeight - delta;
+    const clamped = Math.max(40, Math.min(300, newHeight));
+    const review = document.querySelector(".review");
+    if (review) {
+      review.style.setProperty("--filmstrip-height", `${clamped}px`);
+    }
+  });
+
+  handle.addEventListener("pointerup", (e) => {
+    if (startHeight === 0) return;
+    const delta = e.clientY - startY;
+    const newHeight = startHeight - delta;
+    const clamped = Math.max(40, Math.min(300, newHeight));
+    prefs.set({ filmstripHeight: clamped });
+    startHeight = 0;
+  });
+
+  handle.addEventListener("pointercancel", () => {
+    if (startHeight === 0) return;
+    // Restore to saved preference on cancel
+    const review = document.querySelector(".review");
+    if (review) {
+      review.style.setProperty("--filmstrip-height", `${prefs.get().filmstripHeight}px`);
+    }
+    startHeight = 0;
+  });
+}
+
 function onPointerDown(e) {
   if (e.button !== 0 || state.busy || state.deciding || !state.card) return;
   const card = topCard();
@@ -1247,12 +1303,7 @@ async function decide(action, { via = "key", from = null, saved = null } = {}) {
   let updated;
   try {
     // A redo has already written the decision; only the card has to move.
-    updated = saved || (await api("decide", {
-      id: shot.id,
-      kind: action,
-      swipe_dx: from?.dx,
-      swipe_dy: from?.dy,
-    }));
+    updated = saved || (await api("decide", { id: shot.id, kind: action }));
   } catch (e) {
     state.deciding = false;
     state.queue.restore(before);
@@ -1569,8 +1620,40 @@ async function commit() {
   state.busy = true;
   document.getElementById("btn-pile-commit")?.setAttribute("disabled", "");
   log.info("commit", `moving ${count} files to the ${binName()}`);
+
+  // Show progress modal for large commits
+  const showProgress = count > 20;
+  let progressClose = null;
+  if (showProgress) {
+    const progressEl = h("div", { class: "commit-progress" },
+      h("div", { class: "progress-stat" }, h("b", { id: "progress-count", text: "0 of " + count })),
+      h("div", { class: "progress-file", id: "progress-file", text: "Starting..." }),
+      h("div", { class: "progress-bar-wrap" },
+        h("div", { class: "progress-bar", id: "progress-bar", style: "width: 0%" })));
+    progressClose = modal({
+      title: "Moving files",
+      body: [progressEl],
+      blocking: true,
+      actions: [],
+    });
+
+    // Listen for progress events
+    const unlistenProgress = await __TAURI__.event.listen("commit-progress", (e) => {
+      const { current, total, current_file } = e.payload;
+      const percent = Math.round((current / total) * 100);
+      document.getElementById("progress-count").textContent = (current + 1) + " of " + total;
+      document.getElementById("progress-file").textContent = current_file;
+      document.getElementById("progress-bar").style.width = percent + "%";
+    });
+    // Clean up listener after this commit
+    state._unlisten = unlistenProgress;
+  }
+
   try {
     const report = await api("commit_deletes", { rootId: state.rootId });
+    if (progressClose) progressClose();
+    if (state._unlisten) state._unlisten();
+    delete state._unlisten;
     reportCommit(report);
     // The files are moved by now; a failed reload must not report otherwise.
     try {
@@ -1581,6 +1664,9 @@ async function commit() {
     state.busy = false;
     render();
   } catch (e) {
+    if (progressClose) progressClose();
+    if (state._unlisten) state._unlisten();
+    delete state._unlisten;
     log.error("commit", "couldn't move files", e);
     toast(`Couldn't move the files: ${e}`, { tone: "error" });
   } finally {
@@ -1819,6 +1905,16 @@ async function copyText(text, what) {
   }
 }
 
+async function copyImage(id) {
+  try {
+    await api("copy_image", { id });
+    toast("Copied the image", { ms: 1600 });
+  } catch (e) {
+    log.warn("clipboard", `couldn't copy image: ${e}`);
+    toast("Couldn't copy the image", { tone: "error" });
+  }
+}
+
 /** What the library lists. Today that is whether sorted months show; more
     filters can join here. */
 function showFilters() {
@@ -1867,6 +1963,103 @@ function showOptions() {
     h("button", { class: "btn sm", onclick: () => reveal(target) }, icon("folder", { size: 15 }), "Open"));
   const fact = (k, v) => [h("dt", { text: k }), h("dd", { text: v || "unknown" })];
 
+  // Load statistics
+  const counterSections = [];
+  api("get_counters").then((groups) => {
+    const counterBody = document.getElementById("stats-body");
+    if (counterBody && groups) {
+      const sections = groups.map((group) =>
+        h("div", { class: "stats-group" },
+          h("div", { class: "stats-header" },
+            h("h4", { text: group.label }),
+            h("button", { class: "btn sm ghost", onclick: () => {
+              api("reset_counters", { group: group.name }).catch((e) => log.error("stats", `Reset ${group.name} failed: ${e}`));
+              document.location.reload();
+            }, title: `Reset ${group.label.toLowerCase()} statistics` }, "Reset")),
+          h("dl", { class: "stats-list" },
+            ...group.counters.map(([name, value]) => {
+              const label = name.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+              const formatted = value > 1000000 ? (value / 1048576).toFixed(2) + " MB" : value > 1000 ? (value / 1024).toFixed(2) + " KB" : String(value);
+              return [h("dt", { text: label }), h("dd", { text: formatted })];
+            }))));
+      counterBody.replaceChildren(...sections);
+    }
+  }).catch((e) => log.warn("stats", `Failed to load counters: ${e}`));
+  // Build shortcuts section by grouping actions
+  const keyBindings = getKeyBindings(prefs);
+  const shortcutsGroups = {};
+  for (const action of Object.values(ACTIONS)) {
+    if (!shortcutsGroups[action.group]) shortcutsGroups[action.group] = [];
+    shortcutsGroups[action.group].push(action);
+  }
+
+  let rebindingState = { actionId: null, conflict: null };
+  const shortcutsSections = Object.entries(shortcutsGroups).map(([group, actions]) =>
+    h("section", { class: "opt-group" },
+      h("h3", { text: group }),
+      h("div", { class: "shortcuts-list" },
+        actions.map((action) => {
+          const keys = getKeysForAction(action.id, keyBindings);
+          const displayKey = keys.length > 0 ? keys[0] : "—";
+          return h("div", { class: "shortcut-row", "data-action": action.id },
+            h("div", { class: "shortcut-label", text: action.label }),
+            h("button", {
+              class: "btn sm shortcut-key",
+              type: "button",
+              text: displayKey,
+              "aria-label": `Rebind ${action.label}, currently ${displayKey}`,
+              onclick: (e) => {
+                const btn = e.currentTarget;
+                rebindingState.actionId = action.id;
+                rebindingState.conflict = null;
+                btn.classList.add("waiting");
+                btn.textContent = "Press a key…";
+                const handleKey = (ke) => {
+                  ke.preventDefault();
+                  ke.stopPropagation();
+                  document.removeEventListener("keydown", handleKey, true);
+                  if (!document.body.contains(btn)) {
+                    rebindingState.actionId = null;
+                    return;
+                  }
+                  const newKeyBindings = { ...keyBindings };
+                  const conflict = detectKeyConflict(ke.key, action.id, newKeyBindings);
+                  if (conflict) {
+                    rebindingState.conflict = conflict;
+                    const conflictAction = Object.values(ACTIONS).find((a) => a.id === conflict);
+                    btn.textContent = "Conflict! Click to try again.";
+                    btn.classList.remove("waiting");
+                    btn.classList.add("conflict");
+                    toast(`${ke.key} is already bound to ${conflictAction?.label || "another action"}`, { duration: 3000 });
+                  } else {
+                    // Remove this key from any other actions, then bind it to this action
+                    Object.keys(newKeyBindings).forEach((k) => {
+                      if (newKeyBindings[k] === action.id) delete newKeyBindings[k];
+                    });
+                    newKeyBindings[ke.key] = action.id;
+                    setKeyBindings(prefs, newKeyBindings);
+                    btn.textContent = ke.key;
+                    btn.classList.remove("waiting");
+                    btn.classList.remove("conflict");
+                    toast(`Bound ${action.label} to ${ke.key}`, { duration: 2000 });
+                    log.info("shortcuts", `bound ${action.id} to ${ke.key}`);
+                  }
+                  rebindingState.actionId = null;
+                };
+                document.addEventListener("keydown", handleKey, true);
+                setTimeout(() => {
+                  if (rebindingState.actionId === action.id && document.body.contains(btn)) {
+                    document.removeEventListener("keydown", handleKey, true);
+                    btn.textContent = displayKey;
+                    btn.classList.remove("waiting");
+                    rebindingState.actionId = null;
+                  }
+                }, 5000);
+              },
+            }),
+          );
+        }))));
+
   modal({
     title: "Options",
     cls: "options-sheet",
@@ -1882,6 +2075,17 @@ function showOptions() {
           h("span", { class: "zoom-value", text: `${Math.round(current.zoom * 100)}%` }),
           h("button", { class: "btn sm icon", "aria-label": "Zoom in", onclick: () => zoomApp(1) }, icon("zoom-in", { size: 15 })),
           h("button", { class: "btn sm ghost", onclick: () => zoomApp(0), text: "Reset" }))),
+      ...shortcutsSections,
+      h("section", { class: "opt-group" },
+        h("h3", { text: "Reset shortcuts" }),
+        h("p", { class: "about-note", text: "Restore all keyboard shortcuts to their defaults." }),
+        h("button", { class: "btn sm ghost", onclick: () => {
+          resetKeyBindings(prefs);
+          toast("Shortcuts reset to defaults", { duration: 2000 });
+          log.info("shortcuts", "reset to defaults");
+          closeModal();
+          showOptions();
+        }, text: "Reset to defaults" })),
       h("section", { class: "opt-group" },
         h("h3", { text: "Your data" }),
         h("p", { class: "about-note", text: "Decisions live in one database file on this computer. Your screenshots are never copied or uploaded." }),
@@ -1909,33 +2113,6 @@ function showOptions() {
     ],
     actions: [{ label: "Close" }],
   });
-
-  // Load statistics after the modal is shown
-  loadStatistics();
-}
-
-function loadStatistics() {
-  api("get_counters").then((groups) => {
-    const statsBody = document.getElementById("stats-body");
-    if (statsBody && groups) {
-      const sections = groups.map((group) =>
-        h("div", { class: "stats-group" },
-          h("div", { class: "stats-header" },
-            h("h4", { text: group.label }),
-            h("button", { class: "btn sm ghost", onclick: () => {
-              api("reset_counters", { group: group.name })
-                .then(() => loadStatistics())
-                .catch((e) => log.error("stats", `Reset ${group.name} failed: ${e}`));
-            }, title: `Reset ${group.label.toLowerCase()} statistics` }, "Reset")),
-          h("dl", { class: "stats-list" },
-            ...group.counters.map(([name, value]) => {
-              const label = name.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-              const formatted = value > 1000000 ? (value / 1048576).toFixed(2) + " MB" : value > 1000 ? (value / 1024).toFixed(2) + " KB" : String(value);
-              return [h("dt", { text: label }), h("dd", { text: formatted })];
-            }))));
-      statsBody.replaceChildren(...sections);
-    }
-  }).catch((e) => log.warn("stats", `Failed to load counters: ${e}`));
 }
 
 // -------------------------------------------------------------- context menus
@@ -1958,7 +2135,9 @@ function onContextMenu(e) {
   const hit = shotAt(t);
   if (hit?.shot) {
     const { shot, node } = hit;
-    const onTop = node.classList.contains("card") && node === topCard() && state.card?.id === shot.id;
+    const isCard = node.classList.contains("card");
+    const isTile = node.classList.contains("tile");
+    const onTop = isCard && node === topCard() && state.card?.id === shot.id;
     items.push({ label: "Open full screen", icon: "expand", meta: onTop ? "Space" : null, onClick: () => openShotViewer(shot, onTop ? node : null) });
     if (onTop) {
       items.push(
@@ -1966,10 +2145,15 @@ function onContextMenu(e) {
         { label: "Mark for deletion", icon: "trash", meta: "←", danger: true, onClick: () => decide(ACTION.DELETE, { via: "button" }) });
       if (state.scope?.scope !== "staged") items.push({ label: "Skip for now", icon: "skip", meta: "↑", onClick: () => decide(ACTION.SKIP, { via: "button" }) });
     }
-    if (node.classList.contains("tile")) items.push({ label: "Don't delete", sub: "Take it off the deletion pile", icon: "undo", onClick: () => unstageOne(shot.id, node) });
-    items.push({ separator: true },
+    if (isTile) {
+      items.push({ label: "Restore", sub: "Take it off the deletion pile", icon: "undo", onClick: () => unstageOne(shot.id, node) });
+    }
+    items.push({ separator: true });
+    if (isCard && shot.viewable) items.push({ label: "Copy image", icon: "image", onClick: () => copyImage(shot.id) });
+    items.push(
       { label: `Show in ${fileManager()}`, icon: "folder", onClick: () => reveal("shot", shot.id) },
-      { label: "Copy file path", icon: "copy", onClick: () => copyText(shot.path, "the file path") });
+      { label: "Copy file path", icon: "copy", onClick: () => copyText(shot.path, "the file path") },
+      { label: "Copy file name", icon: "copy", onClick: () => copyText(basename(shot.path), "the file name") });
   } else {
     const month = t.closest?.(".month[data-month]");
     if (month) {
@@ -2132,9 +2316,29 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
+  // Get current key bindings for action lookup
+  const keyBindings = getKeyBindings(prefs);
+  const action = keyBindings[e.key];
+
+  // Filmstrip navigation (one press, one move, ignore repeat)
+  if (action === ACTIONS.PREV_IMAGE.id) {
+    e.preventDefault();
+    if (!e.repeat) jumpTo(state.queue.cursor - 1);
+    return;
+  }
+  if (action === ACTIONS.NEXT_IMAGE.id) {
+    e.preventDefault();
+    if (!e.repeat) jumpTo(state.queue.cursor + 1);
+    return;
+  }
+
   // Holding a key down must not machine-gun through the queue: one press, one
   // decision.
-  const decisionKey = { ArrowLeft: ACTION.DELETE, ArrowRight: ACTION.KEEP, ArrowUp: ACTION.SKIP }[e.key];
+  let decisionKey = null;
+  if (action === ACTIONS.DELETE.id) decisionKey = ACTION.DELETE;
+  else if (action === ACTIONS.KEEP.id) decisionKey = ACTION.KEEP;
+  else if (action === ACTIONS.SKIP.id) decisionKey = ACTION.SKIP;
+
   if (decisionKey) {
     e.preventDefault();
     // A key during a drag would decide the card under the pointer, and the

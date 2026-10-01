@@ -84,6 +84,14 @@ pub struct ScanProgress {
     pub found: usize,
 }
 
+/// Payload of the `commit-progress` event: files deleted so far.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommitProgress {
+    pub current: usize,
+    pub total: usize,
+    pub current_file: String,
+}
+
 /// How often `scan_root` reports progress. The walk finds thousands of files a
 /// second on a fast disk; the UI only needs to look alive.
 const PROGRESS_EVERY: std::time::Duration = std::time::Duration::from_millis(120);
@@ -94,19 +102,8 @@ pub struct MonthThumbs {
     pub paths: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct DecideArgs {
-    pub id: i64,
-    pub kind: String,
-    #[serde(default)]
-    pub swipe_dx: Option<f64>,
-    #[serde(default)]
-    pub swipe_dy: Option<f64>,
-}
-
-/// Local statistics counters, grouped by category.
+/// Local statistics counters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct CounterGroup {
     pub name: String,
     pub label: String,
@@ -119,7 +116,7 @@ fn tz_offset_min(tz: Option<i64>) -> i64 {
 
 fn validate_scope(scope: &str) -> Result<&str, String> {
     match scope {
-        "month" | "random" | "unreviewed" | "skipped" | "staged" => Ok(scope),
+        "month" | "random" | "unreviewed" | "skipped" | "staged" | "kept" => Ok(scope),
         other => Err(format!("invalid queue: {other}")),
     }
 }
@@ -273,6 +270,72 @@ pub fn reveal(state: State<'_, AppState>, target: String, id: Option<i64>) -> Re
     Ok(())
 }
 
+/// Copies an image file to the clipboard. Only called for image files (PNG, JPG, etc).
+#[tauri::command]
+pub fn copy_image(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    let shot = lock(&state.db)
+        .shot(id)?
+        .ok_or_else(|| format!("no such screenshot: {id}"))?;
+    let path = std::path::Path::new(&shot.path);
+    if !path.exists() {
+        return Err(format!("{} no longer exists", path.display()));
+    }
+    copy_image_file_to_clipboard(path)?;
+    crate::log::info("copy-image", &format!("id {}", id));
+    Ok(())
+}
+
+fn copy_image_file_to_clipboard(path: &Path) -> Result<(), String> {
+    if cfg!(windows) {
+        // On Windows, copy the file path to clipboard so it can be pasted as a file
+        let path_str = path.to_string_lossy();
+        let cmd = format!(
+            "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Clipboard]::SetFileDropList((New-Object System.Collections.Specialized.StringCollection).Add('{}'))",
+            path_str.replace('\'', "''")
+        );
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &cmd])
+            .spawn()
+            .map_err(|e| format!("couldn't open PowerShell: {e}"))?
+            .wait()
+            .map_err(|e| format!("PowerShell failed: {e}"))?;
+        Ok(())
+    } else if cfg!(target_os = "macos") {
+        // On macOS, use pbcopy to copy the image file
+        let image_data =
+            std::fs::read(path).map_err(|e| format!("couldn't read the image: {e}"))?;
+        let mut child = std::process::Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("couldn't run pbcopy: {e}"))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            stdin
+                .write_all(&image_data)
+                .map_err(|e| format!("couldn't write to pbcopy: {e}"))?;
+        }
+        child.wait().map_err(|e| format!("pbcopy failed: {e}"))?;
+        Ok(())
+    } else {
+        // On Linux, use xclip if available, otherwise just copy the path
+        let image_data =
+            std::fs::read(path).map_err(|e| format!("couldn't read the image: {e}"))?;
+        let mut child = std::process::Command::new("xclip")
+            .args(["-selection", "clipboard", "-t", "image/png", "-i"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("couldn't run xclip: {e}"))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            stdin
+                .write_all(&image_data)
+                .map_err(|e| format!("couldn't write to xclip: {e}"))?;
+        }
+        child.wait().map_err(|e| format!("xclip failed: {e}"))?;
+        Ok(())
+    }
+}
+
 fn open_url(url: &str) -> Result<(), String> {
     let spawned = if cfg!(windows) {
         // `start` is a cmd builtin; the empty string is its window title.
@@ -305,19 +368,20 @@ fn open_in_file_manager(path: &Path) -> Result<(), String> {
             cmd.arg(path);
         }
         cmd.spawn()
+    } else if cfg!(target_os = "macos") {
+        let mut cmd = std::process::Command::new("open");
+        if path.is_file() {
+            cmd.arg("-R");
+        }
+        cmd.arg(path);
+        cmd.spawn()
     } else {
         let dir = if path.is_file() {
             path.parent().unwrap_or(path)
         } else {
             path
         };
-        std::process::Command::new(if cfg!(target_os = "macos") {
-            "open"
-        } else {
-            "xdg-open"
-        })
-        .arg(dir)
-        .spawn()
+        std::process::Command::new("xdg-open").arg(dir).spawn()
     };
     spawned
         .map(|_| ())
@@ -535,14 +599,7 @@ pub fn items(state: State<'_, AppState>, ids: Vec<i64>) -> Result<Vec<Shot>, Str
 }
 
 /// The body of `decide`, minus the state plumbing.
-pub fn apply_decision(
-    db: &Db,
-    undo: &mut UndoStack,
-    id: i64,
-    kind: &str,
-    swipe_dx: Option<f64>,
-    swipe_dy: Option<f64>,
-) -> Result<Shot, String> {
+pub fn apply_decision(db: &Db, undo: &mut UndoStack, id: i64, kind: &str) -> Result<Shot, String> {
     let status = match kind {
         "keep" => STATUS_KEPT,
         "skip" => STATUS_SKIPPED,
@@ -571,22 +628,6 @@ pub fn apply_decision(
         let _ = db.incr_counter(counter_name, 1);
     }
 
-    // Track swipe direction if available
-    if let (Some(dx), Some(dy)) = (swipe_dx, swipe_dy) {
-        let adx = dx.abs();
-        let ady = dy.abs();
-        if adx >= 80.0 {
-            if dx < 0.0 {
-                let _ = db.incr_counter("swipe:left", 1);
-            } else {
-                let _ = db.incr_counter("swipe:right", 1);
-            }
-        }
-        if ady >= 80.0 && dy < 0.0 {
-            let _ = db.incr_counter("swipe:up", 1);
-        }
-    }
-
     let shot = db
         .shot(id)?
         .ok_or_else(|| format!("no such screenshot: {id}"))?;
@@ -602,16 +643,9 @@ pub fn apply_decision(
 }
 
 #[tauri::command]
-pub fn decide(state: State<'_, AppState>, args: DecideArgs) -> Result<Shot, String> {
+pub fn decide(state: State<'_, AppState>, id: i64, kind: String) -> Result<Shot, String> {
     let db = lock(&state.db);
-    apply_decision(
-        &db,
-        &mut lock(&state.undo),
-        args.id,
-        &args.kind,
-        args.swipe_dx,
-        args.swipe_dy,
-    )
+    apply_decision(&db, &mut lock(&state.undo), id, &kind)
 }
 
 /// The body of `undo_last`: walks back the most recent action that still
@@ -626,16 +660,18 @@ pub fn apply_undo(db: &Db, undo: &mut UndoStack) -> Result<Option<Shot>, String>
     let next_decided_ms = db.status_of(entry.id)?.and_then(|(_, ms)| ms);
     db.set_status(entry.id, &entry.prev, entry.prev_decided_ms)?;
 
-    // Decrement counter for the decision being undone
+    // Decrement counter for the undone decision
     let counter_name = match entry.next.as_str() {
-        STATUS_KEPT => "decision:kept",
-        STATUS_SKIPPED => "decision:skipped",
-        STATUS_STAGED => "decision:staged",
+        "kept" => "decision:kept",
+        "skipped" => "decision:skipped",
+        "staged" => "decision:staged",
         _ => "",
     };
     if !counter_name.is_empty() {
         let _ = db.incr_counter(counter_name, -1);
     }
+
+    // Increment counter for undos
     let _ = db.incr_counter("session:undos", 1);
 
     crate::log::info(
@@ -657,16 +693,18 @@ pub fn apply_redo(db: &Db, undo: &mut UndoStack) -> Result<Option<Shot>, String>
     };
     db.set_status(entry.id, &entry.next, entry.next_decided_ms)?;
 
-    // Increment counter for the decision being redone
+    // Increment counter for the redone decision
     let counter_name = match entry.next.as_str() {
-        STATUS_KEPT => "decision:kept",
-        STATUS_SKIPPED => "decision:skipped",
-        STATUS_STAGED => "decision:staged",
+        "kept" => "decision:kept",
+        "skipped" => "decision:skipped",
+        "staged" => "decision:staged",
         _ => "",
     };
     if !counter_name.is_empty() {
         let _ = db.incr_counter(counter_name, 1);
     }
+
+    // Increment counter for redos
     let _ = db.incr_counter("session:redos", 1);
 
     crate::log::info(
@@ -783,19 +821,19 @@ pub fn apply_commit(
         db.set_status(id, STATUS_DELETED, Some(now))?;
     }
 
+    // Increment deletion counters
+    let _ = db.incr_counter("deletion:files_deleted", moved.len() as i64);
+    let bytes_freed: i64 = moved.iter().map(|r| r.size).sum();
+    let _ = db.incr_counter("deletion:bytes_deleted", bytes_freed);
+    let _ = db.incr_counter("session:commits", 1);
+
     let (still_staged, _) = db.staged_totals(root_id)?;
     let report = CommitReport {
         deleted: moved.len(),
-        bytes_freed: moved.iter().map(|r| r.size).sum(),
+        bytes_freed,
         still_staged: still_staged as usize,
         failed,
     };
-
-    // Track deletion counters
-    let _ = db.incr_counter("deletion:files_deleted", moved.len() as i64);
-    let _ = db.incr_counter("deletion:bytes_deleted", report.bytes_freed);
-    let _ = db.incr_counter("session:commits", 1);
-
     crate::log::info(
         "commit",
         &format!(
@@ -815,22 +853,51 @@ pub fn apply_commit(
 ///
 /// Reading the staged list and writing the results back are fast queries done
 /// under the lock; the Recycle Bin calls in between (which shell out and can
-/// block) run on a worker without it.
+/// block) run on a worker without it. Progress events are emitted periodically.
 #[tauri::command]
 pub async fn commit_deletes(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     root_id: Option<i64>,
 ) -> Result<CommitReport, String> {
     let rows = lock(&state.db).staged_rows(root_id)?;
-    let outcome = tauri::async_runtime::spawn_blocking(move || trash_staged(rows))
-        .await
-        .map_err(|e| e.to_string())?;
+    let total = rows.len();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let mut outcome = TrashOutcome::default();
+        for (idx, row) in rows.into_iter().enumerate() {
+            // Emit progress every 5 files or at the end
+            if idx % 5 == 0 || idx == total - 1 {
+                let _ = app.emit(
+                    "commit-progress",
+                    CommitProgress {
+                        current: idx,
+                        total,
+                        current_file: row.name.clone(),
+                    },
+                );
+            }
+            match trash::delete(&row.path) {
+                Ok(()) => outcome.moved.push(row),
+                Err(e) => {
+                    crate::log::warn("commit", &format!("{}: {e}", row.name));
+                    outcome.failed.push(FailedItem {
+                        id: row.id,
+                        gone: !Path::new(&row.path).exists(),
+                        name: row.name,
+                        error: e.to_string(),
+                    });
+                }
+            }
+        }
+        outcome
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     let db = lock(&state.db);
     apply_commit(&db, &mut lock(&state.undo), root_id, outcome)
 }
 
 #[tauri::command]
-#[allow(dead_code)]
 pub fn get_counters(state: State<'_, AppState>) -> Result<Vec<CounterGroup>, String> {
     let db = lock(&state.db);
     let all = db.get_all_counters()?;
@@ -865,20 +932,6 @@ pub fn get_counters(state: State<'_, AppState>) -> Result<Vec<CounterGroup>, Str
         });
     }
 
-    // Swipe counters
-    let swipe_counters: Vec<_> = all
-        .iter()
-        .filter(|(k, _)| k.starts_with("swipe:"))
-        .map(|(k, v)| (k.strip_prefix("swipe:").unwrap_or("").to_string(), *v))
-        .collect();
-    if !swipe_counters.is_empty() {
-        groups.push(CounterGroup {
-            name: "swipe".to_string(),
-            label: "Swipes".to_string(),
-            counters: swipe_counters,
-        });
-    }
-
     // Session counters
     let session_counters: Vec<_> = all
         .iter()
@@ -893,39 +946,10 @@ pub fn get_counters(state: State<'_, AppState>) -> Result<Vec<CounterGroup>, Str
         });
     }
 
-    // Interaction counters
-    let interaction_counters: Vec<_> = all
-        .iter()
-        .filter(|(k, _)| k.starts_with("interaction:"))
-        .map(|(k, v)| (k.strip_prefix("interaction:").unwrap_or("").to_string(), *v))
-        .collect();
-    if !interaction_counters.is_empty() {
-        groups.push(CounterGroup {
-            name: "interaction".to_string(),
-            label: "Interaction".to_string(),
-            counters: interaction_counters,
-        });
-    }
-
-    // Review counters
-    let review_counters: Vec<_> = all
-        .iter()
-        .filter(|(k, _)| k.starts_with("review:"))
-        .map(|(k, v)| (k.strip_prefix("review:").unwrap_or("").to_string(), *v))
-        .collect();
-    if !review_counters.is_empty() {
-        groups.push(CounterGroup {
-            name: "review".to_string(),
-            label: "Review".to_string(),
-            counters: review_counters,
-        });
-    }
-
     Ok(groups)
 }
 
 #[tauri::command]
-#[allow(dead_code)]
 pub fn reset_counters(state: State<'_, AppState>, group: Option<String>) -> Result<(), String> {
     let db = lock(&state.db);
     if let Some(g) = group {
@@ -976,9 +1000,9 @@ mod tests {
     #[test]
     fn undo_walks_decisions_back_with_their_times() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 1, "keep", None, None).unwrap();
+        apply_decision(&db, &mut undo, 1, "keep").unwrap();
         let kept_at = status(&db, 1).1;
-        apply_decision(&db, &mut undo, 1, "skip", None, None).unwrap();
+        apply_decision(&db, &mut undo, 1, "skip").unwrap();
 
         let shot = apply_undo(&db, &mut undo).unwrap().unwrap();
         assert_eq!(
@@ -996,7 +1020,7 @@ mod tests {
     #[test]
     fn redo_reapplies_an_undone_decision_with_its_time() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 1, "delete", None, None).unwrap();
+        apply_decision(&db, &mut undo, 1, "delete").unwrap();
         let decided = status(&db, 1);
         apply_undo(&db, &mut undo).unwrap().unwrap();
         assert_eq!(status(&db, 1).0, STATUS_PENDING);
@@ -1012,7 +1036,7 @@ mod tests {
     #[test]
     fn redo_never_touches_a_committed_row() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 1, "delete", None, None).unwrap();
+        apply_decision(&db, &mut undo, 1, "delete").unwrap();
         apply_undo(&db, &mut undo).unwrap();
         db.set_status(1, STATUS_DELETED, Some(1)).unwrap();
         assert!(apply_redo(&db, &mut undo).unwrap().is_none());
@@ -1022,7 +1046,7 @@ mod tests {
     #[test]
     fn undoing_an_unstage_restores_the_original_stage_time() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 2, "delete", None, None).unwrap();
+        apply_decision(&db, &mut undo, 2, "delete").unwrap();
         let staged_at = status(&db, 2).1;
         assert!(staged_at.is_some());
 
@@ -1045,7 +1069,7 @@ mod tests {
     #[test]
     fn unstage_leaves_a_row_that_is_not_staged_alone() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 1, "keep", None, None).unwrap();
+        apply_decision(&db, &mut undo, 1, "keep").unwrap();
         let shot = apply_unstage(&db, &mut undo, 1).unwrap();
         assert_eq!(shot.status, STATUS_KEPT);
         assert_eq!(undo.len(), 1, "nothing new to undo");
@@ -1055,8 +1079,8 @@ mod tests {
     #[test]
     fn undo_after_a_commit_does_not_resurrect_the_row() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 1, "keep", None, None).unwrap();
-        apply_decision(&db, &mut undo, 2, "delete", None, None).unwrap();
+        apply_decision(&db, &mut undo, 1, "keep").unwrap();
+        apply_decision(&db, &mut undo, 2, "delete").unwrap();
         let report = apply_commit(&db, &mut undo, None, all_moved(&db)).unwrap();
         assert_eq!(report.deleted, 1);
         assert_eq!(report.bytes_freed, 200);
@@ -1075,7 +1099,7 @@ mod tests {
         // Belt and braces: without the commit's purge, the status check alone
         // still keeps the row deleted.
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 2, "delete", None, None).unwrap();
+        apply_decision(&db, &mut undo, 2, "delete").unwrap();
         db.set_status(2, STATUS_DELETED, Some(1)).unwrap();
         assert!(apply_undo(&db, &mut undo).unwrap().is_none());
         assert_eq!(status(&db, 2).0, STATUS_DELETED);
@@ -1084,10 +1108,10 @@ mod tests {
     #[test]
     fn a_committed_row_cannot_be_decided_or_unstaged_again() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 2, "delete", None, None).unwrap();
+        apply_decision(&db, &mut undo, 2, "delete").unwrap();
         apply_commit(&db, &mut undo, None, all_moved(&db)).unwrap();
         for kind in ["keep", "skip", "delete"] {
-            assert!(apply_decision(&db, &mut undo, 2, kind, None, None).is_err());
+            assert!(apply_decision(&db, &mut undo, 2, kind).is_err());
         }
         assert!(apply_unstage(&db, &mut undo, 2).is_err());
         assert_eq!(status(&db, 2).0, STATUS_DELETED);
@@ -1098,7 +1122,7 @@ mod tests {
     fn commit_settles_gone_files_and_keeps_real_failures_staged() {
         let (db, mut undo) = setup();
         for id in 1..=3 {
-            apply_decision(&db, &mut undo, id, "delete", None, None).unwrap();
+            apply_decision(&db, &mut undo, id, "delete").unwrap();
         }
         let rows = db.staged_rows(None).unwrap();
         let (moved, gone, stuck) = (&rows[0], &rows[1], &rows[2]);
@@ -1150,8 +1174,8 @@ mod tests {
         )
         .unwrap();
         let x = db.queue_ids("unreviewed", None, Some(other), 0).unwrap()[0];
-        apply_decision(&db, &mut undo, 1, "delete", None, None).unwrap();
-        apply_decision(&db, &mut undo, x, "keep", None, None).unwrap();
+        apply_decision(&db, &mut undo, 1, "delete").unwrap();
+        apply_decision(&db, &mut undo, x, "keep").unwrap();
 
         apply_forget_root(&db, &mut undo, 1).unwrap();
         assert_eq!(undo.len(), 1, "only the other root's entry is left");

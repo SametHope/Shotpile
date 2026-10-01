@@ -120,7 +120,8 @@ it, the first start moves its database over and your decisions carry on.
 | `Space` | Open the current photo full screen (and close it again) |
 | `+` `-` `0` | Zoom the card in, out, back to 100%. Arrows pan while zoomed. |
 | `Esc` | Close the viewer or a dialog |
-| `?` | Keyboard shortcuts |
+| `A` / `D` | Step to the previous / next photo in the review strip |
+| `?` | Keyboard shortcuts (every review key can be rebound in Options) |
 | `F12` / `Ctrl+Shift+I` | Developer tools |
 | `Ctrl+Shift+L` | Show the backend log |
 
@@ -302,31 +303,14 @@ Tracked but not previewable, shown as a placeholder you can still decide on:
 
 Not built yet, roughly in this order:
 
-- Copy image to the clipboard from the right-click menu.
-- "Show in file manager" selecting the file instead of opening a folder.
-- A right-click menu on pile tiles: restore, open, show in file manager, copy
-  full path, copy file name.
-- `A` and `D` to step to the previous and next photo in the review strip.
-- Rebindable keyboard shortcuts in Options.
-- Research and fix the occasional white flash when going fullscreen and on the
-  first scroll afterwards.
-- "Next month" after finishing a month should follow the calendar: the nearest
-  later month with work left, otherwise the nearest earlier one (it can jump
-  from 2025 to 2026 today).
-- A blocking progress dialog while a large pile is being deleted (the app
-  freezes today), and filling the library and pile grids in batches instead
-  of all at once.
-- Local statistics, kept on the machine only: files deleted and space freed,
-  swipes by direction, undos, app launches, time spent reviewing and more,
-  viewable and resettable from Options, possibly with a small infographic
-  window later.
-- Open already sorted months to review or delete what was kept.
-- A resizable filmstrip: drag its top edge up to shrink the deck a little and
-  get larger previews of the upcoming photos.
-- Lighter blur on the card info bar, only behind the bottom-left and
-  bottom-right text and not across the middle.
-- A clearer look for the "deleted" part of the progress bars, for example a
-  stripe, so finished work does not read as empty next to the green and red.
+- Fill the library and pile grids in batches instead of all at once.
+- More local statistics: swipes by direction, app launches, time spent
+  reviewing, and possibly a small infographic window. Counters for decisions,
+  undos and deletions already exist and are viewable and resettable in
+  Options.
+- Check that the window background colour fully removes the white flash when
+  going fullscreen and on the first scroll (needs a Windows check).
+- "Show in file manager" selecting the file on Linux (it opens the folder).
 - Possible later: keyboard navigation in the library, a filename filter inside
   a review, bulk restore from the pile, a clearer report when a commit cannot
   delete some files, and duplicate detection.
