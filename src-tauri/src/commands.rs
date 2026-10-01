@@ -599,7 +599,14 @@ pub fn items(state: State<'_, AppState>, ids: Vec<i64>) -> Result<Vec<Shot>, Str
 }
 
 /// The body of `decide`, minus the state plumbing.
-pub fn apply_decision(db: &Db, undo: &mut UndoStack, id: i64, kind: &str) -> Result<Shot, String> {
+pub fn apply_decision(
+    db: &Db,
+    undo: &mut UndoStack,
+    id: i64,
+    kind: &str,
+    swipe_dx: Option<f64>,
+    swipe_dy: Option<f64>,
+) -> Result<Shot, String> {
     let status = match kind {
         "keep" => STATUS_KEPT,
         "skip" => STATUS_SKIPPED,
@@ -628,6 +635,27 @@ pub fn apply_decision(db: &Db, undo: &mut UndoStack, id: i64, kind: &str) -> Res
         let _ = db.incr_counter(counter_name, 1);
     }
 
+    // Track swipe direction if provided
+    if let (Some(dx), Some(dy)) = (swipe_dx, swipe_dy) {
+        let threshold = 80.0;
+        let abs_dx = dx.abs();
+        let abs_dy = dy.abs();
+
+        if abs_dx >= threshold || abs_dy >= threshold {
+            if abs_dx > abs_dy {
+                if dx > 0.0 {
+                    let _ = db.incr_counter("swipe:right", 1);
+                } else {
+                    let _ = db.incr_counter("swipe:left", 1);
+                }
+            } else if dy > 0.0 {
+                let _ = db.incr_counter("swipe:down", 1);
+            } else {
+                let _ = db.incr_counter("swipe:up", 1);
+            }
+        }
+    }
+
     let shot = db
         .shot(id)?
         .ok_or_else(|| format!("no such screenshot: {id}"))?;
@@ -643,9 +671,15 @@ pub fn apply_decision(db: &Db, undo: &mut UndoStack, id: i64, kind: &str) -> Res
 }
 
 #[tauri::command]
-pub fn decide(state: State<'_, AppState>, id: i64, kind: String) -> Result<Shot, String> {
+pub fn decide(
+    state: State<'_, AppState>,
+    id: i64,
+    kind: String,
+    swipe_dx: Option<f64>,
+    swipe_dy: Option<f64>,
+) -> Result<Shot, String> {
     let db = lock(&state.db);
-    apply_decision(&db, &mut lock(&state.undo), id, &kind)
+    apply_decision(&db, &mut lock(&state.undo), id, &kind, swipe_dx, swipe_dy)
 }
 
 /// The body of `undo_last`: walks back the most recent action that still
@@ -960,6 +994,14 @@ pub fn reset_counters(state: State<'_, AppState>, group: Option<String>) -> Resu
     Ok(())
 }
 
+#[tauri::command]
+#[allow(dead_code)]
+pub fn incr_counter(state: State<'_, AppState>, name: String, amount: i64) -> Result<(), String> {
+    let db = lock(&state.db);
+    db.incr_counter(&name, amount)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1000,9 +1042,9 @@ mod tests {
     #[test]
     fn undo_walks_decisions_back_with_their_times() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 1, "keep").unwrap();
+        apply_decision(&db, &mut undo, 1, "keep", None, None).unwrap();
         let kept_at = status(&db, 1).1;
-        apply_decision(&db, &mut undo, 1, "skip").unwrap();
+        apply_decision(&db, &mut undo, 1, "skip", None, None).unwrap();
 
         let shot = apply_undo(&db, &mut undo).unwrap().unwrap();
         assert_eq!(
@@ -1020,7 +1062,7 @@ mod tests {
     #[test]
     fn redo_reapplies_an_undone_decision_with_its_time() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 1, "delete").unwrap();
+        apply_decision(&db, &mut undo, 1, "delete", None, None).unwrap();
         let decided = status(&db, 1);
         apply_undo(&db, &mut undo).unwrap().unwrap();
         assert_eq!(status(&db, 1).0, STATUS_PENDING);
@@ -1036,7 +1078,7 @@ mod tests {
     #[test]
     fn redo_never_touches_a_committed_row() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 1, "delete").unwrap();
+        apply_decision(&db, &mut undo, 1, "delete", None, None).unwrap();
         apply_undo(&db, &mut undo).unwrap();
         db.set_status(1, STATUS_DELETED, Some(1)).unwrap();
         assert!(apply_redo(&db, &mut undo).unwrap().is_none());
@@ -1046,7 +1088,7 @@ mod tests {
     #[test]
     fn undoing_an_unstage_restores_the_original_stage_time() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 2, "delete").unwrap();
+        apply_decision(&db, &mut undo, 2, "delete", None, None).unwrap();
         let staged_at = status(&db, 2).1;
         assert!(staged_at.is_some());
 
@@ -1069,7 +1111,7 @@ mod tests {
     #[test]
     fn unstage_leaves_a_row_that_is_not_staged_alone() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 1, "keep").unwrap();
+        apply_decision(&db, &mut undo, 1, "keep", None, None).unwrap();
         let shot = apply_unstage(&db, &mut undo, 1).unwrap();
         assert_eq!(shot.status, STATUS_KEPT);
         assert_eq!(undo.len(), 1, "nothing new to undo");
@@ -1079,8 +1121,8 @@ mod tests {
     #[test]
     fn undo_after_a_commit_does_not_resurrect_the_row() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 1, "keep").unwrap();
-        apply_decision(&db, &mut undo, 2, "delete").unwrap();
+        apply_decision(&db, &mut undo, 1, "keep", None, None).unwrap();
+        apply_decision(&db, &mut undo, 2, "delete", None, None).unwrap();
         let report = apply_commit(&db, &mut undo, None, all_moved(&db)).unwrap();
         assert_eq!(report.deleted, 1);
         assert_eq!(report.bytes_freed, 200);
@@ -1099,7 +1141,7 @@ mod tests {
         // Belt and braces: without the commit's purge, the status check alone
         // still keeps the row deleted.
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 2, "delete").unwrap();
+        apply_decision(&db, &mut undo, 2, "delete", None, None).unwrap();
         db.set_status(2, STATUS_DELETED, Some(1)).unwrap();
         assert!(apply_undo(&db, &mut undo).unwrap().is_none());
         assert_eq!(status(&db, 2).0, STATUS_DELETED);
@@ -1108,10 +1150,10 @@ mod tests {
     #[test]
     fn a_committed_row_cannot_be_decided_or_unstaged_again() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 2, "delete").unwrap();
+        apply_decision(&db, &mut undo, 2, "delete", None, None).unwrap();
         apply_commit(&db, &mut undo, None, all_moved(&db)).unwrap();
         for kind in ["keep", "skip", "delete"] {
-            assert!(apply_decision(&db, &mut undo, 2, kind).is_err());
+            assert!(apply_decision(&db, &mut undo, 2, kind, None, None).is_err());
         }
         assert!(apply_unstage(&db, &mut undo, 2).is_err());
         assert_eq!(status(&db, 2).0, STATUS_DELETED);
@@ -1122,7 +1164,7 @@ mod tests {
     fn commit_settles_gone_files_and_keeps_real_failures_staged() {
         let (db, mut undo) = setup();
         for id in 1..=3 {
-            apply_decision(&db, &mut undo, id, "delete").unwrap();
+            apply_decision(&db, &mut undo, id, "delete", None, None).unwrap();
         }
         let rows = db.staged_rows(None).unwrap();
         let (moved, gone, stuck) = (&rows[0], &rows[1], &rows[2]);
@@ -1174,8 +1216,8 @@ mod tests {
         )
         .unwrap();
         let x = db.queue_ids("unreviewed", None, Some(other), 0).unwrap()[0];
-        apply_decision(&db, &mut undo, 1, "delete").unwrap();
-        apply_decision(&db, &mut undo, x, "keep").unwrap();
+        apply_decision(&db, &mut undo, 1, "delete", None, None).unwrap();
+        apply_decision(&db, &mut undo, x, "keep", None, None).unwrap();
 
         apply_forget_root(&db, &mut undo, 1).unwrap();
         assert_eq!(undo.len(), 1, "only the other root's entry is left");
