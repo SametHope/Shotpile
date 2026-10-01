@@ -736,6 +736,15 @@ pub async fn commit_deletes(
     apply_commit(&db, &mut lock(&state.undo), root_id, outcome)
 }
 
+#[tauri::command]
+pub fn find_duplicates(
+    state: State<'_, AppState>,
+    root_id: i64,
+) -> Result<Vec<crate::dupes::DuplicateGroup>, String> {
+    let db = lock(&state.db);
+    crate::dupes::find_duplicates(&db, root_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
