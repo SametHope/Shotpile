@@ -308,6 +308,8 @@ Not built yet, roughly in this order:
   full path, copy file name.
 - `A` and `D` to step to the previous and next photo in the review strip.
 - Rebindable keyboard shortcuts in Options.
+- Research and fix the occasional white flash when going fullscreen and on the
+  first scroll afterwards.
 - Possible later: keyboard navigation in the library, a filename filter inside
   a review, bulk restore from the pile, a clearer report when a commit cannot
   delete some files, and duplicate detection.
