@@ -313,6 +313,13 @@ Not built yet, roughly in this order:
 - "Next month" after finishing a month should follow the calendar: the nearest
   later month with work left, otherwise the nearest earlier one (it can jump
   from 2025 to 2026 today).
+- A blocking progress dialog while a large pile is being deleted (the app
+  freezes today), and filling the library and pile grids in batches instead
+  of all at once.
+- Local statistics, kept on the machine only: files deleted and space freed,
+  swipes by direction, undos, app launches, time spent reviewing and more,
+  viewable and resettable from Options, possibly with a small infographic
+  window later.
 - Possible later: keyboard navigation in the library, a filename filter inside
   a review, bulk restore from the pile, a clearer report when a commit cannot
   delete some files, and duplicate detection.

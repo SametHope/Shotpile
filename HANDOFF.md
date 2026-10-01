@@ -51,3 +51,20 @@ Nothing is known broken. In rough priority order:
    chronologically. Look at where the summary picks the next month in
    `src/app.js` and add the selection as a pure function in `logic.js` with
    tests (including the library hiding done months).
+8. **Large piles freeze the app.** Committing a big deletion pile gives no
+   feedback and the UI stalls. Plan: a blocking modal with progress (done of
+   total, current file) fed by the commit, which probably means running the
+   trash calls in chunks or emitting progress events from `commit_deletes` and
+   keeping the `apply_*` logic testable. Related: render the month and pile
+   grids in batches (e.g. per animation frame or on scroll) instead of
+   building every tile at once.
+9. **Local statistics.** Track many counters, all local: files and bytes
+   deleted, swipes per direction, keeps/stages/skips, undos and redos,
+   commits, app launches, folders added, time in review, longest streak, and so
+   on. The more the better, but cheap to record. Viewable and resettable from
+   Options (a reset per group and a reset all, behind a confirm dialog), and
+   possibly an infographic window later. Design notes: store in SQLite (a
+   counters table keyed by name, so new stats need no migration) rather than
+   prefs; increment in the `apply_*` functions so the tests cover it; a
+   forgotten folder must not erase the lifetime totals; nothing leaves the
+   machine, and the README's Data section should say so.
