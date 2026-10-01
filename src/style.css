@@ -1521,6 +1521,18 @@ body.ready #splash { opacity: 0; visibility: hidden; }
 .about-list dt { color: var(--muted); }
 .about-list dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .about-note { margin: 0; font-size: 12.5px; color: var(--muted); }
+.stats-container { display: grid; gap: 14px; }
+.stats-group { display: grid; gap: 8px; }
+.stats-header { display: flex; justify-content: space-between; align-items: center; }
+.stats-header h4 { margin: 0; font-size: 13px; font-weight: 600; }
+.stats-list { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; font-size: 13px; }
+.stats-list dt { color: var(--muted); }
+.stats-list dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 500; overflow-wrap: anywhere; }
+.commit-progress { display: grid; gap: 12px; }
+.progress-stat { font-size: 13px; color: var(--text-2); }
+.progress-file { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.progress-bar-wrap { height: 4px; background: var(--surface-3); border-radius: 2px; overflow: hidden; }
+.progress-bar { height: 100%; background: var(--accent); transition: width .2s ease-out; }
 
 /* ------------------------------------------------------------ small windows */
 

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
 
 use crate::db::{
@@ -84,6 +84,14 @@ pub struct ScanProgress {
     pub found: usize,
 }
 
+/// Payload of the `commit-progress` event: files deleted so far.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommitProgress {
+    pub current: usize,
+    pub total: usize,
+    pub current_file: String,
+}
+
 /// How often `scan_root` reports progress. The walk finds thousands of files a
 /// second on a fast disk; the UI only needs to look alive.
 const PROGRESS_EVERY: std::time::Duration = std::time::Duration::from_millis(120);
@@ -92,6 +100,14 @@ const PROGRESS_EVERY: std::time::Duration = std::time::Duration::from_millis(120
 pub struct MonthThumbs {
     pub month: String,
     pub paths: Vec<String>,
+}
+
+/// Local statistics counters.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CounterGroup {
+    pub name: String,
+    pub label: String,
+    pub counters: Vec<(String, i64)>,
 }
 
 fn tz_offset_min(tz: Option<i64>) -> i64 {
@@ -602,6 +618,18 @@ pub fn apply_decision(db: &Db, undo: &mut UndoStack, id: i64, kind: &str) -> Res
         return Err(format!("{} is already in the Recycle Bin", before.name));
     }
     db.set_status(id, status, Some(scan::now_ms()))?;
+
+    // Increment counter for this decision type
+    let counter_name = match kind {
+        "keep" => "decision:kept",
+        "skip" => "decision:skipped",
+        "delete" => "decision:staged",
+        _ => "",
+    };
+    if !counter_name.is_empty() {
+        let _ = db.incr_counter(counter_name, 1);
+    }
+
     let shot = db
         .shot(id)?
         .ok_or_else(|| format!("no such screenshot: {id}"))?;
@@ -633,6 +661,21 @@ pub fn apply_undo(db: &Db, undo: &mut UndoStack) -> Result<Option<Shot>, String>
     };
     let next_decided_ms = db.status_of(entry.id)?.and_then(|(_, ms)| ms);
     db.set_status(entry.id, &entry.prev, entry.prev_decided_ms)?;
+
+    // Decrement counter for the undone decision
+    let counter_name = match entry.next.as_str() {
+        "kept" => "decision:kept",
+        "skipped" => "decision:skipped",
+        "staged" => "decision:staged",
+        _ => "",
+    };
+    if !counter_name.is_empty() {
+        let _ = db.incr_counter(counter_name, -1);
+    }
+
+    // Increment counter for undos
+    let _ = db.incr_counter("session:undos", 1);
+
     crate::log::info(
         "undo",
         &format!("{} {} -> {}", entry.id, entry.next, entry.prev),
@@ -651,6 +694,21 @@ pub fn apply_redo(db: &Db, undo: &mut UndoStack) -> Result<Option<Shot>, String>
         return Ok(None);
     };
     db.set_status(entry.id, &entry.next, entry.next_decided_ms)?;
+
+    // Increment counter for the redone decision
+    let counter_name = match entry.next.as_str() {
+        "kept" => "decision:kept",
+        "skipped" => "decision:skipped",
+        "staged" => "decision:staged",
+        _ => "",
+    };
+    if !counter_name.is_empty() {
+        let _ = db.incr_counter(counter_name, 1);
+    }
+
+    // Increment counter for redos
+    let _ = db.incr_counter("session:redos", 1);
+
     crate::log::info(
         "redo",
         &format!("{} {} -> {}", entry.id, entry.prev, entry.next),
@@ -765,10 +823,16 @@ pub fn apply_commit(
         db.set_status(id, STATUS_DELETED, Some(now))?;
     }
 
+    // Increment deletion counters
+    let _ = db.incr_counter("deletion:files_deleted", moved.len() as i64);
+    let bytes_freed: i64 = moved.iter().map(|r| r.size).sum();
+    let _ = db.incr_counter("deletion:bytes_deleted", bytes_freed);
+    let _ = db.incr_counter("session:commits", 1);
+
     let (still_staged, _) = db.staged_totals(root_id)?;
     let report = CommitReport {
         deleted: moved.len(),
-        bytes_freed: moved.iter().map(|r| r.size).sum(),
+        bytes_freed,
         still_staged: still_staged as usize,
         failed,
     };
@@ -791,18 +855,111 @@ pub fn apply_commit(
 ///
 /// Reading the staged list and writing the results back are fast queries done
 /// under the lock; the Recycle Bin calls in between (which shell out and can
-/// block) run on a worker without it.
+/// block) run on a worker without it. Progress events are emitted periodically.
 #[tauri::command]
 pub async fn commit_deletes(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     root_id: Option<i64>,
 ) -> Result<CommitReport, String> {
     let rows = lock(&state.db).staged_rows(root_id)?;
-    let outcome = tauri::async_runtime::spawn_blocking(move || trash_staged(rows))
-        .await
-        .map_err(|e| e.to_string())?;
+    let total = rows.len();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let mut outcome = TrashOutcome::default();
+        for (idx, row) in rows.into_iter().enumerate() {
+            // Emit progress every 5 files or at the end
+            if idx % 5 == 0 || idx == total - 1 {
+                let _ = app.emit(
+                    "commit-progress",
+                    CommitProgress {
+                        current: idx,
+                        total,
+                        current_file: row.name.clone(),
+                    },
+                );
+            }
+            match trash::delete(&row.path) {
+                Ok(()) => outcome.moved.push(row),
+                Err(e) => {
+                    crate::log::warn("commit", &format!("{}: {e}", row.name));
+                    outcome.failed.push(FailedItem {
+                        id: row.id,
+                        gone: !Path::new(&row.path).exists(),
+                        name: row.name,
+                        error: e.to_string(),
+                    });
+                }
+            }
+        }
+        outcome
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     let db = lock(&state.db);
     apply_commit(&db, &mut lock(&state.undo), root_id, outcome)
+}
+
+#[tauri::command]
+pub fn get_counters(state: State<'_, AppState>) -> Result<Vec<CounterGroup>, String> {
+    let db = lock(&state.db);
+    let all = db.get_all_counters()?;
+
+    let mut groups = Vec::new();
+
+    // Decision counters
+    let decision_counters: Vec<_> = all
+        .iter()
+        .filter(|(k, _)| k.starts_with("decision:"))
+        .map(|(k, v)| (k.strip_prefix("decision:").unwrap_or("").to_string(), *v))
+        .collect();
+    if !decision_counters.is_empty() {
+        groups.push(CounterGroup {
+            name: "decision".to_string(),
+            label: "Decisions".to_string(),
+            counters: decision_counters,
+        });
+    }
+
+    // Deletion counters
+    let deletion_counters: Vec<_> = all
+        .iter()
+        .filter(|(k, _)| k.starts_with("deletion:"))
+        .map(|(k, v)| (k.strip_prefix("deletion:").unwrap_or("").to_string(), *v))
+        .collect();
+    if !deletion_counters.is_empty() {
+        groups.push(CounterGroup {
+            name: "deletion".to_string(),
+            label: "Deletion".to_string(),
+            counters: deletion_counters,
+        });
+    }
+
+    // Session counters
+    let session_counters: Vec<_> = all
+        .iter()
+        .filter(|(k, _)| k.starts_with("session:"))
+        .map(|(k, v)| (k.strip_prefix("session:").unwrap_or("").to_string(), *v))
+        .collect();
+    if !session_counters.is_empty() {
+        groups.push(CounterGroup {
+            name: "session".to_string(),
+            label: "Session".to_string(),
+            counters: session_counters,
+        });
+    }
+
+    Ok(groups)
+}
+
+#[tauri::command]
+pub fn reset_counters(state: State<'_, AppState>, group: Option<String>) -> Result<(), String> {
+    let db = lock(&state.db);
+    if let Some(g) = group {
+        db.reset_counter_group(&g)?;
+    } else {
+        db.reset_all_counters()?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
