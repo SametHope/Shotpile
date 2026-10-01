@@ -59,15 +59,17 @@ jobs:
       - name: Collect the release files
         shell: bash
         run: |
-          exe=(src-tauri/target/release/*.exe)
+          # The Cargo package name, unless the CLI named it after the product.
+          exe=src-tauri/target/release/screenshot-sifter.exe
+          [ -f "$exe" ] || exe="src-tauri/target/release/Screenshot Sifter.exe"
           setup=(src-tauri/target/release/bundle/nsis/*-setup.exe)
-          if [ ${#exe[@]} -ne 1 ] || [ ${#setup[@]} -ne 1 ]; then
-            echo "::error::expected one exe and one installer, found: ${exe[*]} / ${setup[*]}"
+          if [ ! -f "$exe" ] || [ ${#setup[@]} -ne 1 ] || [ ! -f "${setup[0]}" ]; then
+            echo "::error::missing build output; release dir has: $(ls src-tauri/target/release src-tauri/target/release/bundle/nsis)"
             exit 1
           fi
           mkdir release
           cp "${setup[0]}" "release/Screenshot-Sifter_${VERSION}_x64-setup.exe"
-          cp "${exe[0]}" "release/Screenshot-Sifter_${VERSION}_x64-portable.exe"
+          cp "$exe" "release/Screenshot-Sifter_${VERSION}_x64-portable.exe"
           cd release
           sha256sum -- * > SHA256SUMS.txt
           cat SHA256SUMS.txt
