@@ -11,177 +11,202 @@ deletion into the Windows Recycle Bin.
 - **Never delete on a swipe.** A left-swipe sets status `staged`. Files only move
   when the user confirms, and they go through the Recycle Bin via the `trash`
   crate. Do not add `fs::remove_file`, `remove_dir_all`, or `tauri-plugin-fs`
-  remove anywhere.
+  remove anywhere in the app. (Tests may clean up the temp folders they create
+  themselves.)
 - **No plugins for filesystem access.** Everything goes through the app's own
   commands in `src-tauri/src/commands.rs`. `capabilities/default.json` stays at
   `core:default`. If a new need appears, add a command, not a permission.
 - **The frontend stays bundler-free.** `src/` is plain ES modules loaded by
   `index.html`. No Vite, no npm runtime dependencies, no build step for the
-  frontend. `package.json` exists only for the Tauri CLI and the logic tests.
+  frontend. `package.json` exists only for the Tauri CLI and the tests.
 - **Decisions are never reset by a rescan.** The upsert in `db.rs` deliberately
   omits `status` and `decided_ms`. Keep it that way.
+- **Undo never resurrects a committed file.** `undo.rs` entries record the
+  status they set (`next`) and only apply while the row still shows it; a
+  `deleted` row is never changed by undo, `decide` or `unstage`, and the commit
+  purges its entries. Do not "simplify" undo back to restoring `prev` blindly.
+- **Forgetting a folder is database-only.** `forget_root` deletes rows (the
+  cascade takes screenshots and staged entries) and purges undo entries. It must
+  never touch the disk.
 - **Date inference is filename-first**, then creation, then modified. Modified
   time alone is wrong for copied folders, so it is the last resort.
 - **The safe option is the default in a dialog.** `confirmDialog` never binds
-  Enter to the destructive action: `modal()` focuses the first button, which is
-  *Cancel*, and the native Enter activation closes the dialog without
-  committing. Every exit path, including Escape, must call `closeModal()`, or
-  the modal stays on screen and blocks the app.
+  Enter to the destructive action: `modal()` focuses the first footer button,
+  which is *Cancel*, and the native Enter activation closes the dialog without
+  committing. Every exit path (a button, Escape, a backdrop click) goes through
+  the modal's cancel or button handlers and closes it, or the modal stays on
+  screen and blocks the app.
+- **UI text is English only**, and so is every backend log line and error
+  string (errors surface in toasts).
 
 ## Layout
 
 ```
 src/logic.js     pure, DOM-free, unit tested in tests/logic.test.mjs
-src/app.js       all DOM, gestures, keyboard, Tauri calls
-tests/gui-smoke.html   real app.js + a fake command surface, loaded by Chrome
+src/log.js       leveled logger, DOM-free; forwards warn/error through a sink
+src/icons.js     icon SVG strings, DOM-free
+src/dom.js       h(), icon(), toast, modal, confirmDialog, popover menu
+src/viewer.js    full-screen photo viewer
+src/app.js       state, views, review deck, gestures, keyboard, Tauri calls
+tests/serve.cjs        serves the repo; injects the fake backend into src/index.html
+tests/fake-backend.js  in-memory mirror of the Rust commands (also `npm run preview`)
+tests/probes.js        page-side helpers the GUI test calls
 tests/gui-smoke.cjs    CDP driver: asserts on the rendered DOM and real keys
 src-tauri/src/db.rs       schema + queries + month grouping
 src-tauri/src/scan.rs     walkdir + filename date parsing
-src-tauri/src/commands.rs the entire command surface
+src-tauri/src/undo.rs     session undo stack (stale entries are skipped)
+src-tauri/src/log.rs      file logger, one_line(), panic hook
+src-tauri/src/commands.rs the entire command surface; logic in apply_* fns
+tools/app-icon.svg        icon source for `npx tauri icon tools/app-icon.svg`
 ```
 
-`logic.js` must stay importable by `node --test`, so it cannot touch `window`,
-`document`, or anything from `__TAURI__`.
+`logic.js`, `log.js` and `icons.js` must stay importable by `node --test`, so
+they cannot touch `window`, `document`, or anything from `__TAURI__`.
+
+Commands keep their logic in plain `apply_*` functions that take `&Db` (and the
+`UndoStack`), so `tests/e2e.rs` and the unit tests run the real code. Lock order
+is always `db`, then `undo`.
 
 ## Verify before claiming done
 
 ```powershell
-npm run test:logic                          # 28 frontend logic tests
-npm run test:gui                            # 135 GUI assertions in headless Chrome
-cd src-tauri; cargo test                    # 39 unit + 2 end-to-end tests
+npm run test:logic                          # 44 frontend logic tests
+npm run test:gui                            # 189 GUI assertions in headless Chrome
+cd src-tauri; cargo test                    # 65 unit + 4 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
 ```
 
+CI runs all of them (`.github/workflows/ci.yml`), Rust on Linux and Windows.
+
 `HANDOFF.md` records the current state and the open items. Read it first in a
 fresh session.
 
-`npm run test:gui` runs the real `src/app.js` in `tests/gui-smoke.html`, which
-fakes the Rust command surface in memory, then drives it with real Chrome key
-events via CDP. It is where the rendered card, the shortcuts and the confirm
-dialog get covered. If you change a view, a shortcut, or the dialog, add a
-probe there. Chrome must be installed; the script has no npm dependencies.
+`npm run test:gui` serves the real `src/index.html` with `tests/fake-backend.js`
+and `tests/probes.js` injected, then drives `src/app.js` with real Chrome key
+events via CDP. There is deliberately no copy of the app's markup under
+`tests/`: the old harness kept one and it drifted. The fake must mirror the Rust
+semantics (statuses, queue orders, the undo stack's stale-entry rule, missing
+files kept out of queues); when a command changes, change the fake with it. If
+you change a view, a shortcut, or the dialog, add a probe and an assertion.
+Chrome or Chromium must be installed (`CHROME=` overrides the search); the
+script has no npm dependencies. `npm run preview` serves the same page for
+manual UI work.
 
 ## Diagnosing
 
 - **Frontend** logs to the console through `src/log.js` (levels debug/info/warn/
   error, plus a 500-entry ring buffer). DevTools opens with `F12` or
   `Ctrl+Shift+I`; `__sifterLog.dump()` prints the ring. `?log=debug` on the URL
-  lowers the level floor.
-- **Backend** appends to `%APPDATA%\com.hope.screenshotsifter\logs\sifter.log`
-  via `src-tauri/src/log.rs` (rotated at 2 MiB). `Ctrl+Shift+L` shows the tail
-  in a modal; the `log_read` command backs it.
+  lowers the level floor. Warnings and errors (including uncaught errors and
+  unhandled rejections) are also sent to the file log with `log_write`,
+  rate-limited, under a `ui:` scope.
+- **Backend** appends dated lines to
+  `%APPDATA%\com.hope.screenshotsifter\logs\sifter.log` via
+  `src-tauri/src/log.rs` (rotated at 2 MiB). A panic hook writes panics there
+  before the process aborts. `Ctrl+Shift+L` shows the tail in a modal; the
+  `log_read` command backs it.
 - Both are compiled into release builds. When something breaks, ask for the
   console output or the file log before guessing.
 
-## CSS gotcha
+## CSS gotchas
 
 - Author `display` rules outrank the UA `[hidden] { display: none }`, so
   `style.css` starts with `[hidden] { display: none !important; }`. Do not
   remove it: without it the modal and header buttons stay on screen and block
   the app even when they are marked `hidden`.
+- Colours are tokens at the top of `style.css`, redefined under
+  `prefers-color-scheme: dark`. Components use the tokens; a hard-coded surface
+  or text colour will break the dark theme. The photo card's info bar and the
+  viewer are the deliberate exceptions (they sit on photos).
+- Page scrollbars are hidden (`html { scrollbar-width: none }`) because they
+  flickered during swipes. The library and the pile scroll inside `#view`, which
+  has a thin themed bar; `#view.reviewing` sets `overflow: visible` so a thrown
+  card is never clipped. Toggle the class in `render()`.
 
 ## Review view
 
-- The review shows a **deck**, not a single card: `cardStack()` paints the next
-  couple of shots behind the current one (`.deck-1`, `.deck-2`) so a swipe has
-  somewhere to land. The upcoming shots are hydrated in `showCurrent()` before
-  the first render, otherwise the deck would show only one card until the
-  background preload landed.
-- The deck is absolutely positioned, so it needs a definite height from
-  somewhere. `#view` is `height: 100%` (so the chain `#view → .review → .wrap
-  → .stage → .deck` resolves) and `.deck .card` is `height: 100%`. Without both,
-  the card collapses to its 2px border and the review shows an empty area. The
-  old grid layout supplied this height for free; absolute positioning does not.
-- `.review .wrap` sets `margin: 0` to override the `.wrap` class's
-  `margin: 0 auto`. On a flex item, auto margins absorb the free space and stop
-  the wrap from stretching, which would leave the card narrow.
-- **Never size the card's image with a percentage.** It used to be
-  `max-width/max-height: 100%` as an in-flow grid item of `.imgwrap`, and that
-  constrained nothing: `.imgwrap`'s height comes from flex distribution, so the
-  percentage had no definite height to resolve against and a 2000x1500 shot
-  rendered at its full 696x522 inside a 100px frame. `.card .imgwrap img` is now
-  `position: absolute; inset: 0` and lets `object-fit: contain` do the fitting,
-  which cannot overflow whatever the container does.
+- The review shows a **deck**: `buildDeck()` paints the current card
+  (`.deck-top`, `#card`) and the next two (`.deck-1`, `.deck-2`). Each slot's
+  offset comes from `--deck-dy` / `--deck-scale` through `transform`.
+- **Cards are centred with `inset: 0; margin: auto`, not with a translate.** So
+  `transform` carries only the slot offset, and the gesture moves the card with
+  the individual `translate`, `rotate` and `scale` properties, which compose
+  with it. Never put a gesture offset into `transform` (you would have to
+  restate the slot position, which is the trap the old `translate(-50%, -50%)`
+  layout had) and never centre the cards with a transform again.
+- The deck needs a definite height from somewhere: `#view` is `height: 100%`,
+  `.review` is a flex column, `.stage` flexes, and `.deck .card` is
+  `height: 100%`. Without the chain the card collapses to its border.
+- **Gestures are delegated.** `wireStage()` binds the stage once per render;
+  every handler resolves the current top card when the event arrives
+  (`topCard()`), and a drag keeps the card it started on. Never capture the top
+  card in a closure at render time: that was a real bug, after the first
+  promotion every drag moved a detached node, so the visible card sat still and
+  the decision landed blind. The GUI test swipes twice in a row to guard it.
+- **Advancing must not re-render the deck.** `promoteDeck()` relabels the slots:
+  `.deck-1` becomes the top card and `.deck-2` moves up, both gliding there on
+  the slot transition (a drag has usually carried them most of the way already),
+  and `fillDeckTail()` fades a new card in at the back. Only the chrome
+  (`renderReviewChrome()`) updates. It checks `data-id` against the queue and
+  falls back to `showCurrent()` when the deck does not hold the expected card.
+  Do not "simplify" it into a `showCurrent()` call: a full render destroys the
+  gliding card mid-animation, which is the flicker-then-snap this replaced.
+- **Every decision exits the same way.** `decide()` throws the top card with
+  `flyOut()` (a swipe continues from where the drag left it; a key or button
+  starts from rest), and the card stops being the top card at once, so input
+  goes straight to the next one. The thrown card removes itself on
+  `transitionend`; keep `EXIT_MS` in `app.js` in step with `.card.leaving`.
+  The deck is promoted only after the write lands, so a failed write can
+  restore the queue and the tally and re-render.
+- `.deck.inert` disables pointer events for a frame after a promotion. The
+  selector has to be exactly `.deck.inert`; `deckPointerEvents()` in the GUI
+  probes asserts the *computed* value, because a typo silently drops the rule.
+- Entry animations (`enter-fade`, `enter-from-left|right|top` for undo, which
+  brings a card back from the side it left) also animate the individual
+  properties. Animations override inline styles, so `onPointerDown` removes the
+  entry class before a drag starts.
 - **The card info bar is an overlay, not a layout row.** `.card .foot` is
-  `position: absolute` at the card's bottom with a fading gradient scrim and
-  `pointer-events: none`, so the photo gets the card's full height and the bar
-  never blocks a swipe or a zoom. Do not give it `flex: 0 0 auto` or a flat
-  opaque background: that is what made it eat the photo's height.
-- The info bar's resting background **must stay a gradient**, because `onMove`
-  overrides `foot.style.background` with the drag colour in the same
-  `linear-gradient(to top, ...)` shape. A flat colour there makes the swipe tint
-  pop in as a different-looking slab.
-- During a drag the info bar carries the action colour too, not just the card
-  surface. The card's own `.tint` layer is *under* the photo (`z-index: 1` vs the
-  image's `2`), so it only shows in the letterbox margins — tinting the bar was
-  required for the swipe colour to actually read.
+  `position: absolute` at the card's bottom with a gradient scrim and
+  `pointer-events: none`, so the photo gets the card's full height. Its resting
+  background must stay a gradient, because `paintIntent()` overrides it with
+  the drag colour in the same `linear-gradient(to top, ...)` shape. It is hidden
+  on the waiting cards, whose peeking slivers would otherwise show it.
+- The card's `.tint` layer sits *under* the photo (`z-index: 1` vs the image's
+  `2`), so it only shows in the letterbox margins; tinting the info bar is what
+  makes the swipe colour read.
 - The drag shrink is driven by raw pointer distance (`SHRINK_REACH`), not by
-  `gestureVisual().progress`, which saturates at `GESTURE_THRESHOLD`. Driving it
-  from progress capped the shrink the moment the threshold was crossed, so
-  dragging further did nothing. `SHRINK_MAX` is the floor.
-- The deck advances during the drag: `onMove` interpolates `.deck-1` / `.deck-2`
-  toward the top position so the incoming card is already in place instead of
-  snapping when the decision lands. `.deck.stacking` suppresses the transition
-  while the pointer moves (otherwise it lags a frame behind); `resetStack()`
-  removes it and glides the cards back for a cancelled gesture or a failed write.
-- **Advancing must not re-render the deck.** `advanceDeck()` promotes the card
-  that is already parked under the top one: it drops the outgoing node, relabels
-  `.deck-1` as `.deck-top` (clearing its inline transform so it inherits the top
-  position with *no* animation, because it is already there), promotes `.deck-2`
-  to `.deck-1`, and appends one freshly hydrated card at the back. Only
-  `renderReviewChrome()` re-renders, which touches the progress row, actions and
-  filmstrip and leaves the stage alone.
-  - Do not "simplify" this back into a `showCurrent()` call. A full render
-    destroys the gliding card mid-animation and replaces it with a new node that
-    fades in, which is exactly the flicker-then-snap this replaced.
-  - The promoted node is not wired by `attachGestures()` (which binds to the
-    stage), so it needs `attachCardZoom()` and a click-to-viewer listener
-    attached explicitly.
-  - `advanceDeck()` falls back to `showCurrent()` whenever the DOM is not in the
-    expected shape, so a stale deck cannot wedge the review.
-  - The `.deck.inert` selector has to be exactly `.deck.inert`. A typo
-    (`..deck.inert`) silently drops the rule and the guard does nothing, and no
-    visual symptom shows up — `deckPointerEvents()` in the GUI probe asserts the
-    *computed* value for exactly this reason. Do not "simplify" a test to
-    assert the class is present/absent instead of the computed style.
-- `.card.enter` uses a single **opacity-only** `cardEnter` keyframe, and fires
-  only on a first paint (opening a queue, or jumping to a card that was not on
-  the deck). It used to animate transform across three directional keyframes,
-  which fought the deck's positioning and produced the "pops in, then snaps"
-  look. There is deliberately no entry direction any more: advancing is
-  continuous, so an entry can only mean a card that genuinely appeared.
-- `deck.inert` disables pointer events on the deck for one animation frame after
-  a promotion, so a click aimed at the card that just left cannot land on the
-  half-wired node taking its place.
-- Because the image box now fills the frame and the photo is *letterboxed*
-  inside it, the box size is not the photo size. Two places must measure the
-  content instead: `clampPan()` (bounds panning) and the zoom-anchor test.
-  `object-fit: contain` scales it as
-  `k = min(frameW / naturalW, frameH / naturalH)`.
-- `clampPan()` takes the larger of two bounds: half the content's growth, which
-  is the most translate a cursor-anchored zoom point can ever need, and half the
-  leftover frame, so a photo smaller than its frame can still be slid around.
-  A bounds-only-clamp of "scaled content minus frame" reads as zero for a
-  letterboxed photo and silently zeroes the zoom anchor.
-- Scrollbars are hidden globally (`html { scrollbar-width: none }`). During a
-  swipe the card leaves the stage, so `#view.reviewing` sets `overflow: visible`
-  to avoid clipping it or throwing scrollbars. Toggle the class in `render()`.
-- The footbar is always in the layout and expands/collapses via a `max-height`
-  transition (`.footbar.on`), so showing it never shifts the content above.
-- The swipe exit animation holds the decision until the card has animated off
-  (`state.animating`), so a swipe never flashes the "queue done" finale. A
-  keyboard/button decision fades the card out instead.
-- The queue filmstrip (`.filmstrip`) shows the previous few decisions and the
-  next few photos; `jumpTo(index)` moves the cursor so a pass can be walked.
-- The deck cards are absolutely positioned and centred via
-  `translate(-50%, -50%)`. The swipe gesture sets `cardEl.style.transform`
-  inline, so every one of those transforms must repeat the
-  `translate(-50%, -50%)` prefix or the card jumps to the corner.
-- Clicking the image opens the **photo viewer** (`.viewer`), a full-screen
-  overlay with scroll-zoom, drag-pan and double-click toggle. While it is open
-  it owns the keyboard: `Esc` closes, arrows pan, `+`/`-` zoom. The viewer is
-  created dynamically in `openViewer()`, so it needs no markup in `index.html`.
+  `gestureVisual().progress`, which saturates at `GESTURE_THRESHOLD`.
+  `SHRINK_MAX` is the floor. The tilt (`dragTilt()`) follows the horizontal
+  offset only and flips when the card is grabbed below its middle.
+- **Never size the card's image with a percentage.** `.card .imgwrap img` is
+  `position: absolute; inset: 0` and lets `object-fit: contain` fit it. The
+  photo is letterboxed, so the box is not the photo: pan bounds use
+  `containedSize()` and `panLimit()` from `logic.js` (the card and the viewer
+  share them). `panLimit()` takes the larger of half the content's growth and
+  half the leftover frame; a "scaled content minus frame" clamp reads as zero
+  for a letterboxed photo and kills the zoom anchor.
+- The zoom controller lives on the card node (`zoomOf(card)`), so it follows the
+  card through a promotion. Past `ZOOM_PAN_THRESHOLD` a drag pans and the arrow
+  keys pan instead of deciding.
+- **The queue defers a skipped card once per pass** (`ReviewQueue.deferCurrent`).
+  Skipping it again, or skipping the last card, moves on; otherwise a pass of
+  skips never ended and Skip looked broken on the last card. Undoing a skip
+  moves the card back to the cursor (`focusId`), restoring the pre-skip order;
+  seeking to the back used to end the pass and drop everything in between.
+- Decision keys ignore auto-repeat (`e.repeat`): one press, one decision.
+- The last decision of a pass waits `EXIT_MS` before `finishPass()` renders the
+  summary, so the thrown card is never cut off by the summary.
+- The footer bar (staged count + commit) is hidden during a review; the header
+  badge carries the count there. It always stays in the layout and
+  expands/collapses via `max-height`, so showing it never shifts the content.
+- The filmstrip (`paintFilmstrip()`) shows a window of the queue around the
+  cursor and hydrates any item it does not have yet; `jumpTo(index)` moves the
+  cursor so a pass can be walked.
+- Clicking the card opens the viewer after the double-click interval (a
+  double-click zooms instead); `Space` opens it too. The viewer owns the
+  keyboard while open (`viewerKeydown`), and is created on demand, so it needs
+  no markup in `index.html`.
 
 ## Environment notes
 
@@ -192,17 +217,22 @@ probe there. Chrome must be installed; the script has no npm dependencies.
 - `cargo-tauri` is not installed globally. Use the local CLI: `npm run tauri ...`
   or `npx tauri ...`.
 - `vswhere` lives at `C:\Tools\vswhere.exe`, not the default Program Files path.
+- On Linux (CI, cloud sessions) the Tauri crates need `libwebkit2gtk-4.1-dev`,
+  `libgtk-3-dev`, `librsvg2-dev` and `libayatana-appindicator3-dev`; the e2e
+  tests then use the freedesktop trash.
 - Tauri generates `src-tauri/gen/schemas/`, which is gitignored; the capability
   file references it via `$schema` for editor completion only.
-- Reusable icon source: `tools/make-icon.ps1` then `npx tauri icon`. The source
-  PNG is gitignored; the generated `src-tauri/icons/` files are not.
+- Icons: edit `tools/app-icon.svg`, then `npx tauri icon tools/app-icon.svg`
+  regenerates every size in `src-tauri/icons/`. The glyph is the `sieve` mark
+  from `src/icons.js`; keep the two in step.
 
 ## Style
 
-- UI text is English only. Do not reintroduce Turkish strings. A few backend
-  log/error strings are still Turkish (`db açıldı`, `geçersiz kuyruk`,
-  `açılamadı`); they are tracked in `HANDOFF.md` and are not UI copy.
 - Visual tokens live at the top of `src/style.css` and deliberately mirror the
   existing single-page QoL apps (`--accent:#1d4ed8`, `--line`, `--radius:12px`,
-  the same soft gradient wash). Keep new colours in that palette.
+  the soft gradient wash). Keep new colours in that palette, and give every new
+  colour a dark-theme value.
+- Avoid generic dashboard furniture (rows of identical stat tiles, an icon in
+  a tinted circle on every element): say the number in a sentence, or show it
+  where it is used, as the library's overview line and stacked bar do.
 - Keep diffs minimal. No drive-by refactors.
