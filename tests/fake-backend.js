@@ -539,7 +539,22 @@
         const fn = handlers[cmd];
         if (!fn) throw new Error("unmocked command: " + cmd);
         if (cmd === "items" && faults.itemsDelayMs) await new Promise((r) => setTimeout(r, faults.itemsDelayMs));
-        if (cmd === "commit_deletes" && faults.commitDelayMs) await new Promise((r) => setTimeout(r, faults.commitDelayMs));
+        if (cmd === "commit_deletes" && faults.commitDelayMs) {
+          // Simulate commit progress events
+          const staged = inRoot(args.rootId).filter((s) => s.status === "staged");
+          const steps = Math.max(3, Math.ceil(staged.length / 5));
+          for (let i = 0; i < steps; i++) {
+            const current = Math.floor((i / steps) * staged.length);
+            await new Promise((r) => setTimeout(r, faults.commitDelayMs / steps));
+            if (staged[current]) {
+              emit("commit-progress", {
+                current,
+                total: staged.length,
+                current_file: staged[current].name,
+              });
+            }
+          }
+        }
         if (cmd === "scan_root" && faults.scanDelayMs) {
           // A slow scan reports progress the way scan_root's events do.
           for (const found of [37, 412, 1280]) {

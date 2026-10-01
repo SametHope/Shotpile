@@ -84,6 +84,14 @@ pub struct ScanProgress {
     pub found: usize,
 }
 
+/// Payload of the `commit-progress` event: files deleted so far.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommitProgress {
+    pub current: usize,
+    pub total: usize,
+    pub current_file: String,
+}
+
 /// How often `scan_root` reports progress. The walk finds thousands of files a
 /// second on a fast disk; the UI only needs to look alive.
 const PROGRESS_EVERY: std::time::Duration = std::time::Duration::from_millis(120);
@@ -778,16 +786,46 @@ pub fn apply_commit(
 ///
 /// Reading the staged list and writing the results back are fast queries done
 /// under the lock; the Recycle Bin calls in between (which shell out and can
-/// block) run on a worker without it.
+/// block) run on a worker without it. Progress events are emitted periodically.
 #[tauri::command]
 pub async fn commit_deletes(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     root_id: Option<i64>,
 ) -> Result<CommitReport, String> {
     let rows = lock(&state.db).staged_rows(root_id)?;
-    let outcome = tauri::async_runtime::spawn_blocking(move || trash_staged(rows))
-        .await
-        .map_err(|e| e.to_string())?;
+    let total = rows.len();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let mut outcome = TrashOutcome::default();
+        for (idx, row) in rows.into_iter().enumerate() {
+            // Emit progress every 5 files or at the end
+            if idx % 5 == 0 || idx == total - 1 {
+                let _ = app.emit(
+                    "commit-progress",
+                    CommitProgress {
+                        current: idx,
+                        total,
+                        current_file: row.name.clone(),
+                    },
+                );
+            }
+            match trash::delete(&row.path) {
+                Ok(()) => outcome.moved.push(row),
+                Err(e) => {
+                    crate::log::warn("commit", &format!("{}: {e}", row.name));
+                    outcome.failed.push(FailedItem {
+                        id: row.id,
+                        gone: !Path::new(&row.path).exists(),
+                        name: row.name,
+                        error: e.to_string(),
+                    });
+                }
+            }
+        }
+        outcome
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     let db = lock(&state.db);
     apply_commit(&db, &mut lock(&state.undo), root_id, outcome)
 }

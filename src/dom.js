@@ -131,7 +131,7 @@ export function modalOpen() {
  * safe option; Tab is kept inside the dialog; focus returns to where it came
  * from on close.
  */
-export function modal({ title, body, actions, wide = false, onCancel = null, cls = "" }) {
+export function modal({ title, body, actions, wide = false, onCancel = null, cls = "", blocking = false }) {
   const p = modalParts();
   if (!modalOpen()) modalReturnFocus = document.activeElement;
   // The toast sits above the backdrop, so its action (Undo, Details) would
@@ -145,16 +145,20 @@ export function modal({ title, body, actions, wide = false, onCancel = null, cls
       h("button", {
         class: `btn ${a.variant || ""}`.trim(),
         onclick: () => {
-          closeModal();
+          if (!blocking) closeModal();
           a.onClick?.();
         },
       }, a.icon ? icon(a.icon, { size: 16 }) : null, a.label)
     )
   );
   p.box.className = `modal${wide ? " wide" : ""}${cls ? ` ${cls}` : ""}`;
-  modalCancel = onCancel;
+  p.box.setAttribute("data-blocking", blocking);
+  modalCancel = blocking ? null : onCancel;
   p.backdrop.hidden = false;
   p.foot.querySelector("button")?.focus();
+
+  // Return a function to close the modal
+  return () => closeModal();
 }
 
 export function closeModal() {
@@ -177,7 +181,7 @@ function cancelModal() {
 export function initModal() {
   const p = modalParts();
   p.backdrop.addEventListener("click", (e) => {
-    if (e.target === p.backdrop) cancelModal();
+    if (e.target === p.backdrop && p.box.getAttribute("data-blocking") !== "true") cancelModal();
   });
   // Capture phase, so the dialog owns these keys before the review shortcuts.
   document.addEventListener("keydown", (e) => {
@@ -185,7 +189,7 @@ export function initModal() {
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
-      cancelModal();
+      if (p.box.getAttribute("data-blocking") !== "true") cancelModal();
       return;
     }
     if (e.key !== "Tab") return;

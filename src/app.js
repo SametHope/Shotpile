@@ -1564,8 +1564,40 @@ async function commit() {
   state.busy = true;
   document.getElementById("btn-pile-commit")?.setAttribute("disabled", "");
   log.info("commit", `moving ${count} files to the ${binName()}`);
+
+  // Show progress modal for large commits
+  const showProgress = count > 20;
+  let progressClose = null;
+  if (showProgress) {
+    const progressEl = h("div", { class: "commit-progress" },
+      h("div", { class: "progress-stat" }, h("b", { id: "progress-count", text: "0 of " + count })),
+      h("div", { class: "progress-file", id: "progress-file", text: "Starting..." }),
+      h("div", { class: "progress-bar-wrap" },
+        h("div", { class: "progress-bar", id: "progress-bar", style: "width: 0%" })));
+    progressClose = modal({
+      title: "Moving files",
+      body: [progressEl],
+      blocking: true,
+      actions: [],
+    });
+
+    // Listen for progress events
+    const unlistenProgress = await __TAURI__.event.listen("commit-progress", (e) => {
+      const { current, total, current_file } = e.payload;
+      const percent = Math.round((current / total) * 100);
+      document.getElementById("progress-count").textContent = (current + 1) + " of " + total;
+      document.getElementById("progress-file").textContent = current_file;
+      document.getElementById("progress-bar").style.width = percent + "%";
+    });
+    // Clean up listener after this commit
+    state._unlisten = unlistenProgress;
+  }
+
   try {
     const report = await api("commit_deletes", { rootId: state.rootId });
+    if (progressClose) progressClose();
+    if (state._unlisten) state._unlisten();
+    delete state._unlisten;
     reportCommit(report);
     // The files are moved by now; a failed reload must not report otherwise.
     try {
@@ -1576,6 +1608,9 @@ async function commit() {
     state.busy = false;
     render();
   } catch (e) {
+    if (progressClose) progressClose();
+    if (state._unlisten) state._unlisten();
+    delete state._unlisten;
     log.error("commit", "couldn't move files", e);
     toast(`Couldn't move the files: ${e}`, { tone: "error" });
   } finally {
