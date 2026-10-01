@@ -10,7 +10,6 @@ import {
   ACTION,
   DATE_SOURCE_LABELS,
   GESTURE_THRESHOLD,
-  MAX_ZOOM,
   ReviewQueue,
   ZOOM_PAN_THRESHOLD,
   anchorZoom,
@@ -587,7 +586,9 @@ function card(shot, top = false) {
     h("div", { class: "stamp up", text: "Skip" }),
     imgwrap,
     h("div", { class: "foot" },
-      h("div", { class: "fname", text: shot.name }),
+      // The name ellipsizes to keep the info bar one line, so the full text lives in
+    // the tooltip.
+    h("div", { class: "fname", text: shot.name, title: shot.name }),
       h("div", { class: "fmeta" },
         when,
         h("span", { text: formatBytes(shot.size) }),
@@ -597,10 +598,13 @@ function card(shot, top = false) {
     )
   );
 
-  if (top && img) {
-    state.cardZoom = attachCardZoom(node, imgwrap, img);
-  }
-  node.classList.add(`enter-${state.advanceDir || "left"}`);
+  // Always assigned, including the null case: a card with no viewable image
+  // must not inherit the previous card's zoom, or the gesture code would treat
+  // it as pannable and the drag would decide nothing.
+  state.cardZoom = top && img ? attachCardZoom(node, imgwrap, img) : null;
+  // Only the card actually entering needs a direction class; deck cards behind
+  // it would otherwise carry a stale one.
+  if (top && state.entering) node.classList.add(`enter-${state.advanceDir || "left"}`);
   return node;
 }
 
@@ -649,6 +653,17 @@ function attachCardZoom(cardEl, imgwrap, img) {
 
   // Keep the image from being dragged entirely off the card once it is bigger
   // than the frame.
+  //
+  // The image box now fills `.imgwrap` and `object-fit: contain` letterboxes the
+  // photo inside it, so the box is NOT the photo. The bounds below are taken
+  // from the visible content, and there are two of them:
+  //
+  //   - half the content's growth, because that is the most translate an
+  //     anchored zoom point can ever need. Without it the clamp zeroes the
+  //     anchor on a letterboxed photo, where scaled-content-minus-frame goes
+  //     negative and a naive clamp reads it as "no panning possible".
+  //   - half the leftover frame, so a photo smaller than the frame can still be
+  //     slid around without ever leaving it.
   const clampPan = () => {
     if (zoom.scale <= 1.001) {
       zoom.x = 0;
@@ -656,10 +671,22 @@ function attachCardZoom(cardEl, imgwrap, img) {
       return;
     }
     const rect = imgwrap.getBoundingClientRect();
-    const w = img.offsetWidth || rect.width;
-    const hgt = img.offsetHeight || rect.height;
-    const maxX = Math.max(0, (w * zoom.scale - rect.width) / 2);
-    const maxY = Math.max(0, (hgt * zoom.scale - rect.height) / 2);
+    const nw = img.naturalWidth;
+    const nh = img.naturalHeight;
+    let w = rect.width;
+    let hgt = rect.height;
+    if (nw && nh && rect.width && rect.height) {
+      const k = Math.min(rect.width / nw, rect.height / nh);
+      w = nw * k;
+      hgt = nh * k;
+    }
+    const limit = (content, frame) => Math.max(
+      0,
+      (content * zoom.scale - content) / 2,
+      (frame - content * zoom.scale) / 2
+    );
+    const maxX = limit(w, rect.width);
+    const maxY = limit(hgt, rect.height);
     zoom.x = Math.min(maxX, Math.max(-maxX, zoom.x));
     zoom.y = Math.min(maxY, Math.max(-maxY, zoom.y));
   };
@@ -686,6 +713,7 @@ function attachCardZoom(cardEl, imgwrap, img) {
   state.cardZoom = {
     zoom,
     apply,
+    clampPan,
     panning: () => zoom.scale >= ZOOM_PAN_THRESHOLD,
   };
   apply();
@@ -1253,6 +1281,10 @@ function attachGestures() {
       const z = state.cardZoom.zoom;
       z.x = p.ox + (e.clientX - p.px);
       z.y = p.oy + (e.clientY - p.py);
+      // Clamped on every move, not just after a zoom: without it the photo
+      // could be dragged clean off the card and the clamp would only bite on
+      // the next wheel tick.
+      state.cardZoom.clampPan();
       if (Math.abs(e.clientX - p.px) > 4 || Math.abs(e.clientY - p.py) > 4) state.dragged = true;
       state.cardZoom.apply();
       return;

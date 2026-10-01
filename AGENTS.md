@@ -46,8 +46,8 @@ src-tauri/src/commands.rs the entire command surface
 ## Verify before claiming done
 
 ```powershell
-npm run test:logic                          # 22 frontend logic tests
-npm run test:gui                            # 75 GUI assertions in headless Chrome
+npm run test:logic                          # 28 frontend logic tests
+npm run test:gui                            # 113 GUI assertions in headless Chrome
 cd src-tauri; cargo test                    # 39 unit + 2 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
@@ -93,6 +93,24 @@ probe there. Chrome must be installed; the script has no npm dependencies.
 - `.review .wrap` sets `margin: 0` to override the `.wrap` class's
   `margin: 0 auto`. On a flex item, auto margins absorb the free space and stop
   the wrap from stretching, which would leave the card narrow.
+- **Never size the card's image with a percentage.** It used to be
+  `max-width/max-height: 100%` as an in-flow grid item of `.imgwrap`, and that
+  constrained nothing: `.imgwrap`'s height comes from flex distribution, so the
+  percentage had no definite height to resolve against and a 2000x1500 shot
+  rendered at its full 696x522 inside a 100px frame. The info bar then covered
+  422px of the photo. `.card .imgwrap img` is now `position: absolute; inset: 0`
+  and lets `object-fit: contain` do the fitting, which cannot overflow whatever
+  the container does. `tests/gui-smoke.cjs` asserts the overlap is zero.
+- Because the image box now fills the frame and the photo is *letterboxed*
+  inside it, the box size is not the photo size. Two places must measure the
+  content instead: `clampPan()` (bounds panning) and the zoom-anchor test.
+  `object-fit: contain` scales it as
+  `k = min(frameW / naturalW, frameH / naturalH)`.
+- `clampPan()` takes the larger of two bounds: half the content's growth, which
+  is the most translate a cursor-anchored zoom point can ever need, and half the
+  leftover frame, so a photo smaller than its frame can still be slid around.
+  A bounds-only-clamp of "scaled content minus frame" reads as zero for a
+  letterboxed photo and silently zeroes the zoom anchor.
 - Scrollbars are hidden globally (`html { scrollbar-width: none }`). During a
   swipe the card leaves the stage, so `#view.reviewing` sets `overflow: visible`
   to avoid clipping it or throwing scrollbars. Toggle the class in `render()`.

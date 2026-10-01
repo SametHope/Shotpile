@@ -258,28 +258,66 @@ const CTRL_SHIFT = 2 | 8;
 
   // Zoom is anchored at the cursor: the pixel under the cursor must stay under
   // the cursor. Measured from 100% so there is no carried-over panning.
+  //
+  // The element box fills the frame and the photo is letterboxed inside it by
+  // `object-fit: contain`, so the box is NOT the photo. Measuring the box would
+  // report drift even when the anchoring is perfect. Measure the photo: take
+  // the box, undo the current zoom to recover the untransformed box, work out
+  // the contained content size, then re-apply the zoom about the centre
+  // (`transform-origin: center`).
   const anchor = await probe(`(() => {
     window.__sifterTest.resetCardZoom();
     const img = document.querySelector('#card .imgwrap img');
     const wrap = document.querySelector('#card .imgwrap');
-    const w = wrap.getBoundingClientRect();
-    const cx = w.left + w.width * 0.72, cy = w.top + w.height * 0.4;
-    const before = img.getBoundingClientRect();
-    // Which fraction across the image sits under the cursor right now.
+    const contentRect = () => {
+      const b = img.getBoundingClientRect();
+      const m = new DOMMatrixReadOnly(getComputedStyle(img).transform);
+      const scale = m.a || 1;
+      const bw = b.width / scale, bh = b.height / scale;
+      const k = Math.min(bw / img.naturalWidth, bh / img.naturalHeight);
+      const cw = img.naturalWidth * k * scale, ch = img.naturalHeight * k * scale;
+      const ccx = b.left + b.width / 2, ccy = b.top + b.height / 2;
+      return { left: ccx - cw / 2, top: ccy - ch / 2, width: cw, height: ch, cx: ccx, cy: ccy };
+    };
+    const before = contentRect();
+    // Put the cursor ON the photo, not at a fraction of the frame. A wide
+    // screenshot is letterboxed, so most of the frame is empty margin and there
+    // is no pixel under the cursor to anchor.
+    const cx = before.left + before.width * 0.72, cy = before.cy;
+    // Which fraction across the photo sits under the cursor right now.
     const frac = (cx - before.left) / before.width;
     wrap.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, deltaY: -100 }));
-    const after = img.getBoundingClientRect();
+    const after = contentRect();
     // Where that same pixel ended up.
     const landed = after.left + frac * after.width;
-    return { drift: Math.round(landed - cx), cx: Math.round(cx), frac: Number(frac.toFixed(3)), beforeW: Math.round(before.width), afterW: Math.round(after.width) };
+    const landedY = after.top + ((cy - before.top) / before.height) * after.height;
+    return {
+      drift: Number((landed - cx).toFixed(3)), driftY: Number((landedY - cy).toFixed(3)),
+      cx: Number(cx.toFixed(2)), frac: Number(frac.toFixed(4)),
+      beforeW: Number(before.width.toFixed(2)), afterW: Number(after.width.toFixed(2)),
+      boxW: Number(wrap.getBoundingClientRect().width.toFixed(2)),
+    };
   })()`);
-  ok("zoom anchors on the cursor, not the corner", Math.abs(anchor.drift) < 12, JSON.stringify(anchor));
+  ok("zoom anchors on the cursor, not the corner", Math.abs(anchor.drift) < 4 && Math.abs(anchor.driftY) < 4, JSON.stringify(anchor));
+  ok("the anchored point is genuinely on the photo", anchor.frac > 0 && anchor.frac < 1, `frac ${anchor.frac}`);
+  ok("zooming in grows the photo", anchor.afterW > anchor.beforeW, `${anchor.beforeW} -> ${anchor.afterW}`);
 
   // Reset before the tests that follow, which need a swipe-able card again.
   await js("p.resetCardZoom();");
   ok("resetting restores 100% and swiping", (await probe("p.cardZoomScale()")) === 1 && (await probe("p.cardIsPannable()")) === false, String(await probe("p.cardZoomScale()")));
   const nat = await probe("p.imgNatural()");
   ok("the card image loads at full size", nat && nat.w > 100, JSON.stringify(nat));
+
+  // The card's info bar must never cover the photo. It did once: the image was
+  // sized with `max-height: 100%` on an in-flow grid item, which resolved
+  // against nothing, so a 2000x1500 shot rendered 696x522 inside a 100px frame
+  // and the foot covered 422px of it.
+  const geo = await probe("p.cardGeometry()");
+  ok("the image is fully visible inside its frame", geo && geo.imgOverflowsWrap === 0, JSON.stringify(geo));
+  ok("the info bar does not cover the image", geo && geo.imgHiddenByFoot === 0, geo ? `overlap ${geo.imgHiddenByFoot}px` : "no card");
+  ok("the image does not spill out of the card", geo && geo.imgOverflowsCard === 0, geo ? `over by ${geo.imgOverflowsCard}px` : "no card");
+  ok("the info bar stays a small share of the card", geo && geo.footShare <= 0.3, geo ? `foot is ${Math.round(geo.footShare * 100)}% of the card` : "no card");
+  ok("the name does not wrap", geo && geo.fnameLines === 1, geo ? `name wraps to ${geo.fnameLines} lines` : "no card");
 
   // ---- photo viewer ----
   await js("p.openViewer();");

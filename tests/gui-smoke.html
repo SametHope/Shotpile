@@ -246,10 +246,6 @@
       const n = $(".deck-top .fname");
       return n ? n.textContent.trim() : null;
     },
-    cardExt: () => {
-      const m = $(".card .fmeta");
-      return m ? m.textContent.replace(/\s+/g, " ").trim() : null;
-    },
     // "1 / 3" comes from the last span of the progress row.
     progress: () => {
       const row = $(".progress-row");
@@ -260,18 +256,11 @@
       const counter = spans.find((s) => /^\d+\s*\/\s*\d+$/.test(s.textContent.trim()));
       return counter ? counter.textContent.trim() : null;
     },
-    deferred: () => {
-      const chip = $(".progress-row .chip.skipped");
-      return chip ? chip.textContent.trim() : null;
-    },
-    unviewableShown: () => !!$(".card .noimg"),
     monthRows: () => [...document.querySelectorAll(".month")].map((n) => n.textContent.replace(/\s+/g, " ").trim()),
-    finaleShown: () => !!$(".finale"),
     stagedCount: () => $("#staged-n").textContent,
     stagedBtn: () => $("#btn-staged").textContent,
     footbarOn: () => $("#footbar").classList.contains("on"),
     modalHidden: () => $("#modal").hidden,
-    modalTitle: () => { const n = $("#modal-title"); return n ? n.textContent.trim() : null; },
     focusedLabel: () => {
       const a = document.activeElement;
       return a && a !== document.body ? a.textContent.trim() : null;
@@ -289,11 +278,9 @@
       if (btn) btn.click();
       return !!btn;
     },
-    stagedCountInDb: () => [...shots.values()].filter((s) => s.status === "staged").length,
     setFailNextDecide: (v) => { FAILS.__failNextDecide = v; },
     setFailNextSummary: (v) => { failNextSummary = v; },
     setUndoOutOfScope: (v) => { undoOutOfScope = v; },
-    logHas: (needle) => LOG.includes(needle),
     logFilter: (prefix) => LOG.filter((l) => l.startsWith(prefix)),
     devtoolsCalled: () => LOG.includes("devtools"),
     logModalText: () => { const n = $(".logview"); return n ? n.textContent.trim() : null; },
@@ -304,7 +291,6 @@
         s.decided_ms = null;
       }
     },
-    resetRoots: () => { roots.length = 0; },
     addFolder: () => window.__sifterTest.addFolder(),
     resetToSetup: () => window.__sifterTest.resetToSetup(),
     // Deck / viewer / thumbnail probes.
@@ -319,22 +305,34 @@
       const r = c.getBoundingClientRect();
       return { w: Math.round(r.width), h: Math.round(r.height) };
     },
-    layout: () => {
-      const g = (s) => {
-        const el = document.querySelector(s);
-        if (!el) return null;
-        const r = el.getBoundingClientRect();
-        return { w: Math.round(r.width), h: Math.round(r.height) };
-      };
+    // --- card geometry: is the image fully visible, or does the info bar
+    // cover it? ---
+    cardGeometry: () => {
+      const card = document.querySelector("#card");
+      const img = card?.querySelector(".imgwrap img");
+      const wrap = card?.querySelector(".imgwrap");
+      const foot = card?.querySelector(".foot");
+      if (!card || !img || !wrap || !foot) return null;
+      const c = card.getBoundingClientRect();
+      const i = img.getBoundingClientRect();
+      const w = wrap.getBoundingClientRect();
+      const f = foot.getBoundingClientRect();
+      const fname = card.querySelector(".fname");
+      const r = (x) => ({ top: Math.round(x.top), bottom: Math.round(x.bottom), left: Math.round(x.left), right: Math.round(x.right), h: Math.round(x.height), w: Math.round(x.width) });
       return {
-        view: g("#view"),
-        stage: g(".stage"),
-        card: g(".deck .deck-top"),
+        card: r(c), img: r(i), wrap: r(w), foot: r(f),
+        // How much of the card the info bar takes.
+        footShare: +(f.height / c.height).toFixed(3),
+        // Does the image spill past the frame it is supposed to sit in?
+        imgOverflowsWrap: +(Math.max(0, i.bottom - w.bottom) + Math.max(0, i.top - w.top)).toFixed(1),
+        imgHiddenByFoot: +(Math.max(0, i.bottom - f.top)).toFixed(1),
+        imgOverflowsCard: +(Math.max(0, i.bottom - c.bottom)).toFixed(1),
+        fnameLines: fname ? Math.round(fname.getBoundingClientRect().height / 20) : 0,
       };
     },
     imgNatural: () => {
-      const img = document.querySelector(".deck .card img");
-      return img ? { w: img.naturalWidth, h: img.naturalHeight, complete: img.complete } : null;
+      const img = document.querySelector("#card .imgwrap img");
+      return img ? { w: img.naturalWidth, h: img.naturalHeight } : null;
     },
     monthThumbCount: () => document.querySelectorAll(".month .thumbs img").length,
     viewerOpen: () => !!document.getElementById("viewer"),
@@ -422,7 +420,6 @@
       const m = /scale\(([\d.]+)\)/.exec(i?.style.transform || "");
       return m ? Number(m[1]) : 1;
     },
-    cardZoomTransform: () => document.querySelector("#card .imgwrap img")?.style.transform || "",
     cardIsPannable: () => document.querySelector("#card")?.classList.contains("pannable") || false,
     zoomReadout: () => document.querySelector(".zoom-readout")?.textContent || null,
     dateSourceInMeta: () => {
@@ -440,11 +437,6 @@
     delGridCount: () => document.querySelectorAll(".del-cell").length,
     delGridNames: () => [...document.querySelectorAll(".del-cell figcaption")].map((f) => f.textContent.trim()),
     delModalWide: () => document.querySelector("#modal .modal")?.classList.contains("wide") || false,
-    delModalHidden: () => document.getElementById("modal").hidden,
-    closeDeleteConfirm: () => {
-      document.querySelector("#modal-foot button")?.click();
-      return true;
-    },
   };
   </script>
   <script type="module" src="../src/app.js"></script>

@@ -383,9 +383,9 @@ main {
   left: 50%;
   top: 50%;
   width: min(940px, 100%);
-  /* A definite height is required: with `auto` the image's max-height:100%
-     chain (image -> imgwrap -> card) cannot resolve and the card collapses to
-     its border. The old grid layout supplied this height for free. */
+  /* A definite height is required: the card is absolutely positioned, so
+     nothing in the chain gives it a height and it would collapse to its
+     border. The old grid layout supplied this height for free. */
   height: 100%;
   max-height: 100%;
   transform: translate(-50%, -50%) translateY(var(--deck-dy, 0)) scale(var(--deck-scale, 1));
@@ -416,8 +416,9 @@ main {
 .card.dragging { cursor: grabbing; }
 .card.settling { transition: transform .22s var(--ease); }
 
-/* Drag tint: sits over the card surface but under the photo, so the card
-   changes colour while the image itself stays mostly untinted. */
+/* Drag tint: above the card surface but *below* the photo (`.card img` is
+   z-index 2, this is 1), so the card and its letterboxed margins change colour
+   while the screenshot itself stays untinted. */
 .card .tint {
   position: absolute;
   inset: 0;
@@ -428,17 +429,12 @@ main {
   border-radius: inherit;
 }
 
-.card img {
-  position: relative;
-  z-index: 0;
-}
-
 .card .imgwrap {
   flex: 1 1 auto;
   min-height: 0;
+  position: relative;
   display: grid;
   place-items: center;
-  position: relative;
   overflow: hidden;
   /* A soft solid wash instead of a hard checkerboard: a small image would
      otherwise sit in a huge transparent-pattern area and read as excessive. */
@@ -447,13 +443,27 @@ main {
 }
 
 .card.zoomed .imgwrap { cursor: grab; }
-.card.zoomed.pannable .imgwrap { cursor: grab; }
 
-.card img {
-  max-width: 100%;
-  max-height: 100%;
+/* The image fills the frame outright and `object-fit: contain` letterboxes the
+   photo inside it.
+
+   This replaced `max-width/max-height: 100%` on an in-flow grid item, which
+   constrained nothing here: the grid area's height comes from flex
+   distribution, so the percentage had no definite height to resolve against and
+   a 2000x1500 shot rendered at its full 696x522 size inside a 100px frame. The
+   info bar then covered 422px of the photo. Filling the frame and letting
+   object-fit do the fitting cannot overflow, whatever the container does.
+
+   `transform-origin: center` is the zoom anchor, and it stays correct because
+   the box is centred in `.imgwrap`. */
+.card .imgwrap img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   display: block;
+  z-index: 2;
   transform-origin: center;
   will-change: transform;
   -webkit-user-drag: none;
@@ -472,15 +482,9 @@ main {
   transition: opacity .12s;
 }
 
+/* `.on` is toggled from JS when the card is actually zoomed past 100%, so the
+   pill only appears once it has something to say. */
 .zoom-readout.on { opacity: 1; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-
-/* `.on` is set from JS when the card is actually zoomed past 100%, so the pill
-   is only visible when it has something to say. */
-.zoom-readout.on {
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-weight: 600;
-}
 
 .card .noimg {
   padding: 40px 24px;
@@ -497,7 +501,8 @@ main {
 .stamp {
   position: absolute;
   top: 14px;
-  z-index: 2;
+  /* Above the photo (z 2) so a stamp stays legible over any screenshot. */
+  z-index: 3;
   padding: 7px 14px;
   border-radius: 9px;
   font-weight: 800;
@@ -542,27 +547,37 @@ main {
 .card.enter.enter-right { animation: cardEnterRight .26s var(--ease); }
 .card.enter.enter-up { animation: cardEnterUp .26s var(--ease); }
 
+/* One compact row. This used to be a two-row grid taking 59px, which was 37%
+   of the card's height on a short window - the photo paid for it in lost
+   pixels. The name now ellipsizes (full text in the tooltip) and never wraps,
+   so a long filename cannot eat the frame either. */
 .card .foot {
   flex: 0 0 auto;
   border-top: 1px solid var(--line);
-  padding: 9px 13px;
+  padding: 7px 12px;
   background: #fbfcfe;
-  display: grid;
-  gap: 2px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
 }
 
 .card .fname {
+  flex: 1 1 auto;
+  min-width: 0;
   font-weight: 600;
-  word-break: break-all;
   font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .card .fmeta {
+  flex: 0 0 auto;
   color: var(--muted);
   font-size: 12px;
   display: flex;
   gap: 8px;
-  flex-wrap: wrap;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
