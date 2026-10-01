@@ -320,6 +320,13 @@ Not built yet, roughly in this order:
   swipes by direction, undos, app launches, time spent reviewing and more,
   viewable and resettable from Options, possibly with a small infographic
   window later.
+- Open already sorted months to review or delete what was kept.
+- A resizable filmstrip: drag its top edge up to shrink the deck a little and
+  get larger previews of the upcoming photos.
+- Lighter blur on the card info bar, only behind the bottom-left and
+  bottom-right text and not across the middle.
+- A clearer look for the "deleted" part of the progress bars, for example a
+  stripe, so finished work does not read as empty next to the green and red.
 - Possible later: keyboard navigation in the library, a filename filter inside
   a review, bulk restore from the pile, a clearer report when a commit cannot
   delete some files, and duplicate detection.
