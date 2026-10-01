@@ -282,6 +282,10 @@ async function openQueue(scope, month = null, label = "") {
   state.filter = "";
   state.scope = { scope, month, label };
   state.view = "review";
+  state.reviewStartMs = Date.now();
+  await api("incr_counter", { name: "interaction:review_opened", amount: 1 }).catch((e) =>
+    log.warn("review", `couldn't track view: ${e}`)
+  );
   await showCurrent({ enter: "fade" });
 }
 
@@ -320,6 +324,16 @@ function preload() {
 function backToMonths() {
   // Leaving a pass mid-review is fine; decisions are already saved.
   closeViewer();
+  // Track review time in seconds
+  if (state.reviewStartMs !== undefined) {
+    const elapsedSeconds = Math.floor((Date.now() - state.reviewStartMs) / 1000);
+    if (elapsedSeconds > 0) {
+      api("incr_counter", { name: "review:time_seconds", amount: elapsedSeconds }).catch((e) =>
+        log.warn("review", `couldn't track time: ${e}`)
+      );
+    }
+    state.reviewStartMs = undefined;
+  }
   state.view = "months";
   state.card = null;
   render();
@@ -1143,6 +1157,9 @@ function zoomOf(card) {
 
 function openShotViewer(shot, card = null) {
   if (!shot?.viewable || shot.missing) return;
+  api("incr_counter", { name: "interaction:files_viewed", amount: 1 }).catch((e) =>
+    log.warn("viewer", `couldn't track view: ${e}`)
+  );
   openViewer(shot, { src: convertFileSrc(shot.path), inherit: zoomOf(card)?.share() || null });
 }
 
@@ -1414,7 +1431,12 @@ async function decide(action, { via = "key", from = null, saved = null } = {}) {
   let updated;
   try {
     // A redo has already written the decision; only the card has to move.
-    updated = saved || (await api("decide", { id: shot.id, kind: action }));
+    const params = { id: shot.id, kind: action };
+    if (from?.dx !== undefined && from?.dy !== undefined) {
+      params.swipe_dx = from.dx;
+      params.swipe_dy = from.dy;
+    }
+    updated = saved || (await api("decide", params));
   } catch (e) {
     state.deciding = false;
     state.queue.restore(before);
@@ -2193,28 +2215,34 @@ function showOptions() {
     h("button", { class: "btn sm", onclick: () => reveal(target) }, icon("folder", { size: 15 }), "Open"));
   const fact = (k, v) => [h("dt", { text: k }), h("dd", { text: v || "unknown" })];
 
+  // Helper to refresh statistics section
+  const refreshStats = () => {
+    api("get_counters").then((groups) => {
+      const counterBody = document.getElementById("stats-body");
+      if (counterBody && groups) {
+        const sections = groups.map((group) =>
+          h("div", { class: "stats-group" },
+            h("div", { class: "stats-header" },
+              h("h4", { text: group.label }),
+              h("button", { class: "btn sm ghost", onclick: () => {
+                api("reset_counters", { group: group.name }).then(() => {
+                  log.info("stats", `Reset ${group.name}`);
+                  refreshStats();
+                }).catch((e) => log.error("stats", `Reset ${group.name} failed: ${e}`));
+              }, title: `Reset ${group.label.toLowerCase()} statistics` }, "Reset")),
+            h("dl", { class: "stats-list" },
+              ...group.counters.map(([name, value]) => {
+                const label = name.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+                const formatted = value > 1000000 ? (value / 1048576).toFixed(2) + " MB" : value > 1000 ? (value / 1024).toFixed(2) + " KB" : String(value);
+                return [h("dt", { text: label }), h("dd", { text: formatted })];
+              }))));
+        counterBody.replaceChildren(...sections);
+      }
+    }).catch((e) => log.warn("stats", `Failed to load counters: ${e}`));
+  };
+
   // Load statistics
-  const counterSections = [];
-  api("get_counters").then((groups) => {
-    const counterBody = document.getElementById("stats-body");
-    if (counterBody && groups) {
-      const sections = groups.map((group) =>
-        h("div", { class: "stats-group" },
-          h("div", { class: "stats-header" },
-            h("h4", { text: group.label }),
-            h("button", { class: "btn sm ghost", onclick: () => {
-              api("reset_counters", { group: group.name }).catch((e) => log.error("stats", `Reset ${group.name} failed: ${e}`));
-              document.location.reload();
-            }, title: `Reset ${group.label.toLowerCase()} statistics` }, "Reset")),
-          h("dl", { class: "stats-list" },
-            ...group.counters.map(([name, value]) => {
-              const label = name.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-              const formatted = value > 1000000 ? (value / 1048576).toFixed(2) + " MB" : value > 1000 ? (value / 1024).toFixed(2) + " KB" : String(value);
-              return [h("dt", { text: label }), h("dd", { text: formatted })];
-            }))));
-      counterBody.replaceChildren(...sections);
-    }
-  }).catch((e) => log.warn("stats", `Failed to load counters: ${e}`));
+  refreshStats();
   // Build shortcuts section by grouping actions
   const keyBindings = getKeyBindings(prefs);
   const shortcutsGroups = {};
@@ -2703,6 +2731,12 @@ function revealApp() {
   try {
     state.info = await api("app_info");
     log.info("app_info", `v${state.info.app_version}, db ${state.info.db_path} (schema ${state.info.schema_version})`);
+    // Track app launches
+    try {
+      await api("incr_counter", { name: "session:launches", amount: 1 });
+    } catch (e) {
+      log.warn("boot", `couldn't record app launch: ${e}`);
+    }
   } catch (e) {
     log.error("boot", "couldn't open backend", e);
     el.view.replaceChildren(h("div", { class: "empty" },

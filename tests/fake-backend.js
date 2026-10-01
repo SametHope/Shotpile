@@ -264,6 +264,25 @@
       // Increment counter for this decision type
       const counterName = { keep: "decision:kept", skip: "decision:skipped", delete: "decision:staged" }[a.kind];
       if (counterName) counters[counterName] = (counters[counterName] || 0) + 1;
+      // Track swipe direction if provided
+      if (a.swipe_dx !== undefined && a.swipe_dy !== undefined) {
+        const threshold = 80.0;
+        const absDx = Math.abs(a.swipe_dx);
+        const absDy = Math.abs(a.swipe_dy);
+        if (absDx >= threshold || absDy >= threshold) {
+          if (absDx > absDy) {
+            if (a.swipe_dx > 0) {
+              counters["swipe:right"] = (counters["swipe:right"] || 0) + 1;
+            } else {
+              counters["swipe:left"] = (counters["swipe:left"] || 0) + 1;
+            }
+          } else if (a.swipe_dy > 0) {
+            counters["swipe:down"] = (counters["swipe:down"] || 0) + 1;
+          } else {
+            counters["swipe:up"] = (counters["swipe:up"] || 0) + 1;
+          }
+        }
+      }
       LOG.push("decide:" + a.kind + ":" + s.name);
       return { ...s };
     },
@@ -421,14 +440,24 @@
       LOG.push("find_duplicates:" + a.rootId + ":" + groups.length);
       return groups;
     },
+    incr_counter: (a) => {
+      counters[a.name] = (counters[a.name] || 0) + a.amount;
+      return null;
+    },
     get_counters: () => {
       const groups = [];
       const decision = Object.entries(counters).filter(([k]) => k.startsWith("decision:")).map(([k, v]) => [k.replace("decision:", ""), v]);
       if (decision.length > 0) groups.push({ name: "decision", label: "Decisions", counters: decision });
       const deletion = Object.entries(counters).filter(([k]) => k.startsWith("deletion:")).map(([k, v]) => [k.replace("deletion:", ""), v]);
       if (deletion.length > 0) groups.push({ name: "deletion", label: "Deletion", counters: deletion });
+      const swipe = Object.entries(counters).filter(([k]) => k.startsWith("swipe:")).map(([k, v]) => [k.replace("swipe:", ""), v]);
+      if (swipe.length > 0) groups.push({ name: "swipe", label: "Swipes", counters: swipe });
       const session = Object.entries(counters).filter(([k]) => k.startsWith("session:")).map(([k, v]) => [k.replace("session:", ""), v]);
       if (session.length > 0) groups.push({ name: "session", label: "Session", counters: session });
+      const interaction = Object.entries(counters).filter(([k]) => k.startsWith("interaction:")).map(([k, v]) => [k.replace("interaction:", ""), v]);
+      if (interaction.length > 0) groups.push({ name: "interaction", label: "Interactions", counters: interaction });
+      const review = Object.entries(counters).filter(([k]) => k.startsWith("review:")).map(([k, v]) => [k.replace("review:", ""), v]);
+      if (review.length > 0) groups.push({ name: "review", label: "Review", counters: review });
       return groups;
     },
     reset_counters: (a) => {
