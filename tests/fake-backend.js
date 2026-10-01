@@ -243,6 +243,7 @@
         case "random": out = shuffled(out.filter((s) => s.status === "pending").sort(byTaken(1))); break;
         case "skipped": out = out.filter((s) => s.status === "skipped").sort(byTaken(1)); break;
         case "staged": out = out.filter((s) => s.status === "staged").sort(byTaken(1)); break;
+        case "kept": out = out.filter((s) => s.status === "kept" && monthKey(s.taken_ms) === a.month).sort(byTaken(1)); break;
         default: throw new Error("invalid queue scope: " + a.scope);
       }
       return out.map((s) => s.id);

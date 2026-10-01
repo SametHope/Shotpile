@@ -654,6 +654,7 @@ impl Db {
             "unreviewed" => (" AND status = 'pending'", "taken_ms DESC, id DESC"),
             "skipped" => (" AND status = 'skipped'", "taken_ms ASC, id ASC"),
             "staged" => (" AND status = 'staged'", "taken_ms ASC, id ASC"),
+            "kept" => (" AND status = 'kept'", "taken_ms ASC, id ASC"),
             _ => ("", "taken_ms DESC, id DESC"),
         };
         // A file that vanished from disk has nothing to review, and `months`
@@ -665,7 +666,11 @@ impl Db {
         } else {
             " AND missing = 0"
         };
-        let month_param: Option<&str> = if scope == "month" { month } else { None };
+        let month_param: Option<&str> = if scope == "month" || scope == "kept" {
+            month
+        } else {
+            None
+        };
         let month_clause = match month_param {
             Some(_) => format!(" AND {} = ?", month_expr(tz_offset_min)),
             None => String::new(),

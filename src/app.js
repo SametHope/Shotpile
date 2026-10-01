@@ -472,7 +472,7 @@ function monthRow(m) {
     class: `month${p.done ? " is-done" : ""}`,
     dataset: { month: m.month },
     "aria-label": `${label}: ${countOf(p.total, "screenshot")}, ${p.done ? "sorted" : `${formatCount(p.remaining)} left`}`,
-    onclick: () => (p.done ? toast(`${label} is already sorted`) : openQueue("month", m.month, label)),
+    onclick: () => (p.done ? openQueue("kept", m.month, `Kept from ${label}`) : openQueue("month", m.month, label)),
   },
     h("span", { class: `fan n${thumbs.length}` },
       thumbs.length
@@ -534,12 +534,17 @@ function renderReview() {
   if (!state.card) return renderFinale();
 
   const stage = h("div", { class: "stage", id: "stage" }, buildDeck());
-  el.view.replaceChildren(h("div", { class: "review", dataset: { scope: state.scope?.scope || "" } },
+  const review = h("div", { class: "review", dataset: { scope: state.scope?.scope || "" } },
     reviewHead(),
     stage,
     reviewActions(),
-    h("div", { class: "filmstrip", id: "filmstrip", role: "group", "aria-label": "Queue" })));
+    h("div", { class: "filmstrip-wrapper" },
+      h("div", { class: "filmstrip-handle", id: "filmstrip-handle" }),
+      h("div", { class: "filmstrip", id: "filmstrip", role: "group", "aria-label": "Queue" })));
+  el.view.replaceChildren(review);
+  review.style.setProperty("--filmstrip-height", `${prefs.get().filmstripHeight}px`);
   wireStage(stage);
+  wireFilmstripResize(document.getElementById("filmstrip-handle"));
   renderReviewChrome();
   paintZoomReadout(1);
 
@@ -1056,6 +1061,50 @@ function wireStage(stage) {
   stage.addEventListener("dblclick", onDoubleClick);
   stage.addEventListener("click", onCardClick);
   stage.addEventListener("dragstart", (e) => e.preventDefault());
+}
+
+function wireFilmstripResize(handle) {
+  if (!handle) return;
+  let startY = 0;
+  let startHeight = 0;
+
+  handle.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    startY = e.clientY;
+    startHeight = prefs.get().filmstripHeight;
+    handle.setPointerCapture(e.pointerId);
+  });
+
+  handle.addEventListener("pointermove", (e) => {
+    if (startHeight === 0) return;
+    const delta = e.clientY - startY;
+    // Resize filmstrip down when moving down, giving the deck less space
+    const newHeight = startHeight - delta;
+    const clamped = Math.max(40, Math.min(300, newHeight));
+    const review = document.querySelector(".review");
+    if (review) {
+      review.style.setProperty("--filmstrip-height", `${clamped}px`);
+    }
+  });
+
+  handle.addEventListener("pointerup", (e) => {
+    if (startHeight === 0) return;
+    const delta = e.clientY - startY;
+    const newHeight = startHeight - delta;
+    const clamped = Math.max(40, Math.min(300, newHeight));
+    prefs.set({ filmstripHeight: clamped });
+    startHeight = 0;
+  });
+
+  handle.addEventListener("pointercancel", () => {
+    if (startHeight === 0) return;
+    // Restore to saved preference on cancel
+    const review = document.querySelector(".review");
+    if (review) {
+      review.style.setProperty("--filmstrip-height", `${prefs.get().filmstripHeight}px`);
+    }
+    startHeight = 0;
+  });
 }
 
 function onPointerDown(e) {

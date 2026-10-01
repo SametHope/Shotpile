@@ -100,7 +100,7 @@ fn tz_offset_min(tz: Option<i64>) -> i64 {
 
 fn validate_scope(scope: &str) -> Result<&str, String> {
     match scope {
-        "month" | "random" | "unreviewed" | "skipped" | "staged" => Ok(scope),
+        "month" | "random" | "unreviewed" | "skipped" | "staged" | "kept" => Ok(scope),
         other => Err(format!("invalid queue: {other}")),
     }
 }
