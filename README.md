@@ -298,6 +298,25 @@ Tracked but not previewable, shown as a placeholder you can still decide on:
   drives), Windows asks before deleting each file permanently; cancelling
   leaves it on the pile.
 
+## Planned
+
+Not built yet, roughly in this order:
+
+- Copy image to the clipboard from the right-click menu.
+- "Show in file manager" selecting the file instead of opening a folder.
+- A right-click menu on pile tiles: restore, open, show in file manager, copy
+  full path, copy file name.
+- `A` and `D` to step to the previous and next photo in the review strip.
+- Rebindable keyboard shortcuts in Options.
+- Research and fix the occasional white flash when going fullscreen and on the
+  first scroll afterwards.
+- "Next month" after finishing a month should follow the calendar: the nearest
+  later month with work left, otherwise the nearest earlier one (it can jump
+  from 2025 to 2026 today).
+- Possible later: keyboard navigation in the library, a filename filter inside
+  a review, bulk restore from the pile, a clearer report when a commit cannot
+  delete some files, and duplicate detection.
+
 ## License
 
 [PolyForm Noncommercial 1.0.0](LICENSE). You may use, change and share
