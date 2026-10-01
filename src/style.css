@@ -558,7 +558,14 @@ kbd {
 .seg:first-child { border-radius: 999px 0 0 999px; }
 .seg-kept { background: var(--seg-kept); }
 .seg-staged { background: var(--seg-staged); }
-.seg-deleted { background: var(--seg-deleted); }
+.seg-deleted {
+  background:
+    repeating-linear-gradient(45deg, var(--seg-deleted) 0px, var(--seg-deleted) 4px, rgba(0, 0, 0, .1) 4px, rgba(0, 0, 0, .1) 8px);
+}
+:root[data-theme="dark"] .seg-deleted {
+  background:
+    repeating-linear-gradient(45deg, var(--seg-deleted) 0px, var(--seg-deleted) 4px, rgba(255, 255, 255, .1) 4px, rgba(255, 255, 255, .1) 8px);
+}
 .seg-skipped { background: var(--seg-skipped); }
 
 .legend {
@@ -668,6 +675,7 @@ kbd {
   max-width: 1120px;
   margin: 0 auto;
   padding: 12px 16px 10px;
+  --filmstrip-height: 52px;
 }
 
 .review-head {
@@ -732,7 +740,7 @@ kbd {
   min-height: 0;
   /* Room for the cards peeking out below the top one, so they never overlap
      the buttons. */
-  margin: 14px 0 26px;
+  margin: 14px 0 12px;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
@@ -922,14 +930,27 @@ kbd {
     rgba(248, 250, 252, .62) 0%,
     rgba(248, 250, 252, .32) 58%,
     rgba(248, 250, 252, 0) 100%);
-  backdrop-filter: saturate(115%) blur(3px);
-  -webkit-backdrop-filter: saturate(115%) blur(3px);
   display: flex;
   align-items: baseline;
   gap: 12px;
   opacity: .9;
   transition: opacity .15s ease;
   pointer-events: none;
+  mask-image: radial-gradient(100% 50% at 0% 100%, #000, #000 40%, transparent 70%),
+              radial-gradient(100% 50% at 100% 100%, #000, #000 40%, transparent 70%);
+  mask-composite: add;
+}
+
+.card .foot::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  backdrop-filter: saturate(115%) blur(2px);
+  -webkit-backdrop-filter: saturate(115%) blur(2px);
+  mask-image: radial-gradient(100% 50% at 0% 100%, #000, #000 40%, transparent 70%),
+              radial-gradient(100% 50% at 100% 100%, #000, #000 40%, transparent 70%);
+  mask-composite: add;
 }
 .card:hover .foot,
 .card.dragging .foot,
@@ -1015,13 +1036,47 @@ kbd {
 
 /* ---------- queue filmstrip ---------- */
 
+.filmstrip-wrapper {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  gap: 0;
+}
+
+.filmstrip-handle {
+  flex: 0 0 auto;
+  height: 8px;
+  cursor: row-resize;
+  user-select: none;
+  -webkit-user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  transition: background .2s ease;
+}
+
+.filmstrip-handle::after {
+  content: "";
+  width: 40px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+  opacity: 0;
+  transition: opacity .2s ease;
+}
+
+.filmstrip-handle:hover::after {
+  opacity: 1;
+}
+
 .filmstrip {
   display: flex;
   justify-content: center;
   gap: 6px;
   flex: 0 0 auto;
   padding: 4px 2px 2px;
-  min-height: 52px;
+  height: var(--filmstrip-height);
   overflow: hidden;
 }
 
@@ -1485,7 +1540,9 @@ body.ready #splash { opacity: 0; visibility: hidden; }
   .review { padding: 8px 12px 8px; }
 }
 @media (max-height: 600px) {
-  .filmstrip { display: none; }
+  .filmstrip-wrapper,
+  .filmstrip,
+  .filmstrip-handle { display: none; }
   .stage { margin: 8px 0 20px; }
   .deck .deck-1 { --deck-dy: 12px; }
   .deck .deck-2 { --deck-dy: 24px; }
