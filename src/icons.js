@@ -3,9 +3,9 @@
  * weight throughout. Pure strings, so this module has no DOM dependency;
  * `dom.js` turns them into elements.
  *
- * `sieve` is the brand mark and mirrors the app icon (three narrowing bars with
- * the kept "grains" falling through), so the window chrome and the taskbar
- * icon read as the same thing.
+ * `pile` is the brand mark and mirrors the app icon (a small pile of photo
+ * cards, the top one swiped off to the side), so the window chrome and the
+ * taskbar icon read as the same thing.
  */
 
 const P = {
@@ -41,8 +41,8 @@ const P = {
   image:
     '<rect x="3.5" y="4.5" width="17" height="15" rx="2.2"/><circle cx="9" cy="9.8" r="1.6"/><path d="M20.5 15.8l-4.8-4.8-8.6 8.5"/>',
   log: '<path d="M7 4.5h7.5L18 8v11.5H7z"/><path d="M14 4.5V8h4"/><path d="M9.8 12h5M9.8 15.2h5"/>',
-  sieve:
-    '<path d="M4.2 6.2h15.6M6.8 10.5h10.4M9.4 14.8h5.2"/><circle cx="9.3" cy="19.2" r="1.1" fill="currentColor" stroke="none"/><circle cx="12" cy="19.2" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.7" cy="19.2" r="1.1" fill="currentColor" stroke="none"/>',
+  pile:
+    '<rect x="3.6" y="7" width="11" height="13.5" rx="2.2" transform="rotate(-9 9.1 13.75)" fill="none" stroke-width="1.9" opacity=".55"/><g transform="rotate(13 14.6 11.2)"><rect x="9.1" y="4.5" width="11" height="13.5" rx="2.2" fill="none" stroke-width="1.9"/><circle cx="12.6" cy="8.6" r="1.25" fill="currentColor" stroke="none"/><path d="M10.4 15.6l3.1-3.2 2.2 2.1 1.4-1.4 2.2 2.2" fill="none" stroke-width="1.6" stroke-linejoin="round"/></g>',
 };
 
 export const ICON_NAMES = Object.keys(P);

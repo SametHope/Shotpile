@@ -144,11 +144,6 @@ export function viewerKeydown(e) {
   return true;
 }
 
-/** Current zoom readout, for tests and the status line. */
-export function viewerZoomText() {
-  return v.label?.textContent ?? null;
-}
-
 function content() {
   const r = v.frame.getBoundingClientRect();
   return { ...containedSize(v.img.naturalWidth, v.img.naturalHeight, r.width, r.height), frameW: r.width, frameH: r.height };

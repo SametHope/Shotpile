@@ -1,11 +1,11 @@
 //! Minimal file logger.
 //!
-//! Writes leveled, timestamped lines to `<app_data>/logs/sifter.log` so a
+//! Writes leveled, timestamped lines to `<app_data>/logs/shotpile.log` so a
 //! release build can be diagnosed after the fact, even when DevTools was never
 //! opened. Deliberately dependency-free: just `fs`, `Mutex` and `chrono`.
 //!
 //! The file is appended to and rotated once it passes [`MAX_BYTES`]; the
-//! previous contents are kept as `sifter.log.old` so a crash right after a big
+//! previous contents are kept as `shotpile.log.old` so a crash right after a big
 //! scan is still recoverable.
 
 use std::fs::{File, OpenOptions};
@@ -247,7 +247,7 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("sifter-log-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("shotpile-log-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -256,7 +256,7 @@ mod tests {
     fn init_writes_lines_and_read_tail_returns_them() {
         let _serial = serial();
         let dir = scratch("tail");
-        let path = dir.join("sifter.log");
+        let path = dir.join("shotpile.log");
 
         _reset_for_tests();
         init(&path);
@@ -338,7 +338,7 @@ mod tests {
         let _serial = serial();
         let dir = scratch("panic");
         _reset_for_tests();
-        init(&dir.join("sifter.log"));
+        init(&dir.join("shotpile.log"));
 
         install_panic_hook();
         let line = line!() + 1;

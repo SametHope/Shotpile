@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <!--
-    Screenshot Sifter app icon: a sieve, three narrowing bars with the kept
-    "grains" falling through. The glyph is the in-app brand mark from
-    src/icons.js (`sieve`, a 24-unit grid) scaled 34x around its centre, so the
+    Shotpile app icon: a small pile of photo cards, the top one swiped off to
+    the side, as in the review deck. The glyph is the in-app brand mark from
+    src/icons.js (`pile`, a 24-unit grid) scaled 34x around its centre, so the
     window chrome and the taskbar icon are the same drawing.
 
     Regenerate every platform size with:
@@ -18,10 +18,7 @@
       <stop offset=".5" stop-color="#ffffff" stop-opacity="0"/>
     </linearGradient>
     <g id="glyph" stroke-linecap="round">
-      <path d="M4.2 6.2h15.6M6.8 10.5h10.4M9.4 14.8h5.2" fill="none" stroke-width="2.2"/>
-      <circle cx="9.3" cy="19.2" r="1.15" stroke="none"/>
-      <circle cx="12" cy="19.2" r="1.15" stroke="none"/>
-      <circle cx="14.7" cy="19.2" r="1.15" stroke="none"/>
+      <rect x="3.6" y="7" width="11" height="13.5" rx="2.2" transform="rotate(-9 9.1 13.75)" fill="none" stroke-width="1.9" opacity=".55"/><g transform="rotate(13 14.6 11.2)"><rect x="9.1" y="4.5" width="11" height="13.5" rx="2.2" fill="none" stroke-width="1.9"/><circle cx="12.6" cy="8.6" r="1.25" stroke="none"/><path d="M10.4 15.6l3.1-3.2 2.2 2.1 1.4-1.4 2.2 2.2" fill="none" stroke-width="1.6" stroke-linejoin="round"/></g>
     </g>
   </defs>
 
@@ -29,10 +26,10 @@
   <rect width="1024" height="1024" rx="232" fill="url(#sheen)"/>
 
   <!-- A soft drop under the glyph, so it sits on the tile instead of in it. -->
-  <g transform="translate(512 528) scale(34) translate(-12 -12.7)" fill="#0b2a7a" stroke="#0b2a7a" opacity=".28">
+  <g transform="translate(512 528) scale(34) translate(-12 -12.4)" fill="#0b2a7a" stroke="#0b2a7a" opacity=".28">
     <use href="#glyph"/>
   </g>
-  <g transform="translate(512 512) scale(34) translate(-12 -12.7)" fill="#ffffff" stroke="#ffffff">
+  <g transform="translate(512 512) scale(34) translate(-12 -12.4)" fill="#ffffff" stroke="#ffffff">
     <use href="#glyph"/>
   </g>
 </svg>

@@ -1,13 +1,16 @@
 [package]
-name = "screenshot-sifter"
+name = "shotpile"
 version = "1.0.0"
 description = "Local-first screenshot review with month/random queues, swipe decisions and safe Recycle Bin deletes"
 authors = ["SametHope"]
+license = "PolyForm-Noncommercial-1.0.0"
+publish = false
+repository = "https://github.com/SametHope/Screenshot-Sifter"
 edition = "2021"
 rust-version = "1.82"
 
 [lib]
-name = "screenshot_sifter_lib"
+name = "shotpile_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

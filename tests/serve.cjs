@@ -69,7 +69,7 @@ module.exports = { start };
 if (require.main === module) {
   const port = Number(process.env.PORT) || 8731;
   start(port).then(() => {
-    console.log("Screenshot Sifter preview, on an in-memory fake backend:");
+    console.log("Shotpile preview, on an in-memory fake backend:");
     console.log(`  demo library   http://127.0.0.1:${port}/?demo`);
     console.log(`  test fixture   http://127.0.0.1:${port}/`);
   });

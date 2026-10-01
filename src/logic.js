@@ -1,5 +1,5 @@
 /**
- * Pure logic for Screenshot Sifter. No DOM and no Tauri calls, so it can be
+ * Pure logic for Shotpile. No DOM and no Tauri calls, so it can be
  * unit tested with `node --test tests/`.
  */
 

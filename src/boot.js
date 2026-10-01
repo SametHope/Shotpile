@@ -5,11 +5,11 @@
  *
  * It owns the user's preferences (theme, zoom), kept in localStorage, which
  * the WebView persists next to the app's data. app.js reads and changes them
- * through `window.sifterPrefs`.
+ * through `window.shotpilePrefs`.
  */
 (function () {
   "use strict";
-  var KEY = "sifter.prefs";
+  var KEY = "shotpile.prefs";
   var THEMES = ["system", "light", "dark"];
   var prefs = { theme: "system", zoom: 1 };
   try {
@@ -28,7 +28,7 @@
   media.addEventListener("change", applyTheme);
   applyTheme();
 
-  window.sifterPrefs = {
+  window.shotpilePrefs = {
     THEMES: THEMES,
     get: function () {
       return { theme: prefs.theme, zoom: prefs.zoom };

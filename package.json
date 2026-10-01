@@ -1,9 +1,9 @@
 {
-  "name": "screenshot-sifter",
+  "name": "shotpile",
   "private": true,
-  "version": "1.0.0",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
-  "description": "Local-first screenshot review: month/random queues, swipe decisions, safe Recycle Bin deletes.",
+  "description": "Shotpile: swipe through a screenshot folder, keep or mark for deletion, then send the marked files to the Recycle Bin.",
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",

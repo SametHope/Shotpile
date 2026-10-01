@@ -1,5 +1,5 @@
 /**
- * Screenshot Sifter — UI controller.
+ * Shotpile — UI controller.
  *
  * All filesystem, database and Recycle Bin work happens in Rust behind the
  * commands in src-tauri/src/commands.rs. This file orchestrates views, the
@@ -79,7 +79,7 @@ const el = {
 };
 
 /** Theme and zoom, owned by boot.js (it applies them before the first paint). */
-const prefs = window.sifterPrefs;
+const prefs = window.shotpilePrefs;
 
 const state = {
   view: "loading", // loading | setup | scanning | months | review | staged
@@ -337,7 +337,7 @@ function renderHeader() {
 
 function renderSetup() {
   const hero = h("section", { class: "onboard" },
-    h("div", { class: "onboard-mark", html: iconSvg("sieve", 40) }),
+    h("div", { class: "onboard-mark", html: iconSvg("pile", 40) }),
     h("h1", { text: "Sort a pile of screenshots in minutes" }),
     h("p", { class: "onboard-lead", text: "Point it at the folder your screenshots pile up in. They get grouped by month and dealt out one at a time." }),
     gestureLegend(),
@@ -712,7 +712,7 @@ function photo(shot) {
     return placeholder(`No preview for .${shot.ext.toLowerCase()} files`, "The app can't render this format. Decide from the name, date and size.");
   }
   if (shot.missing) {
-    return placeholder("File not found", "It was moved or deleted outside Screenshot Sifter since the last scan.");
+    return placeholder("File not found", "It was moved or deleted outside Shotpile since the last scan.");
   }
   const img = h("img", { src: convertFileSrc(shot.path), alt: shot.name, draggable: "false", decoding: "async" });
   img.addEventListener("error", () => {
@@ -1481,8 +1481,8 @@ function pileTile(shot) {
     h("figcaption", {},
       h("span", { class: "tile-name", text: shot.name, title: shot.name }),
       h("span", { class: "tile-meta", text: `${formatBytes(shot.size)} · ${formatDateTime(shot.taken_ms).slice(0, 10)}` })),
-    h("button", { class: "btn sm tile-putback", title: "Unmark it and return it to the unsorted pile", onclick: (e) => unstageOne(shot.id, e.currentTarget.closest(".tile")) },
-      icon("undo", { size: 14 }), "Put back"));
+    h("button", { class: "btn sm tile-putback", title: "Take it off the pile; it goes back to the unsorted screenshots", onclick: (e) => unstageOne(shot.id, e.currentTarget.closest(".tile")) },
+      icon("undo", { size: 14 }), "Don't delete"));
 }
 
 async function unstageOne(id, tile = null) {
@@ -1513,51 +1513,26 @@ async function unstageOne(id, tile = null) {
 
 // --------------------------------------------------------------------- commit
 
-/** Previews in the confirm dialog; the grid scrolls and loads lazily. */
-const DELETE_GRID_LIMIT = 300;
-
-function deletePreviewGrid(rows) {
-  const shown = rows.slice(0, DELETE_GRID_LIMIT);
-  const grid = h("div", { class: "del-grid" }, shown.map((shot) =>
-    h("figure", { class: "del-cell", title: `${shot.name} · ${formatBytes(shot.size)}` },
-      h("div", { class: "del-thumb" }, thumb(shot)),
-      h("figcaption", { text: shot.name }))));
-  if (rows.length > shown.length) {
-    grid.append(h("div", { class: "del-more", text: `+${formatCount(rows.length - shown.length)} more` }));
-  }
-  return grid;
-}
-
 async function commit() {
   if (state.busy) return;
   const n = state.summary?.staged_all || 0;
   if (!n) return;
 
-  // Fetch the actual list so the dialog can show previews, not just a count. If
-  // that fails, fall back to the plain confirmation rather than blocking.
-  let rows = null;
-  try {
-    rows = await api("staged_list");
-  } catch (e) {
-    log.warn("commit", `couldn't load staged list for preview: ${e}`);
-  }
-  const count = rows?.length || n;
-  const bytes = rows ? rows.reduce((sum, r) => sum + (Number(r.size) || 0), 0) : state.summary?.bytes_staged_all || 0;
+  // The pile page behind the dialog is the preview, so the dialog only says
+  // what will happen.
+  const count = n;
+  const bytes = state.summary?.bytes_staged_all || 0;
 
   const ok = await confirmDialog({
     title: "Move to the Recycle Bin?",
     message: `${countOf(count, "screenshot")}${bytes ? ` (${formatBytes(bytes)})` : ""} will go to the Recycle Bin. Nothing is deleted permanently: you can restore files from there.`,
-    body: rows?.length ? deletePreviewGrid(rows) : null,
     confirmLabel: `Move ${countOf(count, "file")}`,
     confirmIcon: "trash",
     variant: "danger solid",
-    wide: !!rows?.length,
   });
   if (!ok) return;
 
   state.busy = true;
-  el.commit.disabled = true;
-  el.commit.textContent = "Moving…";
   document.getElementById("btn-pile-commit")?.setAttribute("disabled", "");
   log.info("commit", `moving ${count} files to the Recycle Bin`);
   try {
@@ -1576,8 +1551,6 @@ async function commit() {
     toast(`Couldn't move the files: ${e}`, { tone: "error" });
   } finally {
     state.busy = false;
-    el.commit.disabled = false;
-    el.commit.textContent = "Move to Recycle Bin";
     renderHeader();
     try {
       await refreshCounts();
@@ -1742,7 +1715,7 @@ async function forgetRoot(root) {
   const name = basename(root.path) || root.path;
   const ok = await confirmDialog({
     title: `Forget “${name}”?`,
-    message: `Screenshot Sifter stops tracking ${root.path} and forgets what you decided for its ${countOf(root.total, "screenshot")}.${root.staged ? ` ${root.staged === 1 ? "The one marked for deletion is" : `The ${formatCount(root.staged)} marked for deletion are`} unmarked.` : ""} No files are touched, and you can add the folder again at any time.`,
+    message: `Shotpile stops tracking ${root.path} and forgets what you decided for its ${countOf(root.total, "screenshot")}.${root.staged ? ` ${root.staged === 1 ? "The one marked for deletion is" : `The ${formatCount(root.staged)} marked for deletion are`} unmarked.` : ""} No files are touched, and you can add the folder again at any time.`,
     confirmLabel: "Forget folder",
   });
   if (!ok) return;
@@ -1860,13 +1833,15 @@ function showOptions() {
       h("section", { class: "opt-group" },
         h("h3", { text: "About" }),
         h("dl", { class: "about-list" },
-          fact("Screenshot Sifter", info.app_version ? `v${info.app_version}` : ""),
+          fact("Shotpile", info.app_version ? `v${info.app_version}, by SametHope` : ""),
           fact("Tauri", info.tauri_version),
           fact("WebView2", info.webview_version),
           fact("SQLite", info.sqlite_version ? `${info.sqlite_version}, built in` : ""),
           fact("Database schema", info.schema_version != null ? String(info.schema_version) : "")),
-        h("p", { class: "about-note", text: "Screenshot Sifter is free software under the MIT License, © 2026 SametHope. Source: github.com/SametHope/Screenshot-Sifter" }),
-        h("p", { class: "about-note", text: "Built on Tauri (MIT or Apache-2.0) and Microsoft Edge WebView2, with rusqlite (MIT), SQLite (public domain), trash (MIT), walkdir (MIT or Unlicense), chrono, regex, serde (MIT or Apache-2.0) and rfd (MIT). The interface uses no third-party code." })),
+        h("p", { class: "about-note", text: "Made by SametHope. Free for any noncommercial use under the PolyForm Noncommercial License 1.0.0; selling it or using it to make money is not allowed." }),
+        h("p", { class: "about-note", text: "Built on Tauri and Microsoft Edge WebView2, with rusqlite, SQLite (public domain), trash, walkdir, chrono, regex, serde and rfd, all under MIT, Apache-2.0 or similar permissive licences. Every release lists them in full in THIRD-PARTY-LICENSES.html." }),
+        h("div", { class: "opt-row" },
+          h("button", { class: "btn sm", onclick: () => reveal("repo") }, icon("expand", { size: 15 }), "Open on GitHub"))),
     ],
     actions: [{ label: "Close" }],
   });
@@ -1900,7 +1875,7 @@ function onContextMenu(e) {
         { label: "Mark for deletion", icon: "trash", meta: "←", danger: true, onClick: () => decide(ACTION.DELETE, { via: "button" }) });
       if (state.scope?.scope !== "staged") items.push({ label: "Skip for now", icon: "skip", meta: "↑", onClick: () => decide(ACTION.SKIP, { via: "button" }) });
     }
-    if (node.classList.contains("tile")) items.push({ label: "Put back", sub: "Take it off the deletion pile", icon: "undo", onClick: () => unstageOne(shot.id, node) });
+    if (node.classList.contains("tile")) items.push({ label: "Don't delete", sub: "Take it off the deletion pile", icon: "undo", onClick: () => unstageOne(shot.id, node) });
     items.push({ separator: true },
       { label: "Show in File Explorer", icon: "folder", onClick: () => reveal("shot", shot.id) },
       { label: "Copy file path", icon: "copy", onClick: () => copyText(shot.path, "the file path") });
@@ -2099,7 +2074,7 @@ document.addEventListener("keydown", (e) => {
 
 // Test hooks for the GUI harness, so flows can be driven without a native
 // dialog. Not used in production.
-window.__sifterTest = {
+window.__shotpileTest = {
   addFolder,
   openViewer: () => openShotViewer(state.card, topCard()),
   closeViewer,
@@ -2122,7 +2097,9 @@ initModal();
 el.back.addEventListener("click", backToMonths);
 el.folderBtn.addEventListener("click", folderMenu);
 el.scan.addEventListener("click", rescan);
-el.commit.addEventListener("click", commit);
+// The footer leads to the pile, which is the preview; the commit itself is
+// confirmed there.
+el.commit.addEventListener("click", openStaged);
 el.undo.addEventListener("click", () => undo());
 el.redo.addEventListener("click", () => redo());
 el.options.addEventListener("click", showOptions);

@@ -31,7 +31,7 @@ fn now_ms() -> i64 {
 }
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("sifter-e2e-{name}-{}", now_ms()));
+    let dir = std::env::temp_dir().join(format!("shotpile-e2e-{name}-{}", now_ms()));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -57,14 +57,14 @@ fn full_review_cycle() {
     build_tree(&root);
     let path = root.to_string_lossy().to_string();
 
-    let db = screenshot_sifter_lib::open_db_for_tests(
-        &std::env::temp_dir().join(format!("sifter-e2e-db-{}.db", now_ms())),
+    let db = shotpile_lib::open_db_for_tests(
+        &std::env::temp_dir().join(format!("shotpile-e2e-db-{}.db", now_ms())),
     )
     .expect("open db");
-    let mut undo = screenshot_sifter_lib::undo_stack_for_tests();
+    let mut undo = shotpile_lib::undo_stack_for_tests();
 
     // ---- scan -------------------------------------------------------------
-    let report = screenshot_sifter_lib::scan_root_for_tests(&db, &path).expect("scan");
+    let report = shotpile_lib::scan_root_for_tests(&db, &path).expect("scan");
     assert_eq!(report.found, 6, "6 image files, ignoring txt/mp4");
     assert_eq!(report.added, 6);
     assert_eq!(report.refreshed, 0);
@@ -74,7 +74,7 @@ fn full_review_cycle() {
     assert_eq!(report.missing, 0);
 
     // Rescan is idempotent for decisions and counts.
-    let again = screenshot_sifter_lib::scan_root_for_tests(&db, &path).expect("rescan");
+    let again = shotpile_lib::scan_root_for_tests(&db, &path).expect("rescan");
     assert_eq!(again.added, 0);
     assert_eq!(again.refreshed, 6);
 
@@ -140,8 +140,7 @@ fn full_review_cycle() {
     // ---- vanish detection -------------------------------------------------
     let removed = root.join("Screenshot 2026-09-28 09-15-00.png");
     std::fs::remove_file(&removed).unwrap();
-    let third =
-        screenshot_sifter_lib::scan_root_for_tests(&db, &path).expect("rescan after delete");
+    let third = shotpile_lib::scan_root_for_tests(&db, &path).expect("rescan after delete");
     assert_eq!(third.missing, 1);
     let missing = db.shot(queue[2]).unwrap().unwrap();
     assert!(missing.missing, "the removed file is flagged");
@@ -152,7 +151,7 @@ fn full_review_cycle() {
 
     // ---- commit ------------------------------------------------------------
     let staged_size = db.shot(queue[1]).unwrap().unwrap().size;
-    let report = screenshot_sifter_lib::commit_deletes_for_tests(&db, &mut undo).expect("commit");
+    let report = shotpile_lib::commit_deletes_for_tests(&db, &mut undo).expect("commit");
     assert_eq!(report.deleted, 1);
     assert_eq!(report.bytes_freed, staged_size);
     assert!(report.failed.is_empty(), "no failures expected: {report:?}");
@@ -166,8 +165,7 @@ fn full_review_cycle() {
     assert!(db.staged_rows().unwrap().is_empty());
 
     // Committing again is a harmless no-op.
-    let empty =
-        screenshot_sifter_lib::commit_deletes_for_tests(&db, &mut undo).expect("empty commit");
+    let empty = shotpile_lib::commit_deletes_for_tests(&db, &mut undo).expect("empty commit");
     assert_eq!(empty.deleted, 0);
     assert_eq!(empty.bytes_freed, 0);
     assert_eq!(empty.still_staged, 0);
@@ -179,12 +177,11 @@ fn full_review_cycle() {
 fn decisions_survive_reopening_the_database() {
     let root = scratch("persist");
     build_tree(&root);
-    let db_path = std::env::temp_dir().join(format!("sifter-e2e-persist-{}.db", now_ms()));
+    let db_path = std::env::temp_dir().join(format!("shotpile-e2e-persist-{}.db", now_ms()));
 
     {
-        let db = screenshot_sifter_lib::open_db_for_tests(&db_path).expect("open");
-        let report =
-            screenshot_sifter_lib::scan_root_for_tests(&db, root.to_str().unwrap()).expect("scan");
+        let db = shotpile_lib::open_db_for_tests(&db_path).expect("open");
+        let report = shotpile_lib::scan_root_for_tests(&db, root.to_str().unwrap()).expect("scan");
         assert_eq!(report.found, 6);
         let ids = db.queue_ids("unreviewed", None, None, 0).unwrap();
         assert_eq!(ids.len(), 6);
@@ -192,7 +189,7 @@ fn decisions_survive_reopening_the_database() {
         db.set_status(ids[1], "staged", Some(now_ms())).unwrap();
     } // db dropped here
 
-    let db = screenshot_sifter_lib::open_db_for_tests(&db_path).expect("reopen");
+    let db = shotpile_lib::open_db_for_tests(&db_path).expect("reopen");
     let summary = db.summary(None, 0).unwrap();
     assert_eq!(summary.total, 6);
     assert_eq!(summary.kept, 1);
@@ -223,17 +220,17 @@ fn undo_never_resurrects_a_committed_file() {
     let root = scratch("undo");
     build_tree(&root);
     let db_dir = scratch("undo-db");
-    let db = screenshot_sifter_lib::open_db_for_tests(&db_dir.join("sifter.db")).expect("open db");
-    let mut undo = screenshot_sifter_lib::undo_stack_for_tests();
-    screenshot_sifter_lib::scan_root_for_tests(&db, root.to_str().unwrap()).expect("scan");
+    let db = shotpile_lib::open_db_for_tests(&db_dir.join("shotpile.db")).expect("open db");
+    let mut undo = shotpile_lib::undo_stack_for_tests();
+    shotpile_lib::scan_root_for_tests(&db, root.to_str().unwrap()).expect("scan");
 
     let queue = db.queue_ids("month", Some("2026-09"), None, 0).unwrap();
     let (kept, binned) = (queue[0], queue[1]);
-    screenshot_sifter_lib::decide_for_tests(&db, &mut undo, kept, "keep").unwrap();
-    let staged = screenshot_sifter_lib::decide_for_tests(&db, &mut undo, binned, "delete").unwrap();
+    shotpile_lib::decide_for_tests(&db, &mut undo, kept, "keep").unwrap();
+    let staged = shotpile_lib::decide_for_tests(&db, &mut undo, binned, "delete").unwrap();
     assert!(Path::new(&staged.path).exists(), "staging must not delete");
 
-    let report = screenshot_sifter_lib::commit_deletes_for_tests(&db, &mut undo).expect("commit");
+    let report = shotpile_lib::commit_deletes_for_tests(&db, &mut undo).expect("commit");
     assert_eq!(report.deleted, 1);
     assert_eq!(report.bytes_freed, staged.size);
     assert!(
@@ -243,13 +240,13 @@ fn undo_never_resurrects_a_committed_file() {
 
     // The delete is the newest action, but its file is in the bin: undo skips
     // it and walks back the keep before it.
-    let undone = screenshot_sifter_lib::undo_last_for_tests(&db, &mut undo)
+    let undone = shotpile_lib::undo_last_for_tests(&db, &mut undo)
         .unwrap()
         .expect("the keep is still undoable");
     assert_eq!(undone.id, kept);
     assert_eq!(undone.status, "pending");
     assert!(
-        screenshot_sifter_lib::undo_last_for_tests(&db, &mut undo)
+        shotpile_lib::undo_last_for_tests(&db, &mut undo)
             .unwrap()
             .is_none(),
         "nothing else to undo"
@@ -259,7 +256,7 @@ fn undo_never_resurrects_a_committed_file() {
     assert_eq!(shot.status, "deleted", "the committed row stays deleted");
     assert!(db.staged_rows().unwrap().is_empty());
     // A stale card cannot bring it back either.
-    assert!(screenshot_sifter_lib::decide_for_tests(&db, &mut undo, binned, "keep").is_err());
+    assert!(shotpile_lib::decide_for_tests(&db, &mut undo, binned, "keep").is_err());
     assert_eq!(db.shot(binned).unwrap().unwrap().status, "deleted");
 
     // Closed first: Windows will not remove an open database file.
@@ -274,20 +271,20 @@ fn forgetting_a_folder_leaves_its_files_on_disk() {
     build_tree(&root);
     let path = root.to_string_lossy().to_string();
     let db_dir = scratch("forget-db");
-    let db = screenshot_sifter_lib::open_db_for_tests(&db_dir.join("sifter.db")).expect("open db");
-    let mut undo = screenshot_sifter_lib::undo_stack_for_tests();
-    screenshot_sifter_lib::scan_root_for_tests(&db, &path).expect("scan");
+    let db = shotpile_lib::open_db_for_tests(&db_dir.join("shotpile.db")).expect("open db");
+    let mut undo = shotpile_lib::undo_stack_for_tests();
+    shotpile_lib::scan_root_for_tests(&db, &path).expect("scan");
 
     let ids = db.queue_ids("unreviewed", None, None, 0).unwrap();
-    screenshot_sifter_lib::decide_for_tests(&db, &mut undo, ids[0], "delete").unwrap();
+    shotpile_lib::decide_for_tests(&db, &mut undo, ids[0], "delete").unwrap();
     let staged_path = db.staged_rows().unwrap()[0].path.clone();
     let root_id = db.list_roots().unwrap()[0].id;
 
-    screenshot_sifter_lib::forget_root_for_tests(&db, &mut undo, root_id).expect("forget");
+    shotpile_lib::forget_root_for_tests(&db, &mut undo, root_id).expect("forget");
     assert!(db.list_roots().unwrap().is_empty());
     assert!(db.staged_rows().unwrap().is_empty());
     assert_eq!(db.summary(None, 0).unwrap().total, 0);
-    assert!(screenshot_sifter_lib::undo_last_for_tests(&db, &mut undo)
+    assert!(shotpile_lib::undo_last_for_tests(&db, &mut undo)
         .unwrap()
         .is_none());
 
@@ -297,7 +294,7 @@ fn forgetting_a_folder_leaves_its_files_on_disk() {
         Path::new(&staged_path).exists(),
         "forgetting must not delete"
     );
-    let again = screenshot_sifter_lib::scan_root_for_tests(&db, &path).expect("rescan");
+    let again = shotpile_lib::scan_root_for_tests(&db, &path).expect("rescan");
     assert_eq!(again.added, 6);
     assert_eq!(db.queue_ids("unreviewed", None, None, 0).unwrap().len(), 6);
 

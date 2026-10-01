@@ -196,9 +196,13 @@ pub fn app_info(state: State<'_, AppState>) -> Result<AppInfo, String> {
     })
 }
 
-/// Shows a known place in the system file manager: the data folder, the logs
-/// folder, or one screenshot (selected in its folder). The frontend names the
-/// place, never a path, so this cannot be pointed anywhere else.
+/// The project page that Options > About opens.
+const REPO_URL: &str = "https://github.com/SametHope/Screenshot-Sifter";
+
+/// Shows a known place: the data folder, the logs folder, or one screenshot
+/// (selected in its folder) in the file manager, or the project page in the
+/// browser. The frontend names the place, never a path or a URL, so this
+/// cannot be pointed anywhere else.
 #[tauri::command]
 pub fn reveal(state: State<'_, AppState>, target: String, id: Option<i64>) -> Result<(), String> {
     let path = match target.as_str() {
@@ -217,11 +221,36 @@ pub fn reveal(state: State<'_, AppState>, target: String, id: Option<i64>) -> Re
                 .ok_or_else(|| format!("no such screenshot: {id}"))?;
             std::path::PathBuf::from(shot.path)
         }
+        "repo" => {
+            open_url(REPO_URL)?;
+            crate::log::info("reveal", REPO_URL);
+            return Ok(());
+        }
         other => return Err(format!("unknown place: {other}")),
     };
     open_in_file_manager(&path)?;
     crate::log::info("reveal", &format!("{target}: {}", path.display()));
     Ok(())
+}
+
+fn open_url(url: &str) -> Result<(), String> {
+    let spawned = if cfg!(windows) {
+        // `start` is a cmd builtin; the empty string is its window title.
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()
+    } else {
+        std::process::Command::new(if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        })
+        .arg(url)
+        .spawn()
+    };
+    spawned
+        .map(|_| ())
+        .map_err(|e| format!("couldn't open the browser: {e}"))
 }
 
 fn open_in_file_manager(path: &Path) -> Result<(), String> {
@@ -909,7 +938,7 @@ mod tests {
 
     #[test]
     fn walking_a_folder_that_does_not_exist_is_a_plain_error() {
-        let err = walk("/definitely/not/a/sifter/folder").unwrap_err();
+        let err = walk("/definitely/not/a/shotpile/folder").unwrap_err();
         assert!(err.starts_with("folder not found: "), "{err}");
     }
 }

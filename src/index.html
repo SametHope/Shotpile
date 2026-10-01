@@ -4,15 +4,15 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="light dark" />
-  <title>Screenshot Sifter</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%231d4ed8'/%3E%3Cpath d='M5 7h14M7.4 11h9.2M9.8 15h4.4' stroke='white' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E" />
+  <title>Shotpile</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%231d4ed8'/%3E%3Cg fill='white' stroke='white' stroke-linecap='round' transform='translate%2812 12%29 scale%28.8%29 translate%28-12 -12.4%29'%3E%3Crect x='3.6' y='7' width='11' height='13.5' rx='2.2' transform='rotate%28-9 9.1 13.75%29' fill='none' stroke-width='1.9' opacity='.55'/%3E%3Cg transform='rotate%2813 14.6 11.2%29'%3E%3Crect x='9.1' y='4.5' width='11' height='13.5' rx='2.2' fill='none' stroke-width='1.9'/%3E%3Ccircle cx='12.6' cy='8.6' r='1.25' stroke='none'/%3E%3Cpath d='M10.4 15.6l3.1-3.2 2.2 2.1 1.4-1.4 2.2 2.2' fill='none' stroke-width='1.6' stroke-linejoin='round'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E" />
   <link rel="stylesheet" href="./style.css" />
   <script src="./boot.js"></script>
 </head>
 <body data-view="loading">
   <div id="splash" aria-hidden="true">
-    <span class="splash-mark"><svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4.2 6.2h15.6M6.8 10.5h10.4M9.4 14.8h5.2"/><circle cx="9.3" cy="19.2" r="1.15" fill="currentColor" stroke="none"/><circle cx="12" cy="19.2" r="1.15" fill="currentColor" stroke="none"/><circle cx="14.7" cy="19.2" r="1.15" fill="currentColor" stroke="none"/></svg></span>
-    <span class="splash-name">Screenshot Sifter</span>
+    <span class="splash-mark"><svg viewBox="0 0 24 24" width="34" height="34" fill="currentColor" stroke="currentColor" stroke-linecap="round"><rect x="3.6" y="7" width="11" height="13.5" rx="2.2" transform="rotate(-9 9.1 13.75)" fill="none" stroke-width="1.9" opacity=".55"/><g transform="rotate(13 14.6 11.2)"><rect x="9.1" y="4.5" width="11" height="13.5" rx="2.2" fill="none" stroke-width="1.9"/><circle cx="12.6" cy="8.6" r="1.25" stroke="none"/><path d="M10.4 15.6l3.1-3.2 2.2 2.1 1.4-1.4 2.2 2.2" fill="none" stroke-width="1.6" stroke-linejoin="round"/></g></svg></span>
+    <span class="splash-name">Shotpile</span>
   </div>
   <div id="app">
     <header class="topbar">
@@ -22,8 +22,8 @@
           Library
         </button>
         <div class="brand">
-          <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4.2 6.2h15.6M6.8 10.5h10.4M9.4 14.8h5.2"/><circle cx="9.3" cy="19.2" r="1.15" fill="currentColor" stroke="none"/><circle cx="12" cy="19.2" r="1.15" fill="currentColor" stroke="none"/><circle cx="14.7" cy="19.2" r="1.15" fill="currentColor" stroke="none"/></svg></span>
-          <span class="brand-name">Screenshot Sifter</span>
+          <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" stroke="currentColor" stroke-linecap="round"><rect x="3.6" y="7" width="11" height="13.5" rx="2.2" transform="rotate(-9 9.1 13.75)" fill="none" stroke-width="1.9" opacity=".55"/><g transform="rotate(13 14.6 11.2)"><rect x="9.1" y="4.5" width="11" height="13.5" rx="2.2" fill="none" stroke-width="1.9"/><circle cx="12.6" cy="8.6" r="1.25" stroke="none"/><path d="M10.4 15.6l3.1-3.2 2.2 2.1 1.4-1.4 2.2 2.2" fill="none" stroke-width="1.6" stroke-linejoin="round"/></g></svg></span>
+          <span class="brand-name">Shotpile</span>
         </div>
         <button id="btn-folder" class="folder-chip" hidden aria-haspopup="menu" aria-expanded="false" title="Switch folder">
           <span class="folder-name" id="folder-name"></span>
@@ -49,7 +49,7 @@
         <div class="spacer"></div>
         <button id="btn-undo" class="btn ghost" title="Undo the last decision (Ctrl+Z)">Undo</button>
         <button id="btn-redo" class="btn ghost" title="Redo what was undone (Ctrl+Y)">Redo</button>
-        <button id="btn-commit" class="btn danger solid">Move to Recycle Bin</button>
+        <button id="btn-commit" class="btn danger solid">Review and delete</button>
       </div>
     </div>
   </div>

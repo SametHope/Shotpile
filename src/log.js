@@ -109,7 +109,7 @@ export const log = {
   },
 };
 
-// Lets DevTools call `__sifterLog.dump()` / `.text()` directly.
+// Lets DevTools call `__shotpileLog.dump()` / `.text()` directly.
 if (typeof window !== "undefined") {
-  window.__sifterLog = log;
+  window.__shotpileLog = log;
 }

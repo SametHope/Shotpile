@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    screenshot_sifter_lib::run()
+    shotpile_lib::run()
 }

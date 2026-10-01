@@ -415,7 +415,7 @@ mod tests {
 
     #[test]
     fn collect_reports_a_running_count_of_images() {
-        let dir = std::env::temp_dir().join(format!("sifter-progress-{}", now_ms()));
+        let dir = std::env::temp_dir().join(format!("shotpile-progress-{}", now_ms()));
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         for name in ["a.png", "b.jpg", "sub/c.webp"] {
             std::fs::write(dir.join(name), b"x").unwrap();
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn collect_finds_images_recursively_and_ignores_others() {
-        let dir = std::env::temp_dir().join(format!("sifter-scan-{}", now_ms()));
+        let dir = std::env::temp_dir().join(format!("shotpile-scan-{}", now_ms()));
         let sub = dir.join("2026");
         std::fs::create_dir_all(&sub).unwrap();
         std::fs::write(dir.join("a.png"), b"x").unwrap();

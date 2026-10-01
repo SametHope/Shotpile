@@ -1,8 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Screenshot Sifter",
-  "version": "1.0.0",
-  "identifier": "com.hope.screenshotsifter",
+  "productName": "Shotpile",
+  "identifier": "com.samethope.shotpile",
   "build": {
     "frontendDist": "../src"
   },
@@ -11,7 +10,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Screenshot Sifter",
+        "title": "Shotpile",
         "width": 1180,
         "height": 880,
         "minWidth": 720,
@@ -32,9 +31,13 @@
   },
   "bundle": {
     "active": true,
+    "publisher": "SametHope",
+    "copyright": "Copyright (c) 2026 SametHope",
+    "license": "PolyForm-Noncommercial-1.0.0",
+    "licenseFile": "../LICENSE",
     "targets": ["nsis"],
     "category": "Utility",
-    "shortDescription": "Screenshot review and cleanup",
+    "shortDescription": "Swipe through screenshots, keep or delete",
     "longDescription": "Review screenshots month by month or at random, keep, skip or stage them for deletion, then commit staged files to the Windows Recycle Bin.",
     "icon": [
       "icons/32x32.png",
