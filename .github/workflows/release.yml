@@ -10,9 +10,15 @@ name: Release
 #
 # The tag must match the version in src-tauri/tauri.conf.json, so a release can
 # never ship a binary that reports a different version.
+#
+# A branch push that changes this file is a dry run: it builds everything and
+# keeps the files as a run artifact, but publishes nothing, so a broken release
+# pipeline shows up before someone tags a release.
 on:
   push:
     tags: ["v*"]
+    branches: ["**"]
+    paths: [".github/workflows/release.yml"]
   workflow_dispatch:
     inputs:
       tag:
@@ -31,6 +37,7 @@ jobs:
     runs-on: windows-latest
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      DRY_RUN: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
     steps:
       # The pushed tag, or the head of the branch the run was started on.
       - uses: actions/checkout@v4
@@ -39,6 +46,11 @@ jobs:
         shell: bash
         run: |
           version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          if [ "$DRY_RUN" = true ]; then
+            echo "Dry run on $GITHUB_REF_NAME: builds $version, publishes nothing"
+            exit 0
+          fi
           if [ "v$version" != "$TAG" ]; then
             echo "::error::$TAG does not match version $version in src-tauri/tauri.conf.json"
             exit 1
@@ -51,7 +63,6 @@ jobs:
             echo "::error::$TAG already exists at $existing, not at $GITHUB_SHA; bump the version for a new release"
             exit 1
           fi
-          echo "VERSION=$version" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
         with:
@@ -84,7 +95,15 @@ jobs:
           sha256sum -- * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
+      - name: Keep the files of a dry run
+        if: env.DRY_RUN == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Screenshot-Sifter-${{ env.VERSION }}-dry-run
+          path: release/
+
       - name: Publish the release
+        if: env.DRY_RUN != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

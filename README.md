@@ -163,7 +163,9 @@ git push origin v1.0.0
 
 or by hand from the Actions tab (*Release*, *Run workflow*): pick the branch
 and enter the new tag, and it tags that branch's head. Either way the tag has
-to match the version in `src-tauri/tauri.conf.json`.
+to match the version in `src-tauri/tauri.conf.json`. A push that changes the
+workflow itself runs it as a dry run: it builds everything and keeps the files
+as a run artifact, but publishes nothing.
 
 ## Diagnosing problems
 
