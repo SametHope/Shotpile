@@ -506,6 +506,8 @@ test("resetKeyBindings removes custom bindings from prefs", () => {
   };
   resetKeyBindings(mockPrefs);
   assert.equal(savedPrefs.keyBindings, null, "keyBindings set to null for deletion");
+});
+
 test("matchesFilename filters by substring match, case-insensitive", () => {
   assert.equal(matchesFilename("screenshot.png", "screenshot"), true);
   assert.equal(matchesFilename("screenshot.png", "Screenshot"), true);
