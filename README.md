@@ -11,32 +11,7 @@ Linux), so a mistake can still be restored.
 </p>
 
 It works entirely offline: no account, no network access, nothing uploaded.
-
-## Download
-
-Get it from the
-[latest release](https://github.com/SametHope/Shotpile/releases/latest).
-
-| System | File |
-| --- | --- |
-| Windows 10/11, 64-bit | `Shotpile_<version>_x64-setup.exe` installs it for your user, with a Start menu entry and an uninstaller. `Shotpile_<version>_x64-portable.exe` runs as is. |
-| macOS 10.15 or later, Apple silicon or Intel | `Shotpile_<version>_macos-universal.dmg` |
-| Linux, x86_64 | `Shotpile_<version>_linux-x86_64.AppImage` runs on most distributions (`chmod +x` it first). `Shotpile_<version>_linux-amd64.deb` is for Debian and Ubuntu. |
-
-The builds are not code-signed yet:
-
-- **Windows**: SmartScreen may say *Windows protected your PC*. Choose
-  **More info**, then **Run anyway**. The app needs Microsoft Edge WebView2,
-  which current Windows already has; the installer fetches it if it is
-  missing.
-- **macOS**: the first open is blocked. Open **System Settings › Privacy &
-  Security** and choose **Open Anyway**.
-
-Windows is where the app is used day to day. The macOS and Linux builds come
-from the same code but have seen much less real use, so reports are welcome.
-
-Updating from 1.0.0 (Windows only), which was called *Screenshot Sifter*: the
-first start moves its database over, so your decisions carry on.
+[Download it](#download) for Windows, macOS or Linux.
 
 ## A quick tour
 
@@ -78,6 +53,34 @@ has its own pile.
 **Light or dark.** It follows the system theme, or the choice in Options.
 
 ![The library in the dark theme: the overview bar and the months, each with its thumbnails and progress.](docs/screenshots/library-dark.webp)
+
+## Download
+
+Get it from the
+[latest release](https://github.com/SametHope/Shotpile/releases/latest).
+
+| System | File |
+| --- | --- |
+| Windows 10/11, 64-bit | `Shotpile_<version>_x64-setup.exe` installs it for your user, with a Start menu entry and an uninstaller. `Shotpile_<version>_x64-portable.exe` runs as is. |
+| macOS 10.15 or later, Apple silicon or Intel | `Shotpile_<version>_macos-universal.dmg` |
+| Linux, x86_64 | `Shotpile_<version>_linux-x86_64.AppImage` runs on most distributions (`chmod +x` it first). `Shotpile_<version>_linux-amd64.deb` is for Debian and Ubuntu. |
+
+The builds are not code-signed:
+
+- **Windows**: SmartScreen may say *Windows protected your PC*. Choose
+  **More info**, then **Run anyway**. The app needs Microsoft Edge WebView2,
+  which current Windows already has; the installer fetches it if it is
+  missing.
+- **macOS**: the first open is blocked. Open **System Settings › Privacy &
+  Security** and choose **Open Anyway**.
+
+Windows is where the app is used and tested by hand. The Linux build passes
+the same automated tests in CI. **The macOS build is untested**: it is built
+from the same code, but nobody has run it on a Mac yet, so treat it as a
+preview and report what breaks.
+
+Updating from 1.0.0 (Windows only), which was called *Screenshot Sifter*: the
+first start moves its database over, so your decisions carry on.
 
 ## Details
 

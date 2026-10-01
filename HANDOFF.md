@@ -19,9 +19,7 @@ Nothing is known broken. In rough priority order:
 3. **DST at month edges.** Months are grouped with the current UTC offset for
    every date, so a shot taken in the first or last hour of a month across a
    DST change can land in the neighbouring month.
-4. **Code signing.** Releases are unsigned, so SmartScreen warns on first run
-   and macOS blocks the first open (the app is only ad-hoc signed).
-5. **macOS and Linux have seen little real use.** They build in the release
+4. **macOS and Linux have seen little real use.** They build in the release
    workflow and the Rust tests run on Linux in CI, but nobody has done a manual
    pass on a Mac. On macOS the `trash` crate goes through Finder, which asks
    for Automation permission on the first commit. Shortcut labels say `Ctrl`

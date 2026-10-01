@@ -206,10 +206,10 @@ jobs:
           | System | File |
           | --- | --- |
           | Windows 10/11, 64-bit | **Shotpile_${VERSION}_x64-setup.exe** installs for your user, with a Start menu entry and an uninstaller. **Shotpile_${VERSION}_x64-portable.exe** runs without installing. |
-          | macOS 10.15 or later (Apple silicon and Intel) | **Shotpile_${VERSION}_macos-universal.dmg** |
+          | macOS 10.15 or later (Apple silicon and Intel) | **Shotpile_${VERSION}_macos-universal.dmg** (untested: built from the same code, but not run on a Mac yet) |
           | Linux, x86_64 | **Shotpile_${VERSION}_linux-x86_64.AppImage** runs on most distributions (\`chmod +x\` it first). **Shotpile_${VERSION}_linux-amd64.deb** is for Debian and Ubuntu. |
 
-          The files are not code-signed yet:
+          The files are not code-signed:
           - **Windows**: SmartScreen may say *Windows protected your PC*. Choose **More info**, then **Run anyway**. The app needs Microsoft Edge WebView2, which current Windows already has; the installer fetches it if it is missing.
           - **macOS**: the first open is blocked. Open **System Settings › Privacy & Security** and choose **Open Anyway**.
 
