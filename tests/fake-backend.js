@@ -23,6 +23,7 @@
   const undoStack = [];
   const redoStack = [];
   const UNDO_LIMIT = 200;
+  const counters = {}; // Local statistics counters
 
   // Fault injection, for the edge cases the logic tests cannot reach.
   const faults = { decide: false, summary: false, undoOutOfScope: false, scanDelayMs: 0, itemsDelayMs: 0, commitDelayMs: 0 };
@@ -259,6 +260,9 @@
       pushUndo({ id: s.id, prev: s.status, prev_decided_ms: s.decided_ms, next: status });
       s.status = status;
       s.decided_ms = Date.UTC(2026, 8, 30);
+      // Increment counter for this decision type
+      const counterName = { keep: "decision:kept", skip: "decision:skipped", delete: "decision:staged" }[a.kind];
+      if (counterName) counters[counterName] = (counters[counterName] || 0) + 1;
       LOG.push("decide:" + a.kind + ":" + s.name);
       return { ...s };
     },
@@ -283,6 +287,10 @@
         redoStack.push({ ...e, next_decided_ms: s.decided_ms });
         s.status = e.prev;
         s.decided_ms = e.prev_decided_ms;
+        // Decrement counter for the undone decision
+        const counterName = { kept: "decision:kept", skipped: "decision:skipped", staged: "decision:staged" }[e.next];
+        if (counterName) counters[counterName] = Math.max(0, (counters[counterName] || 0) - 1);
+        counters["session:undos"] = (counters["session:undos"] || 0) + 1;
         LOG.push("undo:" + s.name);
         return { ...s };
       }
@@ -297,6 +305,10 @@
         s.status = e.next;
         s.decided_ms = e.next_decided_ms;
         undoStack.push(e);
+        // Increment counter for the redone decision
+        const counterName = { kept: "decision:kept", skipped: "decision:skipped", staged: "decision:staged" }[e.next];
+        if (counterName) counters[counterName] = (counters[counterName] || 0) + 1;
+        counters["session:redos"] = (counters["session:redos"] || 0) + 1;
         LOG.push("redo:" + s.name);
         return { ...s };
       }
@@ -323,6 +335,7 @@
       const staged = inRoot(a.rootId).filter((s) => s.status === "staged");
       const moved = staged.filter((s) => !s.__failCommit);
       const failed = staged.filter((s) => s.__failCommit).map((s) => ({ id: s.id, name: s.name, error: "simulated: the file is in use", gone: false }));
+      const bytesFreed = bytes(moved);
       for (const s of moved) {
         s.status = "deleted";
         s.decided_ms = Date.UTC(2026, 8, 30);
@@ -330,8 +343,12 @@
       const ids = new Set(moved.map((s) => s.id));
       for (let i = undoStack.length - 1; i >= 0; i--) if (ids.has(undoStack[i].id)) undoStack.splice(i, 1);
       for (let i = redoStack.length - 1; i >= 0; i--) if (ids.has(redoStack[i].id)) redoStack.splice(i, 1);
+      // Increment deletion counters
+      counters["deletion:files_deleted"] = (counters["deletion:files_deleted"] || 0) + moved.length;
+      counters["deletion:bytes_deleted"] = (counters["deletion:bytes_deleted"] || 0) + bytesFreed;
+      counters["session:commits"] = (counters["session:commits"] || 0) + 1;
       LOG.push("commit:" + moved.length);
-      return { deleted: moved.length, failed, still_staged: failed.length, bytes_freed: bytes(moved) };
+      return { deleted: moved.length, failed, still_staged: failed.length, bytes_freed: bytesFreed };
     },
     // Mirrors the real command: scanning is what adds the root to the database.
     scan_root: (a) => {
@@ -360,6 +377,26 @@
     open_devtools: () => { LOG.push("devtools"); return null; },
     log_read: () => "[2026-09-30 10:00:00.000] INFO  [boot] fake log line",
     log_write: (a) => { UI_LOG.push(a); return null; },
+    get_counters: () => {
+      const groups = [];
+      const decision = Object.entries(counters).filter(([k]) => k.startsWith("decision:")).map(([k, v]) => [k.replace("decision:", ""), v]);
+      if (decision.length > 0) groups.push({ name: "decision", label: "Decisions", counters: decision });
+      const deletion = Object.entries(counters).filter(([k]) => k.startsWith("deletion:")).map(([k, v]) => [k.replace("deletion:", ""), v]);
+      if (deletion.length > 0) groups.push({ name: "deletion", label: "Deletion", counters: deletion });
+      const session = Object.entries(counters).filter(([k]) => k.startsWith("session:")).map(([k, v]) => [k.replace("session:", ""), v]);
+      if (session.length > 0) groups.push({ name: "session", label: "Session", counters: session });
+      return groups;
+    },
+    reset_counters: (a) => {
+      if (a.group) {
+        for (const k of Object.keys(counters)) {
+          if (k.startsWith(a.group + ":")) delete counters[k];
+        }
+      } else {
+        for (const k of Object.keys(counters)) delete counters[k];
+      }
+      return null;
+    },
   };
 
   window.__FAILS = FAILS;

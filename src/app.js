@@ -1862,6 +1862,29 @@ function showOptions() {
     h("button", { class: "btn sm", onclick: () => reveal(target) }, icon("folder", { size: 15 }), "Open"));
   const fact = (k, v) => [h("dt", { text: k }), h("dd", { text: v || "unknown" })];
 
+  // Load statistics
+  const counterSections = [];
+  api("get_counters").then((groups) => {
+    const counterBody = document.getElementById("stats-body");
+    if (counterBody && groups) {
+      const sections = groups.map((group) =>
+        h("div", { class: "stats-group" },
+          h("div", { class: "stats-header" },
+            h("h4", { text: group.label }),
+            h("button", { class: "btn sm ghost", onclick: () => {
+              api("reset_counters", { group: group.name }).catch((e) => log.error("stats", `Reset ${group.name} failed: ${e}`));
+              document.location.reload();
+            }, title: `Reset ${group.label.toLowerCase()} statistics` }, "Reset")),
+          h("dl", { class: "stats-list" },
+            ...group.counters.map(([name, value]) => {
+              const label = name.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+              const formatted = value > 1000000 ? (value / 1048576).toFixed(2) + " MB" : value > 1000 ? (value / 1024).toFixed(2) + " KB" : String(value);
+              return [h("dt", { text: label }), h("dd", { text: formatted })];
+            }))));
+      counterBody.replaceChildren(...sections);
+    }
+  }).catch((e) => log.warn("stats", `Failed to load counters: ${e}`));
+
   modal({
     title: "Options",
     cls: "options-sheet",
@@ -1885,6 +1908,10 @@ function showOptions() {
         h("div", { class: "opt-row" },
           h("button", { class: "btn sm", onclick: () => { closeModal(); showLog(); } }, icon("log", { size: 15 }), "View the log"),
           h("button", { class: "btn sm", onclick: () => { closeModal(); showShortcuts(); } }, icon("keyboard", { size: 15 }), "Keyboard shortcuts"))),
+      h("section", { class: "opt-group" },
+        h("h3", { text: "Statistics" }),
+        h("p", { class: "about-note", text: "Local statistics about your use of Shotpile. Nothing is sent anywhere." }),
+        h("div", { id: "stats-body", class: "stats-container" })),
       h("section", { class: "opt-group" },
         h("h3", { text: "About" }),
         h("dl", { class: "about-list" },
