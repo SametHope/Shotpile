@@ -68,3 +68,21 @@ Nothing is known broken. In rough priority order:
    prefs; increment in the `apply_*` functions so the tests cover it; a
    forgotten folder must not erase the lifetime totals; nothing leaves the
    machine, and the README's Data section should say so.
+10. **Sorted months are closed.** Done months are hidden by default (Filter) and
+    cannot be entered. Let the user open one to review or delete the kept
+    photos: a queue of that month's `kept` rows (queue orders and the fake
+    backend must mirror it), with decisions working as usual. Keep the hard
+    rules: staging still goes through the pile and the Recycle Bin.
+11. **Resizable filmstrip.** A drag handle on the strip's top edge; dragging up
+    gives the strip more height and the deck less (the deck needs a definite
+    height, see "Review view" in AGENTS.md: keep the flex chain). Larger
+    thumbs make upcoming photos easier to scan and reach with `jumpTo`. Save
+    the height in prefs and clamp it, and mind the `small windows` queries.
+12. **Card info bar blur.** Reduce the existing blur a little and restrict it
+    to the bottom-left and bottom-right text areas (e.g. masks or two
+    separate scrims) so the middle of the photo stays sharp. It must stay a
+    gradient background, because `paintIntent()` overrides it (see AGENTS.md).
+13. **"Deleted" segment look.** In the stacked progress bar the deleted part
+    reads as empty beside kept (green) and staged (red). Give it a stripe or
+    similar pattern, with a dark-theme value, so it reads as completed work.
+    Check the legend and the README picture alt texts after.
