@@ -310,6 +310,9 @@ Not built yet, roughly in this order:
 - Rebindable keyboard shortcuts in Options.
 - Research and fix the occasional white flash when going fullscreen and on the
   first scroll afterwards.
+- "Next month" after finishing a month should follow the calendar: the nearest
+  later month with work left, otherwise the nearest earlier one (it can jump
+  from 2025 to 2026 today).
 - Possible later: keyboard navigation in the library, a filename filter inside
   a review, bulk restore from the pile, a clearer report when a commit cannot
   delete some files, and duplicate detection.
