@@ -45,3 +45,9 @@ Nothing is known broken. In rough priority order:
    catches up, or a Tauri window background issue. Worth researching properly:
    the window and WebView background colour (including dark theme), the
    resize-to-fullscreen repaint, and compositing of the scrolling `#view`.
+7. **"Next month" ordering.** The next-month button on a finished month does not
+   use that month's date: working in 2025 can land in 2026. It should pick the
+   nearest later month that still has work, else the nearest earlier one,
+   chronologically. Look at where the summary picks the next month in
+   `src/app.js` and add the selection as a pure function in `logic.js` with
+   tests (including the library hiding done months).
