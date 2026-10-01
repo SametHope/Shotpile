@@ -5,104 +5,11 @@
 // synthetic handler. Page-side helpers live in tests/probes.js.
 //
 // Needs Chrome or Chromium; set CHROME=/path/to/chrome if it is not found.
-const { spawn } = require("node:child_process");
-const os = require("node:os");
-const path = require("node:path");
-const fs = require("node:fs");
-const net = require("node:net");
-const crypto = require("node:crypto");
 const { start } = require("./serve.cjs");
+const { launchChrome } = require("./browser.cjs");
 
 const PORT = 8731;
 const CDP_PORT = 9222;
-
-// `CHROME` overrides the search; otherwise the first browser that exists wins.
-// Playwright's bundled Chromium is on the list so CI and dev containers work
-// without a system Chrome.
-const CHROME = [
-  process.env.CHROME,
-  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-  "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  "/usr/bin/google-chrome",
-  "/usr/bin/chromium",
-  "/usr/bin/chromium-browser",
-  "/opt/pw-browsers/chromium",
-].find((p) => p && fs.existsSync(p));
-
-// Minimal dependency-free CDP client over raw WebSocket.
-function cdp(wsUrl) {
-  const u = new URL(wsUrl);
-  return new Promise((resolve, reject) => {
-    const sock = net.connect(Number(u.port), u.hostname, () => {
-      sock.write(
-        `GET ${u.pathname} HTTP/1.1\r\nHost: ${u.host}\r\nUpgrade: websocket\r\n` +
-        `Connection: Upgrade\r\nSec-WebSocket-Key: ${crypto.randomBytes(16).toString("base64")}\r\n` +
-        `Sec-WebSocket-Version: 13\r\n\r\n`
-      );
-    });
-    let buf = Buffer.alloc(0);
-    let upgraded = false;
-    let id = 0;
-    const pending = new Map();
-    const events = {};
-
-    const api = {
-      send(method, params = {}) {
-        const payload = Buffer.from(JSON.stringify({ id: ++id, method, params }));
-        const mask = crypto.randomBytes(4);
-        let header;
-        if (payload.length < 126) header = Buffer.from([0x81, 0x80 | payload.length]);
-        else if (payload.length < 65536) {
-          header = Buffer.alloc(4);
-          header[0] = 0x81; header[1] = 0x80 | 126; header.writeUInt16BE(payload.length, 2);
-        } else {
-          header = Buffer.alloc(10);
-          header[0] = 0x81; header[1] = 0x80 | 127; header.writeBigUInt64BE(BigInt(payload.length), 2);
-        }
-        const masked = Buffer.alloc(payload.length);
-        for (let i = 0; i < payload.length; i++) masked[i] = payload[i] ^ mask[i % 4];
-        sock.write(Buffer.concat([header, mask, masked]));
-        return new Promise((res, rej) => pending.set(id, { res, rej }));
-      },
-      on(event, cb) { events[event] = cb; },
-      close() { sock.destroy(); },
-    };
-
-    sock.on("data", (chunk) => {
-      buf = Buffer.concat([buf, chunk]);
-      if (!upgraded) {
-        const i = buf.indexOf("\r\n\r\n");
-        if (i === -1) return;
-        upgraded = true;
-        buf = buf.subarray(i + 4);
-        resolve(api);
-      }
-      for (;;) {
-        if (buf.length < 2) return;
-        let off = 2;
-        const len0 = buf[1] & 127;
-        let len = len0;
-        if (len0 === 126) { if (buf.length < 4) return; len = buf.readUInt16BE(2); off = 4; }
-        else if (len0 === 127) { if (buf.length < 10) return; len = Number(buf.readBigUInt64BE(2)); off = 10; }
-        if (buf.length < off + len) return;
-        const data = buf.subarray(off, off + len).toString();
-        buf = buf.subarray(off + len);
-        let msg;
-        try { msg = JSON.parse(data); } catch { continue; }
-        if (msg.id && pending.has(msg.id)) {
-          const h = pending.get(msg.id);
-          pending.delete(msg.id);
-          msg.error ? h.rej(new Error(JSON.stringify(msg.error))) : h.res(msg.result);
-        } else if (msg.method && events[msg.method]) {
-          events[msg.method](msg.params);
-        }
-      }
-    });
-    sock.on("error", reject);
-  });
-}
 
 // Key identities, so the browser sees the real key: Windows virtual key code,
 // DOM `code`, and the text a printable key produces.
@@ -127,34 +34,12 @@ const SHIFT = 8;
 const CTRL_SHIFT = CTRL | SHIFT;
 
 (async () => {
-  if (!CHROME) throw new Error("no Chrome/Chromium found; set CHROME=/path/to/chrome");
   const server = await start(PORT);
-  const userDir = path.join(os.tmpdir(), "sifter-chrome-smoke-profile");
-  const chrome = spawn(CHROME, [
-    "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
-    // A fixed viewport, so the layout assertions do not depend on the host.
-    "--window-size=1180,880",
-    // Chrome refuses to start as root without this (containers), and CI
-    // runners may block the user namespaces its sandbox needs. The page is
-    // our own local harness, so the sandbox buys nothing here.
-    ...(process.getuid?.() === 0 || process.env.CI ? ["--no-sandbox"] : []),
-    `--remote-debugging-port=${CDP_PORT}`, `--user-data-dir=${userDir}`, "about:blank",
-  ], { stdio: "ignore" });
-
-  const cleanup = () => { try { chrome.kill(); } catch {} server.close(); };
+  const chrome = await launchChrome({ port: CDP_PORT, profile: "sifter-chrome-smoke-profile" });
+  const client = chrome.client;
+  const cleanup = () => { chrome.close(); server.close(); };
   process.on("exit", cleanup);
 
-  let target = null;
-  for (let i = 0; i < 60 && !target; i++) {
-    await new Promise((r) => setTimeout(r, 300));
-    try {
-      const list = await (await fetch(`http://127.0.0.1:${CDP_PORT}/json/list`)).json();
-      target = list.find((t) => t.type === "page");
-    } catch { /* not up yet */ }
-  }
-  if (!target) { cleanup(); throw new Error("chrome did not start"); }
-
-  const client = await cdp(target.webSocketDebuggerUrl);
   const consoleErrors = [];
   client.on("Runtime.consoleAPICalled", (p) => {
     if (p.type !== "error") return;
@@ -254,12 +139,30 @@ const CTRL_SHIFT = CTRL | SHIFT;
     // ---- queue filmstrip ----
     ok("filmstrip shows the queue", (await probe("p.filmCount()")) === 3, String(await probe("p.filmCount()")));
     ok("filmstrip marks the current item", (await probe("p.filmCurrent()")) === 0, String(await probe("p.filmCurrent()")));
+    // Buttons keep their button role: a listitem role would hide them from a
+    // screen reader as controls.
+    const filmRoles = `${await probe("p.attr('#filmstrip', 'role')")} / ${await probe("p.attr('.film-item', 'role')")}`;
+    ok("the filmstrip is a group of plain buttons", filmRoles === "group / null", filmRoles);
+    // Collapsed is not enough: an invisible "Move to Recycle Bin" must not be
+    // reachable with Tab and Enter.
+    ok("the collapsed footer bar is out of the tab order", (await waitFor("p.visibility('#footbar') === 'hidden'", 800)) === true, String(await probe("p.visibility('#footbar')")));
     await js("p.clickFilm(1);");
     await waitFor(`p.cardName() !== ${JSON.stringify(first)}`);
     ok("clicking a film item jumps to it", (await probe("p.cardName()")) === SECOND, String(await probe("p.cardName()")));
     await js("p.clickFilm(0);");
     await waitFor(`p.cardName() === ${JSON.stringify(first)}`);
     ok("jumping back returns to the first card", (await probe("p.cardName()")) === first, String(await probe("p.cardName()")));
+    // While a jumped-to card is still loading, the old one stays on screen but
+    // the cursor already points at the new one: a key then decided the old
+    // card and advanced from the new position, skipping a card unseen.
+    await js("p.reset(); p.dropCache(); p.setFault('itemsDelayMs', 400); p.clickFilm(1);");
+    await press("ArrowLeft");
+    await js("p.setFault('itemsDelayMs', 0);");
+    await waitFor(`p.cardName() === ${JSON.stringify(SECOND)}`);
+    ok("a key while a jump is loading decides nothing", (await probe("p.logFilter('decide:').length")) === 0 && (await status(first)) === "pending", JSON.stringify(await probe("p.logFilter('decide:')")));
+    ok("the jump still lands", (await probe("p.cardName()")) === SECOND && (await probe("p.progress()")) === "2 of 3", `${await probe("p.cardName()")} ${await probe("p.progress()")}`);
+    await js("p.clickFilm(0);");
+    await waitFor(`p.cardName() === ${JSON.stringify(first)}`);
 
     // ---- the date-source diagnostic lives in the tooltip ----
     ok("the date explains its source on hover", /from filename/i.test(await probe("p.dateTooltip()") || ""), String(await probe("p.dateTooltip()")));
@@ -391,6 +294,12 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await press("l", CTRL_SHIFT);
     await waitFor("!p.modalHidden()");
     ok("the log opens above the viewer", await probe(`(() => { const m = document.querySelector('#modal .modal').getBoundingClientRect(); return !!document.elementFromPoint(m.left + m.width / 2, m.top + m.height / 2)?.closest('#modal'); })()`));
+    // Enter on the log's focused Close button belongs to the log: the viewer
+    // used to take it, close itself, and leave the log open over the review.
+    await press("Enter");
+    ok("Enter closes a dialog over the viewer, not the viewer", (await waitFor("p.modalHidden()")) === true && (await probe("p.viewerOpen()")) === true, `modal hidden ${await probe("p.modalHidden()")}, viewer ${await probe("p.viewerOpen()")}`);
+    await press("l", CTRL_SHIFT);
+    await waitFor("!p.modalHidden()");
     await press("Escape");
     ok("Escape closes the dialog before the viewer", (await waitFor("p.modalHidden()")) === true && (await probe("p.viewerOpen()")) === true);
     await press("Escape");
@@ -403,6 +312,17 @@ const CTRL_SHIFT = CTRL | SHIFT;
     ok("Space opens the viewer from the review", await waitFor("p.viewerOpen()"));
     await press("Escape");
     ok("the viewer leaves the decision alone", (await status(first)) === "pending", await status(first));
+    // With focus left on a review button, Enter reached that button through
+    // the viewer and decided the card behind the photo.
+    await js("p.reset(); p.focusSel('.act-keep');");
+    await press(" ");
+    await waitFor("p.viewerOpen()");
+    ok("the viewer takes focus and makes the app behind it inert", (await probe("p.appInert()")) === true && (await probe("p.focusedLabel()")) === "Close", `inert ${await probe("p.appInert()")}, focus ${await probe("p.focusedLabel()")}`);
+    await press("Enter");
+    await sleep(150);
+    ok("Enter closes the viewer and decides nothing", (await probe("p.viewerOpen()")) === false && (await probe("p.logFilter('decide:').length")) === 0 && (await status(first)) === "pending", JSON.stringify(await probe("p.logFilter('decide:')")));
+    ok("closing the viewer gives focus back", (await probe("p.focusedIs('.act-keep')")) === true && (await probe("p.appInert()")) === false, String(await probe("p.focusedLabel()")));
+    await js("document.activeElement.blur();");
 
     // ---- two swipes in a row ----
     // The regression this guards: gestures were bound per render with the top
@@ -582,12 +502,24 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await press("z", CTRL);
     await waitFor("p.pileNames().length === 2");
     ok("undo in the pile puts the file back on it", (await status(stageA)) === "staged", await status(stageA));
+    // The file is back either way; a failed count refresh used to swallow the
+    // confirmation and its Undo.
+    await js("p.setFault('summary', true); p.clickPutBack(0);");
+    await waitFor("p.pileNames().length === 1");
+    ok("put back confirms even when the counter refresh fails", /is back in the unsorted pile/.test(await waitFor("/back in the unsorted/.test(p.toastText() || '') && p.toastText()")), await probe("p.toastText()"));
+    await press("z", CTRL);
+    await waitFor("p.pileNames().length === 2");
+    await waitFor("p.stagedCount() === '2'");
 
     // ---- commit dialog: Enter must not confirm ----
     await js("p.reset();");
+    const toastBefore = await probe("p.toastOn()");
     await js("p.clickPileCommit();");
     await waitFor("!p.modalHidden()");
     ok("commit dialog opens", (await probe("p.modalHidden()")) === false);
+    // The toast sat above the backdrop: its Undo re-staged a file between the
+    // confirmation's preview and the commit.
+    ok("a dialog puts away the toast and its Undo", toastBefore === true && (await probe("p.toastOn()")) === false && (await waitFor("p.visibility('#toast') === 'hidden'", 800)) === true, `before ${toastBefore}, after ${await probe("p.toastOn()")} ${await probe("p.visibility('#toast')")}`);
     ok("focus starts on the safe option", (await probe("p.focusedLabel()")) === "Cancel", await probe("p.focusedLabel()"));
     ok("the delete confirmation lists previews", (await probe("p.delGridCount()")) === 2, String(await probe("p.delGridCount()")));
     ok("the delete confirmation names the files", (await probe("p.delGridNames()")).includes(FIRST), JSON.stringify(await probe("p.delGridNames()")));
@@ -676,6 +608,45 @@ const CTRL_SHIFT = CTRL | SHIFT;
     ok("an out-of-scope undo says so", /not in this queue/.test(await probe("p.toastText()")), await probe("p.toastText()"));
     ok("an out-of-scope undo keeps the review going", (await probe("p.cardName()")) === beforeOut, `${beforeOut} -> ${await probe("p.cardName()")}`);
 
+    // ---- nothing opens while a commit is moving files ----
+    // Decisions and undo wait for the commit, so a review opened meanwhile
+    // ignored every key.
+    await js("p.backToMonths();");
+    await waitFor("p.view() === 'months' && p.monthRows().length > 0");
+    await js("p.reset(); p.setFault('commitDelayMs', 900); p.clickCommit();");
+    await waitFor("!p.modalHidden()");
+    await probe("p.clickConfirmInModal()");
+    await sleep(100);
+    await probe("p.clickMonth('2026-09')");
+    ok("a month will not open while files are being moved", /Moving files to the Recycle Bin/.test(await waitFor("/Moving files/.test(p.toastText() || '') && p.toastText()", 600)) && (await probe("p.view()")) === "months", `${await probe("p.toastText()")} / ${await probe("p.view()")}`);
+    await js("p.clickFolderChip();");
+    await waitFor("p.menuItems().length > 0");
+    await js("p.clickMenuItem('shots-b');");
+    ok("nor will another folder", (await probe("p.folderName()")) === "Screenshots" && /Moving files/.test(await probe("p.toastText()")), `${await probe("p.folderName()")} / ${await probe("p.toastText()")}`);
+    await js("p.setFault('commitDelayMs', 0);");
+    await waitFor("p.logFilter('commit:').length > 0", 2000);
+    await waitFor("!document.getElementById('btn-commit').disabled", 2000);
+    ok("the commit still finishes", (await status(rbCard)) === "deleted", await status(rbCard));
+
+    // ---- checking the pile card by card ----
+    const PILE_B = "Screenshot 2026-08-19 18-22-30.png";
+    await js(`p.setStatus(${JSON.stringify(PILE_B)}, 'staged'); p.setStatus(${JSON.stringify(SECOND)}, 'staged');`);
+    await js("p.reset(); p.clickStagedBtn();");
+    await waitFor("p.pileNames().length === 2");
+    await js("[...document.querySelectorAll('.pile-actions .btn')].find((b) => /one by one/.test(b.textContent)).click();");
+    await waitFor("p.hasCard()");
+    // The pile spans every folder, so checking it must too: with the current
+    // folder's filter the other folder's file never came up.
+    ok("checking the pile covers every folder", (await probe("p.progress()")) === "1 of 2" && (await probe("p.cardName()")) === PILE_B, `${await probe("p.progress()")} ${await probe("p.cardName()")}`);
+    // A skip would write "skipped" and silently take the file off the pile.
+    ok("checking the pile offers no skip", (await probe("p.hasSel('.act-skip')")) === false);
+    await press("ArrowUp");
+    await sleep(200);
+    ok("ArrowUp does not skip a file off the pile", (await status(PILE_B)) === "staged" && (await probe("p.logFilter('decide:').length")) === 0, `${await status(PILE_B)} ${JSON.stringify(await probe("p.logFilter('decide:')"))}`);
+    await press("ArrowRight");
+    await waitFor(`p.status(${JSON.stringify(PILE_B)}) === "kept"`);
+    ok("keeping a file from the pile updates the badge", (await waitFor("p.stagedCount() === '1'")) === true, await probe("p.stagedCount()"));
+
     // ---- a file with no preview ----
     await js("p.backToMonths();");
     await waitFor("p.view() === 'months' && p.monthRows().length > 0");
@@ -685,6 +656,14 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await press(" ");
     await sleep(200);
     ok("Space does not open a viewer for an unpreviewable file", (await probe("p.viewerOpen()")) === false);
+    // An undo pressed while the last card is still leaving used to be dropped,
+    // and the summary then covered the card it should have brought back.
+    const lastOne = await probe("p.cardName()");
+    await press("ArrowLeft");
+    await sleep(60);
+    await press("z");
+    await sleep(700);
+    ok("undo during the last card's exit brings it back", (await status(lastOne)) === "pending" && (await probe("p.cardName()")) === lastOne && !(await probe("p.finaleText()")), `${await status(lastOne)} ${await probe("p.cardName()")} ${await probe("p.finaleText()")}`);
 
     // ---- the library keeps its scroll position across a review ----
     await js("p.backToMonths();");
@@ -699,6 +678,17 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await waitFor("p.view() === 'months' && p.monthRows().length > 20");
     await sleep(150);
     ok("coming back from a review keeps the library's scroll position", scrolled > 0 && (await probe("p.viewScroll()")) === scrolled, `${scrolled} -> ${await probe("p.viewScroll()")}`);
+    // The pile is a page of its own and opens at the top, not wherever the
+    // library happened to be scrolled.
+    await js("p.stageOldMonths(); document.getElementById('btn-scan').click();");
+    await waitFor("p.logFilter('scan:').length > 1 && p.stagedBtnVisible()", 3000);
+    await sleep(150);
+    await js("p.setViewScroll(700);");
+    await probe("p.clickStagedBtn()");
+    await waitFor("p.pileNames().length > 20");
+    ok("the pile opens at the top", (await probe("p.viewScroll()")) === 0, String(await probe("p.viewScroll()")));
+    await js("p.backToMonths();");
+    await waitFor("p.view() === 'months'");
     await js("p.removeOldMonths(); document.getElementById('btn-scan').click();");
     await waitFor("p.monthRows().length === 2", 3000);
 
@@ -706,6 +696,16 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await js("p.reset();");
     await js("p.backToMonths();");
     await waitFor("p.view() === 'months' && p.monthRows().length > 0");
+    // A scan that finished after a forget added the folder straight back.
+    await js("p.setFault('scanDelayMs', 800); document.getElementById('btn-scan').click();");
+    await js("p.clickFolderChip();");
+    await waitFor("p.menuItems().length > 0");
+    await js("p.clickMenuItem('Forget');");
+    ok("a folder cannot be forgotten mid-scan", /Wait for the scan to finish first/.test(await waitFor("/Wait for the scan/.test(p.toastText() || '') && p.toastText()", 600)) && (await probe("p.modalHidden()")) === true, `${await probe("p.toastText()")} / modal hidden ${await probe("p.modalHidden()")}`);
+    await js("p.setFault('scanDelayMs', 0);");
+    await waitFor("p.logFilter('scan:').length > 0", 2000);
+    await waitFor("!document.getElementById('btn-scan').disabled", 2000);
+    await js("p.reset();");
     await js("p.clickFolderChip();");
     await waitFor("p.menuItems().length > 0");
     ok("the folder menu lists every saved folder", JSON.stringify(await probe("p.menuItems()")) === JSON.stringify(["Screenshots", "shots-b", "Add a folder…", "Forget “Screenshots”…"]), JSON.stringify(await probe("p.menuItems()")));
@@ -748,7 +748,6 @@ const CTRL_SHIFT = CTRL | SHIFT;
 
   const pageFails = await js("return window.__FAILS;").catch(() => []);
 
-  client.close();
   cleanup();
 
   for (const r of results) {

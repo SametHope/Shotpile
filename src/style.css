@@ -875,6 +875,8 @@ kbd {
 .stamp.left { left: 18px; background: #dc2626; rotate: -9deg; }
 .stamp.right { right: 18px; background: #15803d; rotate: 9deg; }
 .stamp.up { top: 50%; left: 50%; translate: -50% -50%; background: #c2620c; rotate: -3deg; }
+/* Checking the deletion pile is keep-or-delete. */
+.review[data-scope="staged"] .stamp.up { display: none; }
 
 /* The stamp pops the moment a drag crosses into a decision. */
 .card[data-armed="delete"] .stamp.left,
@@ -1200,9 +1202,17 @@ kbd {
   max-height: 0;
   opacity: 0;
   overflow: hidden;
-  transition: max-height .25s var(--ease), opacity .25s var(--ease);
+  /* Collapsed also means out of the tab order: an invisible "Move to Recycle
+     Bin" button must not take Enter. Visibility flips after the collapse. */
+  visibility: hidden;
+  transition: max-height .25s var(--ease), opacity .25s var(--ease), visibility 0s linear .25s;
 }
-.footbar.on { max-height: 80px; opacity: 1; }
+.footbar.on {
+  max-height: 80px;
+  opacity: 1;
+  visibility: visible;
+  transition: max-height .25s var(--ease), opacity .25s var(--ease), visibility 0s;
+}
 .fwrap {
   max-width: 1120px;
   margin: 0 auto;
@@ -1341,13 +1351,17 @@ kbd {
   gap: 12px;
   opacity: 0;
   pointer-events: none;
-  transition: opacity .16s, translate .22s var(--ease-out);
+  /* A gone toast must not keep a focusable Undo around. */
+  visibility: hidden;
+  transition: opacity .16s, translate .22s var(--ease-out), visibility 0s linear .22s;
   z-index: 80;
   max-width: min(680px, calc(100vw - 32px));
   font-size: 13px;
   border-left: 3px solid transparent;
 }
-#toast.on { opacity: 1; translate: -50% 0; pointer-events: auto; }
+#toast.on { opacity: 1; translate: -50% 0; pointer-events: auto; visibility: visible; transition: opacity .16s, translate .22s var(--ease-out), visibility 0s; }
+/* While a dialog is open the toast stays under the backdrop. */
+#modal:not([hidden]) ~ #toast { z-index: 74; }
 #toast[data-tone="error"] { border-left-color: #f87171; }
 #toast[data-tone="ok"] { border-left-color: #4ade80; }
 #toast .msg { overflow: hidden; text-overflow: ellipsis; }

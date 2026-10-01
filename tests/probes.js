@@ -282,6 +282,15 @@
       }
     },
     removeOldMonths: () => { for (const id of [...window.__shots.keys()]) if (id >= 500) window.__shots.delete(id); },
+    stageOldMonths: () => { for (const s of window.__shots.values()) if (s.id >= 500) s.status = "staged"; },
+    toastOn: () => $("#toast").classList.contains("on"),
+    visibility: (sel) => { const n = $(sel); return n ? getComputedStyle(n).visibility : null; },
+    appInert: () => $("#app").hasAttribute("inert"),
+    focusSel: (sel) => { const n = $(sel); if (n) n.focus(); return document.activeElement === n; },
+    focusedIs: (sel) => document.activeElement === $(sel),
+    hasSel: (sel) => !!$(sel),
+    attr: (sel, name) => $(sel)?.getAttribute(name) ?? null,
+    dropCache: () => window.__sifterTest.dropCache(),
     viewScroll: () => document.getElementById("view").scrollTop,
     setViewScroll: (y) => { document.getElementById("view").scrollTop = y; },
   };

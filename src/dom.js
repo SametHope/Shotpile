@@ -134,6 +134,10 @@ export function modalOpen() {
 export function modal({ title, body, actions, wide = false, onCancel = null, cls = "" }) {
   const p = modalParts();
   if (!modalOpen()) modalReturnFocus = document.activeElement;
+  // The toast sits above the backdrop, so its action (Undo, Details) would
+  // stay clickable behind a dialog: an Undo there re-staged a file between
+  // the delete confirmation's preview and its commit.
+  hideToast();
   p.title.textContent = title;
   p.body.replaceChildren(...[body].flat(Infinity).filter(Boolean));
   p.foot.replaceChildren(

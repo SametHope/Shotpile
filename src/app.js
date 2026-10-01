@@ -99,6 +99,7 @@ const state = {
   scanFound: 0, // images the running scan has found so far (scan-progress events)
   stagedToken: 0, // guards the async staged view against a stale paint
   libraryScroll: 0, // where the library was scrolled to, restored on return
+  showToken: 0, // the latest showCurrent(); an older one must not paint over it
 };
 
 // ---------------------------------------------------------------- tauri glue
@@ -193,10 +194,21 @@ async function hydrate(ids) {
 
 // ---------------------------------------------------------------- navigation
 
+/** What a click is told while a commit is moving files. */
+const COMMIT_RUNNING = "Moving files to the Recycle Bin… one moment";
+
 async function openQueue(scope, month = null, label = "") {
+  // A commit holds decisions and undo until it finishes; a review opened now
+  // would ignore every key.
+  if (state.busy) {
+    toast(COMMIT_RUNNING);
+    return;
+  }
   let ids;
   try {
-    ids = await api("queue_ids", { scope, month, ...tzArgs() });
+    // The deletion pile spans every folder, so checking it does too.
+    const args = scope === "staged" ? { ...tzArgs(), rootId: null } : tzArgs();
+    ids = await api("queue_ids", { scope, month, ...args });
   } catch (e) {
     toast(`Couldn't open that queue: ${e}`, { tone: "error" });
     return;
@@ -221,7 +233,12 @@ async function openQueue(scope, month = null, label = "") {
  * deck on screen does not match the queue.
  */
 async function showCurrent({ enter = "fade" } = {}) {
+  const token = ++state.showToken;
   const id = state.queue.current();
+  // Until the card being loaded is on screen, the one still showing must not
+  // be decided: the cursor already points elsewhere, so a key would record the
+  // old card and advance from the new position, skipping a card unseen.
+  state.card = null;
   try {
     // The deck and the filmstrip window are hydrated before the first paint,
     // otherwise the deck would show one card until the preload landed.
@@ -229,6 +246,8 @@ async function showCurrent({ enter = "fade" } = {}) {
   } catch (e) {
     log.warn("review", `couldn't load card details: ${e}`);
   }
+  // A newer jump, undo or render took over while this one was loading.
+  if (token !== state.showToken) return;
   state.card = id === null ? null : state.cache.get(id) || null;
   state.enter = enter;
   render();
@@ -497,11 +516,11 @@ function renderReview() {
   if (!state.card) return renderFinale();
 
   const stage = h("div", { class: "stage", id: "stage" }, buildDeck());
-  el.view.replaceChildren(h("div", { class: "review" },
+  el.view.replaceChildren(h("div", { class: "review", dataset: { scope: state.scope?.scope || "" } },
     reviewHead(),
     stage,
     reviewActions(),
-    h("div", { class: "filmstrip", id: "filmstrip", role: "list", "aria-label": "Queue" })));
+    h("div", { class: "filmstrip", id: "filmstrip", role: "group", "aria-label": "Queue" })));
   wireStage(stage);
   renderReviewChrome();
   paintZoomReadout(1);
@@ -548,7 +567,7 @@ function reviewActions() {
   }, icon(ico, { size: 18 }), h("span", { class: "act-label", text: label }), kbd(key));
   return h("div", { class: "actions", id: "review-actions" },
     btn(ACTION.DELETE, "act-delete", "trash", "Delete", "←", "Mark for deletion (←)"),
-    btn(ACTION.SKIP, "act-skip", "skip", "Skip", "↑", "Skip for now; it comes back once at the end (↑)"),
+    state.scope?.scope === "staged" ? null : btn(ACTION.SKIP, "act-skip", "skip", "Skip", "↑", "Skip for now; it comes back once at the end (↑)"),
     btn(ACTION.KEEP, "act-keep", "check", "Keep", "→", "Keep (→)"),
     h("button", { class: "act act-undo", title: "Undo the last decision (Z)", "aria-label": "Undo", onclick: () => undo() },
       icon("undo", { size: 18 }), kbd("Z")));
@@ -609,7 +628,6 @@ function paintFilmstrip() {
     const current = i === q.cursor;
     items.push(h("button", {
       class: `film-item${current ? " current" : ""}`,
-      role: "listitem",
       dataset: { status, index: String(i) },
       title: shot ? `${shot.name}${status !== "pending" ? ` — ${STATUS_LABEL[status] || status}` : ""}` : `#${ids[i]}`,
       "aria-current": current ? "true" : null,
@@ -633,7 +651,7 @@ function paintFilmstrip() {
 const STATUS_LABEL = { kept: "kept", staged: "marked for deletion", skipped: "skipped", deleted: "deleted", pending: "not sorted" };
 
 function jumpTo(index) {
-  if (state.view !== "review" || state.deciding) return;
+  if (state.view !== "review" || state.deciding || state.busy) return;
   if (index < 0 || index >= state.queue.ids.length || index === state.queue.cursor) return;
   state.queue.cursor = index;
   showCurrent({ enter: "fade" });
@@ -1177,6 +1195,9 @@ function onCardClick(e) {
  */
 async function decide(action, { via = "key", from = null } = {}) {
   if (state.view !== "review" || !state.card || state.deciding || state.busy) return false;
+  // Checking the deletion pile is keep-or-delete: a skip would write
+  // "skipped" and silently take the file off the pile.
+  if (action === ACTION.SKIP && state.scope?.scope === "staged") return false;
   const shot = state.card;
   const card = topCard();
   const before = state.queue.snapshot();
@@ -1207,9 +1228,10 @@ async function decide(action, { via = "key", from = null } = {}) {
   if (state.history.length > 500) state.history.shift();
   log.info("decide", `${action} -> ${updated.name} (${updated.status})`);
 
-  if (action === ACTION.DELETE) {
-    flyToPile(card);
-    // The decision is saved; a failed counter refresh must not undo it.
+  if (action === ACTION.DELETE) flyToPile(card);
+  // The badge follows anything that adds to or takes from the pile. The
+  // decision is saved; a failed counter refresh must not undo it.
+  if (action === ACTION.DELETE || state.scope?.scope === "staged") {
     refreshCounts().catch((e) => log.warn("decide", `couldn't refresh counts: ${e}`));
   }
 
@@ -1218,10 +1240,12 @@ async function decide(action, { via = "key", from = null } = {}) {
     // the last card finishes leaving: a key pressed during the exit used to
     // land on the card that was just decided and decide it a second time.
     state.card = null;
+    // Undo stays possible during the exit; finishPass() leaves the summary out
+    // if an undo brought a card back meanwhile.
+    state.deciding = false;
     announce(`${SPOKEN[action]}: ${shot.name}. That was the last one.`);
     await wait(EXIT_MS);
-    state.deciding = false;
-    await finishPass();
+    if (state.view === "review" && state.queue.atEnd()) await finishPass();
   } else {
     state.deciding = false;
     promoteDeck(action);
@@ -1359,6 +1383,7 @@ function renderFinale() {
 async function renderStaged() {
   const token = ++state.stagedToken;
   el.view.replaceChildren(h("div", { class: "empty" }, h("span", { class: "busy" })));
+  el.view.scrollTop = 0;
   let rows;
   try {
     rows = await api("staged_list");
@@ -1415,20 +1440,28 @@ function pileTile(shot) {
 
 async function unstageOne(id, tile = null) {
   if (state.busy) return;
+  let shot;
   try {
-    const shot = await api("unstage", { id });
-    state.cache.set(id, shot);
-    state.history.push({ id, action: "unstage", prevInPass: undefined, pass: null });
-    if (tile && !reducedMotion()) {
-      tile.classList.add("leaving");
-      await wait(220);
-    }
-    await refreshCounts();
-    if (state.view === "staged") renderStaged();
-    toast(`${shot.name} is back in the unsorted pile`, { action: "Undo", onAction: () => undo() });
+    shot = await api("unstage", { id });
   } catch (e) {
     toast(`Couldn't put it back: ${e}`, { tone: "error" });
+    return;
   }
+  state.cache.set(id, shot);
+  state.history.push({ id, action: "unstage", prevInPass: undefined, pass: null });
+  if (tile && !reducedMotion()) {
+    tile.classList.add("leaving");
+    await wait(220);
+  }
+  // The file is back either way; a failed count refresh only leaves the badge
+  // a step behind.
+  try {
+    await refreshCounts();
+  } catch (e) {
+    log.warn("pile", `couldn't refresh counts: ${e}`);
+  }
+  if (state.view === "staged") renderStaged();
+  toast(`${shot.name} is back in the unsorted pile`, { action: "Undo", onAction: () => undo() });
 }
 
 // --------------------------------------------------------------------- commit
@@ -1567,8 +1600,19 @@ async function folderMenu() {
   openMenu(el.folderBtn, items);
 }
 
+/**
+ * True, and says why, while a scan or a commit is running. Switching, adding
+ * or forgetting a folder then would race it: a scan finishing after a forget
+ * adds the folder straight back.
+ */
+function foldersBusy() {
+  if (!state.busy && !state.scanning) return false;
+  toast(state.busy ? COMMIT_RUNNING : "Wait for the scan to finish first");
+  return true;
+}
+
 async function addFolder() {
-  if (state.busy || state.scanning) return;
+  if (foldersBusy()) return;
   let picked;
   try {
     picked = await api("pick_folder");
@@ -1632,7 +1676,7 @@ async function scanFolder(path) {
 }
 
 async function selectRoot(root) {
-  if (state.busy || state.scanning) return;
+  if (foldersBusy()) return;
   state.rootId = root.id;
   state.libraryScroll = 0;
   if (!root.total) return scanFolder(root.path);
@@ -1647,6 +1691,7 @@ async function selectRoot(root) {
 }
 
 async function forgetRoot(root) {
+  if (foldersBusy()) return;
   const name = basename(root.path) || root.path;
   const ok = await confirmDialog({
     title: `Forget “${name}”?`,
@@ -1743,12 +1788,14 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
+  // A dialog owns the keyboard first: the log can open over the viewer, and
+  // Enter on its Close button must close the log, not the viewer behind it.
+  if (menuOpen() || modalOpen()) return;
   // While the viewer is open it owns the keyboard.
   if (viewerOpen()) {
     viewerKeydown(e);
     return;
   }
-  if (menuOpen() || modalOpen()) return;
   const t = e.target;
   if (t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName || ""))) return;
 
@@ -1832,6 +1879,7 @@ window.__sifterTest = {
   closeViewer,
   resetCardZoom: () => zoomOf(topCard())?.reset(),
   snapshot: () => ({ view: state.view, deciding: state.deciding, cursor: state.queue.cursor, ids: state.queue.ids.slice() }),
+  dropCache: () => state.cache.clear(),
   resetToSetup() {
     state.roots = [];
     state.rootId = null;

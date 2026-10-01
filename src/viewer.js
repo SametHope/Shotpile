@@ -12,7 +12,7 @@ import { log } from "./log.js";
 
 const PAN_STEP = 60;
 
-const v = { el: null, img: null, frame: null, label: null, dims: null, scale: 1, x: 0, y: 0, drag: null, onClose: null };
+const v = { el: null, img: null, frame: null, label: null, dims: null, scale: 1, x: 0, y: 0, drag: null, onClose: null, returnFocus: null };
 
 export function viewerOpen() {
   return !!v.el;
@@ -50,8 +50,12 @@ export function openViewer(shot, { src, inherit = null, onClose = null } = {}) {
     )
   );
 
-  Object.assign(v, { el: overlay, img, frame, label, dims, scale: 1, x: 0, y: 0, drag: null, onClose });
+  Object.assign(v, { el: overlay, img, frame, label, dims, scale: 1, x: 0, y: 0, drag: null, onClose, returnFocus: document.activeElement });
   document.body.append(overlay);
+  // The app behind goes inert while the viewer is up: with focus left on, say,
+  // the Keep button, Enter would otherwise decide the card behind the photo.
+  document.getElementById("app")?.setAttribute("inert", "");
+  overlay.querySelector(".viewer-tools .btn:last-child")?.focus();
 
   const applyInherited = () => {
     dims.textContent = img.naturalWidth ? `${img.naturalWidth} × ${img.naturalHeight}` : "";
@@ -104,8 +108,11 @@ export function openViewer(shot, { src, inherit = null, onClose = null } = {}) {
 export function closeViewer() {
   if (!v.el) return;
   const onClose = v.onClose;
+  const back = v.returnFocus;
   v.el.remove();
-  Object.assign(v, { el: null, img: null, frame: null, label: null, dims: null, drag: null, scale: 1, x: 0, y: 0, onClose: null });
+  document.getElementById("app")?.removeAttribute("inert");
+  Object.assign(v, { el: null, img: null, frame: null, label: null, dims: null, drag: null, scale: 1, x: 0, y: 0, onClose: null, returnFocus: null });
+  if (back && back.isConnected && typeof back.focus === "function") back.focus();
   onClose?.();
 }
 
@@ -121,6 +128,7 @@ export function viewerKeydown(e) {
   switch (e.key) {
     case "Escape":
     case " ":
+    case "Enter":
       closeViewer();
       break;
     case "ArrowLeft": pan(PAN_STEP, 0); break;
