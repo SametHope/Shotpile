@@ -254,6 +254,72 @@ pub fn reveal(state: State<'_, AppState>, target: String, id: Option<i64>) -> Re
     Ok(())
 }
 
+/// Copies an image file to the clipboard. Only called for image files (PNG, JPG, etc).
+#[tauri::command]
+pub fn copy_image(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    let shot = lock(&state.db)
+        .shot(id)?
+        .ok_or_else(|| format!("no such screenshot: {id}"))?;
+    let path = std::path::Path::new(&shot.path);
+    if !path.exists() {
+        return Err(format!("{} no longer exists", path.display()));
+    }
+    copy_image_file_to_clipboard(path)?;
+    crate::log::info("copy-image", &format!("id {}", id));
+    Ok(())
+}
+
+fn copy_image_file_to_clipboard(path: &Path) -> Result<(), String> {
+    if cfg!(windows) {
+        // On Windows, copy the file path to clipboard so it can be pasted as a file
+        let path_str = path.to_string_lossy();
+        let cmd = format!(
+            "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Clipboard]::SetFileDropList((New-Object System.Collections.Specialized.StringCollection).Add('{}'))",
+            path_str.replace('\'', "''")
+        );
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &cmd])
+            .spawn()
+            .map_err(|e| format!("couldn't open PowerShell: {e}"))?
+            .wait()
+            .map_err(|e| format!("PowerShell failed: {e}"))?;
+        Ok(())
+    } else if cfg!(target_os = "macos") {
+        // On macOS, use pbcopy to copy the image file
+        let image_data = std::fs::read(path)
+            .map_err(|e| format!("couldn't read the image: {e}"))?;
+        let mut child = std::process::Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("couldn't run pbcopy: {e}"))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            stdin.write_all(&image_data)
+                .map_err(|e| format!("couldn't write to pbcopy: {e}"))?;
+        }
+        child.wait()
+            .map_err(|e| format!("pbcopy failed: {e}"))?;
+        Ok(())
+    } else {
+        // On Linux, use xclip if available, otherwise just copy the path
+        let image_data = std::fs::read(path)
+            .map_err(|e| format!("couldn't read the image: {e}"))?;
+        let mut child = std::process::Command::new("xclip")
+            .args(["-selection", "clipboard", "-t", "image/png", "-i"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("couldn't run xclip: {e}"))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            stdin.write_all(&image_data)
+                .map_err(|e| format!("couldn't write to xclip: {e}"))?;
+        }
+        child.wait()
+            .map_err(|e| format!("xclip failed: {e}"))?;
+        Ok(())
+    }
+}
+
 fn open_url(url: &str) -> Result<(), String> {
     let spawned = if cfg!(windows) {
         // `start` is a cmd builtin; the empty string is its window title.
@@ -286,19 +352,22 @@ fn open_in_file_manager(path: &Path) -> Result<(), String> {
             cmd.arg(path);
         }
         cmd.spawn()
+    } else if cfg!(target_os = "macos") {
+        let mut cmd = std::process::Command::new("open");
+        if path.is_file() {
+            cmd.arg("-R");
+        }
+        cmd.arg(path);
+        cmd.spawn()
     } else {
         let dir = if path.is_file() {
             path.parent().unwrap_or(path)
         } else {
             path
         };
-        std::process::Command::new(if cfg!(target_os = "macos") {
-            "open"
-        } else {
-            "xdg-open"
-        })
-        .arg(dir)
-        .spawn()
+        std::process::Command::new("xdg-open")
+            .arg(dir)
+            .spawn()
     };
     spawned
         .map(|_| ())

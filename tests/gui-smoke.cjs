@@ -825,6 +825,12 @@ const CTRL_SHIFT = CTRL | SHIFT;
     const nativeKept = await js(`const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true }); document.querySelector("#view").dispatchEvent(ev); return ev.defaultPrevented;`);
     ok("the browser's own menu is replaced", nativeKept === true);
     await press("Escape");
+
+    // Card context menu includes "Copy image" for viewable images
+    await rightClick(".card[data-id]");
+    const cardMenu = await probe("[...document.querySelectorAll('.menu .menu-label')].map((n) => n.textContent)");
+    ok("right-clicking a card offers copy image and copy file name", cardMenu?.includes("Copy image") && cardMenu?.includes("Copy file name"), JSON.stringify(cardMenu));
+    await press("Escape");
   } catch (e) {
     ok(`run aborted: ${e.message}`, false, e.stack);
   }

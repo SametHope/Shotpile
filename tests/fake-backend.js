@@ -303,6 +303,7 @@
       return null;
     },
     reveal: (a) => { LOG.push("reveal:" + a.target + (a.id != null ? ":" + a.id : "")); return null; },
+    copy_image: (a) => { LOG.push("copy-image:" + a.id); return null; },
     // The real command zooms the WebView; CSS zoom is the closest stand-in.
     set_zoom: (a) => { document.documentElement.style.zoom = String(a.factor); LOG.push("zoom:" + a.factor); return null; },
     app_ready: () => { LOG.push("ready"); return null; },
