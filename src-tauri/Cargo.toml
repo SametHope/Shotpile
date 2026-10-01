@@ -1,6 +1,6 @@
 [package]
 name = "shotpile"
-version = "1.3.0"
+version = "1.4.0"
 description = "Local-first screenshot review with month/random queues, swipe decisions and safe Recycle Bin deletes"
 authors = ["SametHope"]
 license = "PolyForm-Noncommercial-1.0.0"
