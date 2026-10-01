@@ -86,3 +86,14 @@ Nothing is known broken. In rough priority order:
     reads as empty beside kept (green) and staged (red). Give it a stripe or
     similar pattern, with a dark-theme value, so it reads as completed work.
     Check the legend and the README picture alt texts after.
+
+14. **1.3.0 follow-ups.** Shipped: right-click copy image / file name, file
+    selection in the file manager (Windows, macOS), rebindable shortcuts,
+    `A`/`D` filmstrip stepping, chronological next month, opening sorted months
+    (`kept` scope), resizable filmstrip, lighter info-bar blur, striped deleted
+    segment, commit progress modal (events every 5 files), counters table and
+    Options statistics, window background colour. Still open: batched grid
+    rendering, the swipe-direction / launch / time counters, Rust unit tests
+    for the counters, clipboard copy on Linux needs `xclip` (and macOS copy
+    uses `pbcopy` with raw bytes, untested), and the stats Reset button
+    reloads the page instead of refreshing the section.
