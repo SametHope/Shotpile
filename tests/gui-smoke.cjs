@@ -288,6 +288,13 @@ const CTRL_SHIFT = CTRL | SHIFT;
     ok("the overlay is shallow", geo && geo.footShare <= 0.3, geo ? `foot is ${Math.round(geo.footShare * 100)}% of the card` : "no card");
     ok("the name does not wrap", geo && geo.fnameLines === 1, geo ? `name wraps to ${geo.fnameLines} lines` : "no card");
 
+    // ---- card right-click menu ----
+    await js(`const n = document.querySelector(".card[data-id]"); const r = n.getBoundingClientRect();
+      n.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 20 }));`);
+    const cardMenu = await probe("[...document.querySelectorAll('.menu .menu-label')].map((n) => n.textContent)");
+    ok("right-clicking a card offers copy image and copy file name", cardMenu?.includes("Copy image") && cardMenu?.includes("Copy file name"), JSON.stringify(cardMenu));
+    await press("Escape");
+
     // ---- photo viewer ----
     await js("p.openViewer();");
     await waitFor("p.viewerOpen()");
@@ -813,6 +820,26 @@ const CTRL_SHIFT = CTRL | SHIFT;
     ok("the zoom is saved", /"zoom":0.9/.test(await probe("localStorage.getItem('shotpile.prefs')")), await probe("localStorage.getItem('shotpile.prefs')"));
     await press("0", CTRL);
     ok("Ctrl+0 resets the zoom", (await probe("document.documentElement.style.zoom")) === "1", await probe("document.documentElement.style.zoom"));
+
+    // ---- shortcut rebinding ----
+    await press(",", CTRL);
+    await waitFor("document.querySelector('.options-sheet') !== null");
+    await js("document.querySelector('.options-sheet').scrollTop = document.querySelector('.shortcuts-list')?.offsetTop || 0;");
+    const initKey = await probe("p.shortcutKey('keep')");
+    ok("shortcuts section lists the current key binding", initKey === "ArrowRight", `expected "ArrowRight", got ${initKey}`);
+    await probe("p.clickRebindButton('keep')");
+    ok("clicking a shortcut key puts it in waiting state", (await waitFor("p.shortcutKeyBusyWaiting('keep')")) === true);
+    await press("i");
+    ok("pressing a key rebinds the shortcut", (await waitFor("p.shortcutKey('keep') === 'i'")) === true, await probe("p.shortcutKey('keep')"));
+    ok("rebinding is persisted", /"keyBindings":\{[^}]*"i":"keep"[^}]*\}/.test(await probe("localStorage.getItem('shotpile.prefs')")), await probe("localStorage.getItem('shotpile.prefs')"));
+    await probe("p.clickResetShortcuts()");
+    await waitFor("!document.querySelector('.options-sheet')");
+    await press(",", CTRL);
+    await waitFor("document.querySelector('.options-sheet') !== null");
+    const resetKey = await probe("p.shortcutKey('keep')");
+    ok("resetting shortcuts restores defaults", resetKey === "ArrowRight", `expected "ArrowRight", got ${resetKey}`);
+    ok("reset clears the keyBindings in prefs", !/"keyBindings":/.test(await probe("localStorage.getItem('shotpile.prefs')")), await probe("localStorage.getItem('shotpile.prefs')"));
+    await press("Escape");
 
     // ---- right-click menus ----
     const rightClick = (sel) => js(`const n = document.querySelector(${JSON.stringify(sel)}); const r = n.getBoundingClientRect();

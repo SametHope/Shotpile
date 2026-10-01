@@ -242,6 +242,21 @@
       return true;
     },
 
+    // ---- options / shortcuts ----
+    clickOptions: () => $("#btn-options")?.click(),
+    shortcutKey: (actionId) => $$(`.shortcut-row[data-action="${actionId}"] .shortcut-key`)[0]?.textContent || null,
+    clickRebindButton: (actionId) => {
+      const btn = $$(`.shortcut-row[data-action="${actionId}"] .shortcut-key`)[0];
+      if (btn) btn.click();
+      return !!btn;
+    },
+    clickResetShortcuts: () => {
+      const btn = $$(".btn").find((b) => b.textContent.includes("Reset to defaults"));
+      if (btn) btn.click();
+      return !!btn;
+    },
+    shortcutKeyBusyWaiting: (actionId) => $$(`.shortcut-row[data-action="${actionId}"] .shortcut-key`)[0]?.classList.contains("waiting") || false,
+
     // ---- modal / toast ----
     modalHidden: () => $("#modal").hidden,
     modalTitle: () => text($("#modal-title")),

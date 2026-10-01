@@ -56,6 +56,11 @@ CREATE TABLE IF NOT EXISTS staged (
   screenshot_id INTEGER PRIMARY KEY REFERENCES screenshots(id) ON DELETE CASCADE,
   staged_ms INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS counters (
+  name TEXT PRIMARY KEY,
+  value INTEGER NOT NULL DEFAULT 0
+);
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -654,6 +659,7 @@ impl Db {
             "unreviewed" => (" AND status = 'pending'", "taken_ms DESC, id DESC"),
             "skipped" => (" AND status = 'skipped'", "taken_ms ASC, id ASC"),
             "staged" => (" AND status = 'staged'", "taken_ms ASC, id ASC"),
+            "kept" => (" AND status = 'kept'", "taken_ms ASC, id ASC"),
             _ => ("", "taken_ms DESC, id DESC"),
         };
         // A file that vanished from disk has nothing to review, and `months`
@@ -665,7 +671,11 @@ impl Db {
         } else {
             " AND missing = 0"
         };
-        let month_param: Option<&str> = if scope == "month" { month } else { None };
+        let month_param: Option<&str> = if scope == "month" || scope == "kept" {
+            month
+        } else {
+            None
+        };
         let month_clause = match month_param {
             Some(_) => format!(" AND {} = ?", month_expr(tz_offset_min)),
             None => String::new(),
@@ -860,6 +870,56 @@ impl Db {
             .query_map(params![root_id], shot_from_row)
             .map_err(|e| e.to_string())?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())
+    }
+
+    /// Increments a counter by one. Creates it if it doesn't exist.
+    pub fn incr_counter(&self, name: &str, amount: i64) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT INTO counters (name, value) VALUES (?, ?)
+                 ON CONFLICT(name) DO UPDATE SET value = value + ?",
+                params![name, amount, amount],
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Returns all counters as a map of name to value.
+    pub fn get_all_counters(&self) -> Result<std::collections::HashMap<String, i64>, String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name, value FROM counters ORDER BY name")
+            .map_err(|e| e.to_string())?;
+        let mut map = std::collections::HashMap::new();
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            let (name, value) = row.map_err(|e| e.to_string())?;
+            map.insert(name, value);
+        }
+        Ok(map)
+    }
+
+    /// Resets all counters to zero.
+    pub fn reset_all_counters(&self) -> Result<(), String> {
+        self.conn
+            .execute("DELETE FROM counters", [])
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Resets a specific counter group (counters matching a prefix).
+    pub fn reset_counter_group(&self, prefix: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                "DELETE FROM counters WHERE name LIKE ? || '%'",
+                params![prefix],
+            )
+            .map(|_| ())
             .map_err(|e| e.to_string())
     }
 }
