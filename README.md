@@ -1,8 +1,8 @@
 # Shotpile
 
-A desktop app for Windows, macOS and Linux for clearing out a folder full of
-screenshots. It shows them one at a time, month by month: swipe left to mark
-one for deletion, right to keep it, up to decide later. Marked files stay where
+A desktop app for clearing out a folder full of screenshots, on Windows, macOS
+and Linux. It shows them one at a time, month by month: swipe left to mark one
+for deletion, right to keep it, up to decide later. Marked files stay where
 they are until you confirm, then go to the Recycle Bin (the Trash on macOS and
 Linux), so a mistake can still be restored.
 
@@ -11,7 +11,7 @@ Linux), so a mistake can still be restored.
 </p>
 
 It works entirely offline: no account, no network access, nothing uploaded.
-[Download it](#download) for Windows, macOS or Linux.
+[Download it](#download) to try it.
 
 ## A quick tour
 
@@ -76,11 +76,11 @@ The builds are not code-signed:
 
 Windows is where the app is used and tested by hand. The Linux build passes
 the same automated tests in CI. **The macOS build is untested**: it is built
-from the same code, but nobody has run it on a Mac yet, so treat it as a
-preview and report what breaks.
+from the same code, but nobody has run it on a Mac yet. Treat it as a preview
+and report what breaks.
 
-Updating from 1.0.0 (Windows only), which was called *Screenshot Sifter*: the
-first start moves its database over, so your decisions carry on.
+Version 1.0.0 (Windows only) was called *Screenshot Sifter*. If you update from
+it, the first start moves its database over and your decisions carry on.
 
 ## Details
 
@@ -261,10 +261,10 @@ through a plugin permission.
 A rescan refreshes size, dates and the missing flag but never resets a
 decision, so deleting a folder and restoring it later does not undo your work.
 The one exception: a `deleted` file that is back on disk was restored from the
-bin by hand, so the rescan marks it `kept`.
-Files that vanish from disk outside the app are flagged missing and drop out of
-the review queues; files the app itself sent to the Recycle Bin are not
-"missing", so the freed-space figures survive a rescan.
+bin by hand, so the rescan marks it `kept`. Files that vanish from disk outside
+the app are flagged missing and drop out of the review queues. Files the app
+itself sent to the Recycle Bin are not "missing", so the freed-space figures
+survive a rescan.
 
 ## Data
 
