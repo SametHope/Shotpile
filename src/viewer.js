@@ -6,7 +6,7 @@
  * While open it owns the keyboard (see `viewerKeydown`).
  */
 
-import { anchorZoom, clampScale, containedSize, formatBytes, formatDateTime, panLimit } from "./logic.js";
+import { anchorZoom, clampScale, containedSize, formatBytes, formatDateTime, panLimit, wheelZoomFactor } from "./logic.js";
 import { h, icon } from "./dom.js";
 import { log } from "./log.js";
 
@@ -72,8 +72,16 @@ export function openViewer(shot, { src, inherit = null, onClose = null } = {}) {
 
   overlay.addEventListener("wheel", (e) => {
     e.preventDefault();
-    zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY);
+    zoomBy(wheelZoomFactor(e.deltaY, e.deltaMode, e.ctrlKey), e.clientX, e.clientY);
   }, { passive: false });
+
+  // WKWebView reports a touchpad pinch as gesture events, not ctrl+wheel.
+  let pinchBase = 1;
+  overlay.addEventListener("gesturestart", (e) => { e.preventDefault(); pinchBase = v.scale; });
+  overlay.addEventListener("gesturechange", (e) => {
+    e.preventDefault();
+    zoomBy((pinchBase * e.scale) / v.scale, e.clientX, e.clientY);
+  });
 
   frame.addEventListener("pointerdown", (e) => {
     if (e.button !== 0) return;

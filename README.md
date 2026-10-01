@@ -22,7 +22,8 @@ up in. A big folder is counted as it scans, so a first scan never looks stuck.
 
 **See what is left.** The library shows the whole folder as one bar (kept,
 marked for deletion, deleted, skipped, unsorted), then a row per month. Click
-a month to sort it, *Continue sorting* to go through everything unsorted,
+a month to sort it (months you have finished are hidden; *Filter* brings them
+back), *Continue sorting* to go through everything unsorted,
 newest first, or *Shuffle* to get the same in random order, which turns up
 forgotten screenshots from years ago next to yesterday's. *Skipped* brings back
 what you put off.
@@ -95,9 +96,9 @@ it, the first start moves its database over and your decisions carry on.
   the next scan of its folder counts it as kept.
 - **The filmstrip** under the buttons shows the last few decisions and what is
   coming; click any of them to jump there.
-- **Zoom.** Scroll to zoom the card around the cursor (up to 8×); once zoomed,
+- **Zoom.** Scroll or pinch on a touchpad to zoom the card around the cursor (up to 8×); once zoomed,
   a drag pans instead of deciding. The whole app zooms with `Ctrl` and `+`,
-  `-`, `0` or the mouse wheel, and the layout tightens up at 125% or 150%
+  `-`, `0` or `Ctrl` and the wheel, and the layout tightens up at 125% or 150%
   display scaling rather than cutting things off.
 - **Several folders.** The folder name in the header switches between saved
   folders, adds another, or forgets one. Forgetting only removes it from the
@@ -159,8 +160,8 @@ runner, and publishes them as one GitHub release. Start it either by pushing a
 version tag:
 
 ```powershell
-git tag v1.1.0
-git push origin v1.1.0
+git tag v1.2.0
+git push origin v1.2.0
 ```
 
 or by hand from the Actions tab (*Release*, *Run workflow*): pick the branch
