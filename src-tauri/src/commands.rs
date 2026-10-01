@@ -286,23 +286,64 @@ fn open_in_file_manager(path: &Path) -> Result<(), String> {
             cmd.arg(path);
         }
         cmd.spawn()
+    } else if cfg!(target_os = "macos") {
+        let mut cmd = std::process::Command::new("open");
+        if path.is_file() {
+            cmd.arg("-R");
+        }
+        cmd.arg(path);
+        cmd.spawn()
     } else {
-        let dir = if path.is_file() {
-            path.parent().unwrap_or(path)
+        // On Linux, try the freedesktop FileManager1 DBus interface for file selection,
+        // falling back to xdg-open on the parent directory.
+        if path.is_file() {
+            if let Ok(uri) = path_to_file_uri(path) {
+                if try_show_items_dbus(&uri).is_ok() {
+                    return Ok(());
+                }
+            }
+            // Fallback: open the parent directory
+            let dir = path.parent().unwrap_or(path);
+            std::process::Command::new("xdg-open").arg(dir).spawn()
         } else {
-            path
-        };
-        std::process::Command::new(if cfg!(target_os = "macos") {
-            "open"
-        } else {
-            "xdg-open"
-        })
-        .arg(dir)
-        .spawn()
+            std::process::Command::new("xdg-open").arg(path).spawn()
+        }
     };
     spawned
         .map(|_| ())
         .map_err(|e| format!("couldn't open the file manager: {e}"))
+}
+
+fn path_to_file_uri(path: &Path) -> Result<String, String> {
+    // Convert an absolute path to a file:// URI.
+    let abs =
+        std::fs::canonicalize(path).map_err(|e| format!("couldn't canonicalize path: {e}"))?;
+    let path_str = abs.to_string_lossy();
+    Ok(format!("file://{}", path_str.replace("\\", "/")))
+}
+
+fn try_show_items_dbus(uri: &str) -> Result<(), String> {
+    // Try to select the file using org.freedesktop.FileManager1.ShowItems via DBus.
+    // This uses gdbus call, which is usually available on freedesktop systems.
+    let output = std::process::Command::new("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--dest=org.freedesktop.FileManager1",
+            "--object-path=/org/freedesktop/FileManager1",
+            "--method=org.freedesktop.FileManager1.ShowItems",
+            &format!("['{}']", uri),
+            "''",
+        ])
+        .output()
+        .map_err(|e| format!("gdbus call failed: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("gdbus call failed: {}", stderr))
+    }
 }
 
 /// Shows the main window. It starts hidden (`visible: false` in
@@ -637,6 +678,27 @@ pub fn apply_unstage(db: &Db, undo: &mut UndoStack, id: i64) -> Result<Shot, Str
 pub fn unstage(state: State<'_, AppState>, id: i64) -> Result<Shot, String> {
     let db = lock(&state.db);
     apply_unstage(&db, &mut lock(&state.undo), id)
+}
+
+/// Unstages multiple screenshots at once, restoring them to pending status.
+/// This respects the per-folder pile rules: each folder's pile is processed
+/// independently. Returns the count of successfully unstaged items.
+#[tauri::command]
+#[allow(dead_code)]
+pub fn unstage_multiple(state: State<'_, AppState>, ids: Vec<i64>) -> Result<usize, String> {
+    let db = lock(&state.db);
+    let mut undo = lock(&state.undo);
+    let mut count = 0;
+    for id in ids {
+        if apply_unstage(&db, &mut undo, id).is_ok() {
+            count += 1;
+        }
+    }
+    crate::log::info(
+        "unstage_multiple",
+        &format!("{count} file(s) restored from the pile"),
+    );
+    Ok(count)
 }
 
 #[tauri::command]

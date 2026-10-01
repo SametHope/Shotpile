@@ -1492,6 +1492,8 @@ async function renderStaged() {
       h("div", { class: "pile-actions" },
         h("button", { class: "btn", title: "Look at each one as a card before deleting", onclick: () => openQueue("staged", null, "Marked for deletion") },
           icon("play", { size: 16 }), "Check one by one"),
+        h("button", { class: "btn", title: "Take all of them off the pile at once", onclick: () => restoreAll(rows) },
+          icon("undo", { size: 16 }), "Restore all"),
         h("button", { class: "btn danger solid", id: "btn-pile-commit", onclick: commit },
           icon("trash", { size: 16 }), `Move to ${binName()}`))),
     h("div", { class: "pile-grid", role: "list" }, rows.map(pileTile))));
@@ -1538,6 +1540,39 @@ async function unstageOne(id, tile = null) {
   }
   if (state.view === "staged") renderStaged();
   toast(`${shot.name} is back in the unsorted pile`, { action: "Undo", onAction: () => undo() });
+}
+
+async function restoreAll(rows) {
+  if (state.busy || !rows.length) return;
+  const n = rows.length;
+  const bytes = rows.reduce((s, r) => s + (Number(r.size) || 0), 0);
+  const ok = await confirmDialog({
+    title: "Restore everything from the pile?",
+    message: `${countOf(n, "screenshot")}${bytes ? ` (${formatBytes(bytes)})` : ""} will go back to the unsorted pile.`,
+    confirmLabel: `Restore ${countOf(n, "file")}`,
+    confirmIcon: "undo",
+  });
+  if (!ok) return;
+
+  state.busy = true;
+  log.info("restore_all", `restoring ${n} files from the pile`);
+  const ids = rows.map((r) => r.id);
+  try {
+    const count = await api("unstage_multiple", { ids });
+    try {
+      await refreshCounts();
+    } catch (e) {
+      log.warn("restore_all", `couldn't refresh counts: ${e}`);
+    }
+    if (state.view === "staged") renderStaged();
+    toast(`Restored ${countOf(count, "screenshot")} to the unsorted pile`, { action: "Undo", onAction: () => undo() });
+  } catch (e) {
+    log.error("restore_all", `couldn't restore files: ${e}`);
+    toast(`Couldn't restore the files: ${e}`, { tone: "error" });
+  } finally {
+    state.busy = false;
+    renderHeader();
+  }
 }
 
 // --------------------------------------------------------------------- commit

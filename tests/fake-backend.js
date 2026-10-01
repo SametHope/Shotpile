@@ -318,6 +318,21 @@
       LOG.push("unstage:" + s.name);
       return { ...s };
     },
+    unstage_multiple: (a) => {
+      let count = 0;
+      for (const id of a.ids) {
+        const s = shots.get(id);
+        if (!s) continue;
+        // Like apply_unstage: only a staged row changes.
+        if (s.status === "deleted" || s.status !== "staged") continue;
+        pushUndo({ id: s.id, prev: s.status, prev_decided_ms: s.decided_ms, next: "pending" });
+        s.status = "pending";
+        s.decided_ms = null;
+        LOG.push("unstage:" + s.name);
+        count += 1;
+      }
+      return count;
+    },
     staged_list: (a) => inRoot(a.rootId).filter((s) => s.status === "staged").sort(byTaken(1)).map((s) => ({ ...s })),
     commit_deletes: (a) => {
       const staged = inRoot(a.rootId).filter((s) => s.status === "staged");
