@@ -98,6 +98,7 @@ const state = {
   scanning: null, // path being scanned; scans never touch decisions, so they block nothing else
   scanFound: 0, // images the running scan has found so far (scan-progress events)
   stagedToken: 0, // guards the async staged view against a stale paint
+  libraryScroll: 0, // where the library was scrolled to, restored on return
 };
 
 // ---------------------------------------------------------------- tauri glue
@@ -263,6 +264,9 @@ function openStaged() {
 
 function render() {
   log.debug("view", state.view);
+  // Remember the library's scroll before anything changes, so coming back from
+  // a review (or a re-render of the library itself) lands where it was.
+  if (document.body.dataset.view === "months") state.libraryScroll = el.view.scrollTop;
   closeMenu();
   document.body.dataset.view = state.view;
   el.view.classList.toggle("reviewing", state.view === "review");
@@ -414,6 +418,7 @@ function renderLibrary() {
     h("div", { class: "months" }, g.months.map(monthRow))));
 
   el.view.replaceChildren(h("div", { class: "page" }, overview, years));
+  el.view.scrollTop = state.libraryScroll;
 }
 
 function monthRow(m) {
@@ -1605,6 +1610,7 @@ async function scanFolder(path) {
       state.view = prevView === "scanning" ? "setup" : prevView;
       return;
     }
+    if (root.id !== state.rootId) state.libraryScroll = 0;
     state.rootId = root.id;
     // A rescan keeps the library usable, so the user may have opened a month
     // meanwhile: refresh the data, but do not pull them out of a review.
@@ -1628,6 +1634,7 @@ async function scanFolder(path) {
 async function selectRoot(root) {
   if (state.busy || state.scanning) return;
   state.rootId = root.id;
+  state.libraryScroll = 0;
   if (!root.total) return scanFolder(root.path);
   state.view = "months";
   render();
@@ -1653,6 +1660,7 @@ async function forgetRoot(root) {
     await loadRoots();
     const nextRoot = state.roots.find((r) => r.total > 0) || state.roots[0] || null;
     state.rootId = nextRoot?.id ?? null;
+    state.libraryScroll = 0;
     if (nextRoot) {
       state.view = "months";
       await loadMonths();

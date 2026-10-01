@@ -273,5 +273,16 @@
     resetToSetup: () => window.__sifterTest.resetToSetup(),
     appState: () => window.__sifterTest.snapshot(),
     bodyBg: () => getComputedStyle(document.body).backgroundColor,
+    // Enough older months to make the library scroll; removed again after.
+    addOldMonths: (n) => {
+      const base = [...window.__shots.values()].find((x) => x.root_id === 1);
+      for (let i = 0; i < n; i++) {
+        const id = 500 + i;
+        window.__shots.set(id, { ...base, id, name: `Old ${i}.png`, path: `C:/1/Old ${i}.png`, taken_ms: Date.UTC(2023, 0, 15) + i * 31 * 86400000, status: "pending", decided_ms: null });
+      }
+    },
+    removeOldMonths: () => { for (const id of [...window.__shots.keys()]) if (id >= 500) window.__shots.delete(id); },
+    viewScroll: () => document.getElementById("view").scrollTop,
+    setViewScroll: (y) => { document.getElementById("view").scrollTop = y; },
   };
 })();

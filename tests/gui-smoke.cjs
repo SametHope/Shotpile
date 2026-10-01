@@ -686,6 +686,22 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await sleep(200);
     ok("Space does not open a viewer for an unpreviewable file", (await probe("p.viewerOpen()")) === false);
 
+    // ---- the library keeps its scroll position across a review ----
+    await js("p.backToMonths();");
+    await waitFor("p.view() === 'months'");
+    await js("p.addOldMonths(30); document.getElementById('btn-scan').click();");
+    await waitFor("p.monthRows().length > 20", 3000);
+    await js("p.setViewScroll(700);");
+    const scrolled = await probe("p.viewScroll()");
+    await probe("p.clickMonth('2026-09')");
+    await waitFor("p.hasCard()");
+    await js("p.backToMonths();");
+    await waitFor("p.view() === 'months' && p.monthRows().length > 20");
+    await sleep(150);
+    ok("coming back from a review keeps the library's scroll position", scrolled > 0 && (await probe("p.viewScroll()")) === scrolled, `${scrolled} -> ${await probe("p.viewScroll()")}`);
+    await js("p.removeOldMonths(); document.getElementById('btn-scan').click();");
+    await waitFor("p.monthRows().length === 2", 3000);
+
     // ---- folders ----
     await js("p.reset();");
     await js("p.backToMonths();");

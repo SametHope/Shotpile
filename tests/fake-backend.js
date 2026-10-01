@@ -130,7 +130,8 @@
     },
     month_thumbs: (a) => {
       const by = new Map();
-      for (const s of present(inRoot(a.rootId)).sort(byTaken(-1))) {
+      // Like db.rs: files on disk only, so nothing already in the Recycle Bin.
+      for (const s of present(inRoot(a.rootId)).filter((x) => x.status !== "deleted").sort(byTaken(-1))) {
         const k = monthKey(s.taken_ms);
         if (!by.has(k)) by.set(k, []);
         if (by.get(k).length < (a.limit || 5)) by.get(k).push(s.path);
@@ -154,9 +155,11 @@
     decide: (a) => {
       if (faults.decide) throw new Error("simulated write failure");
       const s = shots.get(a.id);
-      if (!s) throw new Error("no such id " + a.id);
+      if (!s) throw new Error("no such screenshot: " + a.id);
       const status = { keep: "kept", skip: "skipped", delete: "staged" }[a.kind];
       if (!status) throw new Error("invalid decision: " + a.kind);
+      // Like apply_decision: a committed file is in the Recycle Bin.
+      if (s.status === "deleted") throw new Error(s.name + " is already in the Recycle Bin");
       pushUndo({ id: s.id, prev: s.status, prev_decided_ms: s.decided_ms, next: status });
       s.status = status;
       s.decided_ms = Date.UTC(2026, 8, 30);
@@ -190,7 +193,10 @@
     },
     unstage: (a) => {
       const s = shots.get(a.id);
-      if (!s) throw new Error("no such id " + a.id);
+      if (!s) throw new Error("no such screenshot: " + a.id);
+      // Like apply_unstage: only a staged row changes.
+      if (s.status === "deleted") throw new Error(s.name + " is already in the Recycle Bin");
+      if (s.status !== "staged") return { ...s };
       pushUndo({ id: s.id, prev: s.status, prev_decided_ms: s.decided_ms, next: "pending" });
       s.status = "pending";
       s.decided_ms = null;

@@ -276,6 +276,11 @@ export function openMenu(anchor, items, { align = "start" } = {}) {
     if (!list.contains(e.target) && !anchor.contains(e.target)) closeMenu();
   };
   const onKey = (e) => {
+    // Tabbing away leaves the menu behind, so it closes and lets focus move on.
+    if (e.key === "Tab") {
+      closeMenu();
+      return;
+    }
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
