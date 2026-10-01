@@ -21,6 +21,7 @@ import {
   formatCount,
   gestureVisual,
   groupByYear,
+  matchesFilename,
   monthLabel,
   nextMonthWithWork,
   panLimit,
@@ -426,4 +427,30 @@ test("wheelZoomFactor: direction, touchpad smoothness and a cap", () => {
   // One huge event cannot jump past the cap; line mode counts as pixels.
   assert.equal(wheelZoomFactor(-5000), wheelZoomFactor(-120));
   assert.equal(wheelZoomFactor(-3, 1), wheelZoomFactor(-48, 0));
+});
+
+test("matchesFilename filters by substring match, case-insensitive", () => {
+  assert.equal(matchesFilename("screenshot.png", "screenshot"), true);
+  assert.equal(matchesFilename("screenshot.png", "Screenshot"), true);
+  assert.equal(matchesFilename("screenshot.png", "SCREEN"), true);
+  assert.equal(matchesFilename("screenshot.png", "png"), true);
+  assert.equal(matchesFilename("screenshot.png", ".png"), true);
+});
+
+test("matchesFilename returns true for empty filter", () => {
+  assert.equal(matchesFilename("screenshot.png", ""), true);
+  assert.equal(matchesFilename("screenshot.png", null), true);
+  assert.equal(matchesFilename("screenshot.png", "   "), true);
+  assert.equal(matchesFilename("screenshot.png", undefined), true);
+});
+
+test("matchesFilename returns false for non-matching filter", () => {
+  assert.equal(matchesFilename("screenshot.png", "video"), false);
+  assert.equal(matchesFilename("screenshot.png", "xyz"), false);
+  assert.equal(matchesFilename("screenshot.png", "jpg"), false);
+});
+
+test("matchesFilename handles null filename", () => {
+  assert.equal(matchesFilename(null, "test"), false);
+  assert.equal(matchesFilename(null, ""), true);
 });
