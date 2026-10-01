@@ -650,22 +650,22 @@ const CTRL_SHIFT = CTRL | SHIFT;
 
     // ---- checking the pile card by card ----
     const PILE_B = "Screenshot 2026-08-19 18-22-30.png";
-    await js(`p.setStatus(${JSON.stringify(PILE_B)}, 'staged'); p.setStatus(${JSON.stringify(SECOND)}, 'staged');`);
+    await js(`p.setStatus(${JSON.stringify(PILE_B)}, 'staged'); p.setStatus(${JSON.stringify(FIRST)}, 'staged'); p.setStatus(${JSON.stringify(SECOND)}, 'staged');`);
     await js("p.reset(); p.clickStagedBtn();");
     await waitFor("p.pileNames().length === 2");
+    ok("the pile shows this folder's files only", !(await probe("p.pileNames()")).includes(PILE_B), JSON.stringify(await probe("p.pileNames()")));
     await js("[...document.querySelectorAll('.pile-actions .btn')].find((b) => /one by one/.test(b.textContent)).click();");
     await waitFor("p.hasCard()");
-    // The pile spans every folder, so checking it must too: with the current
-    // folder's filter the other folder's file never came up.
-    ok("checking the pile covers every folder", (await probe("p.progress()")) === "1 of 2" && (await probe("p.cardName()")) === PILE_B, `${await probe("p.progress()")} ${await probe("p.cardName()")}`);
+    ok("checking the pile stays in this folder", (await probe("p.progress()")) === "1 of 2" && (await probe("p.cardName()")) === FIRST, `${await probe("p.progress()")} ${await probe("p.cardName()")}`);
     // A skip would write "skipped" and silently take the file off the pile.
     ok("checking the pile offers no skip", (await probe("p.hasSel('.act-skip')")) === false);
     await press("ArrowUp");
     await sleep(200);
-    ok("ArrowUp does not skip a file off the pile", (await status(PILE_B)) === "staged" && (await probe("p.logFilter('decide:').length")) === 0, `${await status(PILE_B)} ${JSON.stringify(await probe("p.logFilter('decide:')"))}`);
+    ok("ArrowUp does not skip a file off the pile", (await status(FIRST)) === "staged" && (await probe("p.logFilter('decide:').length")) === 0, `${await status(FIRST)} ${JSON.stringify(await probe("p.logFilter('decide:')"))}`);
     await press("ArrowRight");
-    await waitFor(`p.status(${JSON.stringify(PILE_B)}) === "kept"`);
+    await waitFor(`p.status(${JSON.stringify(FIRST)}) === "kept"`);
     ok("keeping a file from the pile updates the badge", (await waitFor("p.stagedCount() === '1'")) === true, await probe("p.stagedCount()"));
+    await js(`p.setStatus(${JSON.stringify(PILE_B)}, 'pending');`);
 
     // ---- a file with no preview ----
     await js("p.backToMonths();");
@@ -732,6 +732,21 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await js("p.clickMenuItem('shots-b');");
     await waitFor("p.folderName() === 'shots-b' && p.monthRows().length > 0");
     ok("switching folders shows that folder's library", /August/.test((await probe("p.monthRows()"))[0] || "") && (await probe("p.monthRows()")).length === 1, JSON.stringify(await probe("p.monthRows()")));
+    // The deletion pile belongs to its folder: one marked in Screenshots is not
+    // on shots-b's pile, and comes back with Screenshots.
+    await js("for (const s of window.__shots.values()) if (s.root_id === 1 && s.status === 'pending') { s.status = 'staged'; break; }");
+    await js("document.getElementById('btn-scan').click();");
+    await waitFor("p.logFilter('scan:').length > 0 && !document.getElementById('btn-scan').disabled", 3000);
+    ok("another folder's pile stays out of this one", (await probe("p.stagedBtnVisible()")) === false, String(await probe("p.stagedBtnVisible()")));
+    await js("p.clickFolderChip();");
+    await waitFor("p.menuItems().length > 0");
+    await js("p.clickMenuItem('Screenshots');");
+    await waitFor("p.folderName() === 'Screenshots' && p.stagedBtnVisible()", 2000);
+    ok("each folder keeps its own pile", (await probe("p.stagedBtnVisible()")) === true, String(await probe("p.stagedBtnVisible()")));
+    await js("p.clickFolderChip();");
+    await waitFor("p.menuItems().length > 0");
+    await js("p.clickMenuItem('shots-b');");
+    await waitFor("p.folderName() === 'shots-b'");
     await js("p.clickFolderChip();");
     await waitFor("p.menuItems().length > 0");
     await js("p.clickMenuItem('Forget');");

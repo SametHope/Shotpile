@@ -158,12 +158,12 @@ async function refreshCounts() {
 /** The staged badge and the footer bar, from `state.summary`. */
 function paintCounts() {
   const s = state.summary || {};
-  const staged = s.staged_all || 0;
+  const staged = s.pile || 0;
   el.stagedBadge.textContent = formatCount(staged);
   el.stagedBtn.hidden = staged === 0 || state.view === "setup" || state.view === "scanning";
   el.stagedBtn.classList.toggle("is-active", state.view === "staged");
   el.stagedN.textContent = countOf(staged, "screenshot");
-  el.stagedSize.textContent = s.bytes_staged_all ? `(${formatBytes(s.bytes_staged_all)})` : "";
+  el.stagedSize.textContent = s.bytes_pile ? `(${formatBytes(s.bytes_pile)})` : "";
   // The footer bar is always in the layout and expands/collapses with a
   // transition, so showing it never shifts the content above. It stays out of
   // the review: the header badge carries the count there, and a commit button
@@ -201,20 +201,21 @@ async function hydrate(ids) {
 // ---------------------------------------------------------------- navigation
 
 /** What a click is told while a commit is moving files. */
-const COMMIT_RUNNING = "Moving files to the Recycle Bin… one moment";
+/** What this OS calls its bin ("Recycle Bin", "Trash") and file manager. */
+const binName = () => state.info?.trash_name || "Recycle Bin";
+const fileManager = () => state.info?.file_manager || "File Explorer";
+const commitRunning = () => `Moving files to the ${binName()}… one moment`;
 
 async function openQueue(scope, month = null, label = "") {
   // A commit holds decisions and undo until it finishes; a review opened now
   // would ignore every key.
   if (state.busy) {
-    toast(COMMIT_RUNNING);
+    toast(commitRunning());
     return;
   }
   let ids;
   try {
-    // The deletion pile spans every folder, so checking it does too.
-    const args = scope === "staged" ? { ...tzArgs(), rootId: null } : tzArgs();
-    ids = await api("queue_ids", { scope, month, ...args });
+    ids = await api("queue_ids", { scope, month, ...tzArgs() });
   } catch (e) {
     toast(`Couldn't open that queue: ${e}`, { tone: "error" });
     return;
@@ -342,7 +343,7 @@ function renderSetup() {
     h("p", { class: "onboard-lead", text: "Point it at the folder your screenshots pile up in. They get grouped by month and dealt out one at a time." }),
     gestureLegend(),
     h("button", { class: "btn primary lg", onclick: addFolder }, icon("folder-plus"), "Choose a folder"),
-    h("p", { class: "onboard-fine", text: "Everything stays on this PC. A swipe only marks a file; nothing leaves the disk until you confirm, and then it goes to the Recycle Bin." })
+    h("p", { class: "onboard-fine", text: `Everything stays on this computer. A swipe only marks a file; nothing leaves the disk until you confirm, and then it goes to the ${binName()}.` })
   );
   el.view.replaceChildren(h("div", { class: "page narrow" }, hero));
 }
@@ -1390,7 +1391,7 @@ function renderFinale() {
   const scope = state.scope || {};
   const month = scope.scope === "month" ? state.months.find((m) => m.month === scope.month) : null;
   const next = scope.scope === "month" ? nextMonthWithWork(state.months, scope.month) : null;
-  const staged = state.summary?.staged_all || 0;
+  const staged = state.summary?.pile || 0;
   const reviewedPile = scope.scope === "staged";
 
   const title = month && progressOf(month).done
@@ -1433,7 +1434,7 @@ async function renderStaged() {
   el.view.scrollTop = 0;
   let rows;
   try {
-    rows = await api("staged_list");
+    rows = await api("staged_list", { rootId: state.rootId });
   } catch (e) {
     if (state.view === "staged" && token === state.stagedToken) {
       el.view.replaceChildren(h("div", { class: "empty" },
@@ -1449,7 +1450,7 @@ async function renderStaged() {
     el.view.replaceChildren(h("div", { class: "page narrow" }, h("div", { class: "empty" },
       h("div", { class: "empty-glyph ok" }, icon("check", { size: 26 })),
       h("h2", { text: "Nothing marked for deletion" }),
-      h("p", { text: "Swipe a card left, or press ←, to put it here. Files stay on disk until you move them to the Recycle Bin from this page." }),
+      h("p", { text: `Swipe a card left, or press ←, to put it here. Files stay on disk until you move them to the ${binName()} from this page.` }),
       h("button", { class: "btn primary", onclick: backToMonths }, "Back to the library"))));
     return;
   }
@@ -1464,7 +1465,7 @@ async function renderStaged() {
         h("button", { class: "btn", title: "Look at each one as a card before deleting", onclick: () => openQueue("staged", null, "Marked for deletion") },
           icon("play", { size: 16 }), "Check one by one"),
         h("button", { class: "btn danger solid", id: "btn-pile-commit", onclick: commit },
-          icon("trash", { size: 16 }), "Move to Recycle Bin"))),
+          icon("trash", { size: 16 }), `Move to ${binName()}`))),
     h("div", { class: "pile-grid", role: "list" }, rows.map(pileTile))));
 }
 
@@ -1515,17 +1516,17 @@ async function unstageOne(id, tile = null) {
 
 async function commit() {
   if (state.busy) return;
-  const n = state.summary?.staged_all || 0;
+  const n = state.summary?.pile || 0;
   if (!n) return;
 
   // The pile page behind the dialog is the preview, so the dialog only says
   // what will happen.
   const count = n;
-  const bytes = state.summary?.bytes_staged_all || 0;
+  const bytes = state.summary?.bytes_pile || 0;
 
   const ok = await confirmDialog({
-    title: "Move to the Recycle Bin?",
-    message: `${countOf(count, "screenshot")}${bytes ? ` (${formatBytes(bytes)})` : ""} will go to the Recycle Bin. Nothing is deleted permanently: you can restore files from there.`,
+    title: `Move to the ${binName()}?`,
+    message: `${countOf(count, "screenshot")}${bytes ? ` (${formatBytes(bytes)})` : ""} will go to the ${binName()}. Nothing is deleted permanently: you can restore files from there.`,
     confirmLabel: `Move ${countOf(count, "file")}`,
     confirmIcon: "trash",
     variant: "danger solid",
@@ -1534,9 +1535,9 @@ async function commit() {
 
   state.busy = true;
   document.getElementById("btn-pile-commit")?.setAttribute("disabled", "");
-  log.info("commit", `moving ${count} files to the Recycle Bin`);
+  log.info("commit", `moving ${count} files to the ${binName()}`);
   try {
-    const report = await api("commit_deletes");
+    const report = await api("commit_deletes", { rootId: state.rootId });
     reportCommit(report);
     // The files are moved by now; a failed reload must not report otherwise.
     try {
@@ -1570,7 +1571,7 @@ function reportCommit(report) {
   const gone = (report?.failed || []).filter((f) => f.gone).length;
   for (const f of failed) log.warn("commit", `${f.name}: ${f.error}`);
   const parts = [];
-  if (moved) parts.push(`Moved ${countOf(moved, "screenshot")} to the Recycle Bin${report.bytes_freed ? `, ${formatBytes(report.bytes_freed)} freed` : ""}`);
+  if (moved) parts.push(`Moved ${countOf(moved, "screenshot")} to the ${binName()}${report.bytes_freed ? `, ${formatBytes(report.bytes_freed)} freed` : ""}`);
   if (gone) parts.push(`${countOf(gone, "file")} already gone`);
   if (failed.length) parts.push(`${countOf(failed.length, "file")} couldn't be moved`);
   log.info("commit", `${moved} moved, ${gone} gone, ${failed.length} failed, ${report?.still_staged || 0} still staged`);
@@ -1627,7 +1628,7 @@ async function folderMenu() {
  */
 function foldersBusy() {
   if (!state.busy && !state.scanning) return false;
-  toast(state.busy ? COMMIT_RUNNING : "Wait for the scan to finish first");
+  toast(state.busy ? commitRunning() : "Wait for the scan to finish first");
   return true;
 }
 
@@ -1766,7 +1767,7 @@ function zoomApp(step) {
   if (step || now !== 1) toast(`Zoom ${Math.round(saved.zoom * 100)}%`, { ms: 1200 });
 }
 
-/** Opens a known place (the data or logs folder, or a screenshot) in Explorer. */
+/** Opens a known place (the data or logs folder, or a screenshot) in the file manager. */
 async function reveal(target, id = null) {
   try {
     await api("reveal", { target, id });
@@ -1814,7 +1815,7 @@ function showOptions() {
       h("section", { class: "opt-group" },
         h("h3", { text: "Appearance" }),
         h("div", { class: "opt-row" },
-          h("div", { class: "opt-label" }, "Theme", h("small", { text: "System follows the Windows setting" })),
+          h("div", { class: "opt-label" }, "Theme", h("small", { text: "System follows the operating system" })),
           h("div", { class: "segmented", role: "group", "aria-label": "Theme" }, themeButtons)),
         h("div", { class: "opt-row" },
           h("div", { class: "opt-label" }, "Zoom", h("small", { text: "Ctrl and + or −, or Ctrl and the mouse wheel" })),
@@ -1824,7 +1825,7 @@ function showOptions() {
           h("button", { class: "btn sm ghost", onclick: () => zoomApp(0), text: "Reset" }))),
       h("section", { class: "opt-group" },
         h("h3", { text: "Your data" }),
-        h("p", { class: "about-note", text: "Decisions live in one database file on this PC. Your screenshots are never copied or uploaded." }),
+        h("p", { class: "about-note", text: "Decisions live in one database file on this computer. Your screenshots are never copied or uploaded." }),
         place("Data folder", info.data_dir, "data"),
         place("Logs", info.log_path, "logs"),
         h("div", { class: "opt-row" },
@@ -1877,7 +1878,7 @@ function onContextMenu(e) {
     }
     if (node.classList.contains("tile")) items.push({ label: "Don't delete", sub: "Take it off the deletion pile", icon: "undo", onClick: () => unstageOne(shot.id, node) });
     items.push({ separator: true },
-      { label: "Show in File Explorer", icon: "folder", onClick: () => reveal("shot", shot.id) },
+      { label: `Show in ${fileManager()}`, icon: "folder", onClick: () => reveal("shot", shot.id) },
       { label: "Copy file path", icon: "copy", onClick: () => copyText(shot.path, "the file path") });
   } else {
     const month = t.closest?.(".month[data-month]");

@@ -177,6 +177,7 @@
       data_dir: "C:/fake", db_path: "C:/fake/shotpile.db", log_path: "C:/fake/logs/shotpile.log",
       schema_version: 1, app_version: "1.0.0", image_exts: ["png"], unviewable_exts: ["heic"],
       tauri_version: "2.11.6", webview_version: "131.0.2903.70", sqlite_version: "3.50.4",
+      trash_name: "Recycle Bin", file_manager: "File Explorer",
     }),
     list_roots: () => roots
       .slice()
@@ -198,8 +199,9 @@
       const live = present(mine);
       return {
         total: live.length, pending: count(live, "pending"), staged: count(live, "staged"),
-        // Global, because staged_list and commit_deletes ignore the root filter.
-        staged_all: count(all(), "staged"), bytes_staged_all: bytes(all(), "staged"),
+        // The pile follows the folder, like staged_list and commit_deletes,
+        // and keeps missing files: the commit still has to settle them.
+        pile: count(mine, "staged"), bytes_pile: bytes(mine, "staged"),
         kept: count(live, "kept"), deleted: count(live, "deleted"), skipped: count(live, "skipped"),
         missing: mine.filter((s) => s.missing).length,
         bytes_pending: bytes(live, "pending"), bytes_total: bytes(live), bytes_deleted: bytes(live, "deleted"),
@@ -316,9 +318,9 @@
       LOG.push("unstage:" + s.name);
       return { ...s };
     },
-    staged_list: () => all().filter((s) => s.status === "staged").sort(byTaken(1)).map((s) => ({ ...s })),
-    commit_deletes: () => {
-      const staged = all().filter((s) => s.status === "staged");
+    staged_list: (a) => inRoot(a.rootId).filter((s) => s.status === "staged").sort(byTaken(1)).map((s) => ({ ...s })),
+    commit_deletes: (a) => {
+      const staged = inRoot(a.rootId).filter((s) => s.status === "staged");
       const moved = staged.filter((s) => !s.__failCommit);
       const failed = staged.filter((s) => s.__failCommit).map((s) => ({ id: s.id, name: s.name, error: "simulated: the file is in use", gone: false }));
       for (const s of moved) {
@@ -342,7 +344,7 @@
       }
       LOG.push("scan:" + a.path);
       const n = inRoot(root.id).length;
-      return { root: a.path, found: n, added: 0, refreshed: n, skipped_other: 2, unreadable: 0, unviewable: 1, missing: 0, total_in_root: n, elapsed_ms: 12 };
+      return { root: a.path, found: n, added: 0, refreshed: n, restored: 0, skipped_other: 2, unreadable: 0, unviewable: 1, missing: 0, total_in_root: n, elapsed_ms: 12 };
     },
     forget_root: (a) => {
       const at = roots.findIndex((r) => r.id === a.rootId);

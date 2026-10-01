@@ -4,7 +4,8 @@
 
 A Tauri 2 desktop app (Rust backend, no-bundler static frontend) for triaging
 screenshot folders: month and random review queues, swipe decisions, and staged
-deletion into the Windows Recycle Bin.
+deletion into the Recycle Bin (Trash on macOS and Linux). Windows is the main
+platform; releases also ship macOS and Linux builds.
 
 ## Hard rules
 
@@ -19,8 +20,13 @@ deletion into the Windows Recycle Bin.
 - **The frontend stays bundler-free.** `src/` is plain ES modules loaded by
   `index.html`. No Vite, no npm runtime dependencies, no build step for the
   frontend. `package.json` exists only for the Tauri CLI and the tests.
-- **Decisions are never reset by a rescan.** The upsert in `db.rs` deliberately
-  omits `status` and `decided_ms`. Keep it that way.
+- **Decisions are never reset by a rescan.** The upsert in `db.rs` leaves
+  `status` and `decided_ms` alone, with one exception: a `deleted` row whose
+  file is on disk again was restored from the bin by hand, so it becomes
+  `kept`. Keep it that way.
+- **The deletion pile is per folder.** `staged_list`, `commit_deletes` and the
+  summary's `pile` take the current `root_id`, like the library; a commit never
+  moves another folder's files.
 - **Redo mirrors undo.** An undone entry moves to the redo side and only
   reapplies while its row still shows `prev`; a new decision clears redo, and
   commits and forgets purge both sides.
@@ -47,7 +53,9 @@ deletion into the Windows Recycle Bin.
   The identifier `com.samethope.shotpile` decides the data folder; changing it
   again needs the same kind of move.
 - **UI text is English only**, and so is every backend log line and error
-  string (errors surface in toasts).
+  string (errors surface in toasts). Name the bin and the file manager with
+  `binName()` and `fileManager()` in app.js (from `app_info`), never a
+  hard-coded "Recycle Bin" or "File Explorer".
 
 ## Layout
 
@@ -84,8 +92,8 @@ is always `db`, then `undo`.
 
 ```powershell
 npm run test:logic                          # 44 frontend logic tests
-npm run test:gui                            # 227 GUI assertions in headless Chrome
-cd src-tauri; cargo test                    # 70 unit + 4 end-to-end tests
+npm run test:gui                            # 230 GUI assertions in headless Chrome
+cd src-tauri; cargo test                    # 71 unit + 4 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
 ```
@@ -116,7 +124,8 @@ library (`seedDemo()` in the fake), which is also what the README pictures show.
   a rerun only differs where the UI did. Keep the alt texts in `README.md` true
   to the pictures.
 - `.github/workflows/release.yml` builds the NSIS installer and a portable exe
-  on `windows-latest` and publishes a GitHub release, when a `v*` tag is pushed
+  on Windows, a universal `.dmg` on macOS and an AppImage and `.deb` on
+  Ubuntu 22.04 (one job each), and publishes them as one GitHub release, when a `v*` tag is pushed
   or when it is run by hand with a new tag (it then tags the branch head it
   built). It refuses a tag that does not match the version in
   `src-tauri/Cargo.toml` (the single source: `tauri.conf.json` and
@@ -134,7 +143,8 @@ library (`seedDemo()` in the fake), which is also what the README pictures show.
   unhandled rejections) are also sent to the file log with `log_write`,
   rate-limited, under a `ui:` scope.
 - **Backend** appends dated lines to
-  `%APPDATA%\com.samethope.shotpile\logs\shotpile.log` via
+  `logs/shotpile.log` in the app data folder (`%APPDATA%\com.samethope.shotpile`
+  on Windows) via
   `src-tauri/src/log.rs` (rotated at 2 MiB). A panic hook writes panics there
   before the process aborts. `Ctrl+Shift+L` shows the tail in a modal; the
   `log_read` command backs it.
@@ -161,7 +171,7 @@ library (`seedDemo()` in the fake), which is also what the README pictures show.
   remove it: without it the modal and header buttons stay on screen and block
   the app even when they are marked `hidden`.
 - Colours are tokens at the top of `style.css`, redefined under
-  `prefers-color-scheme: dark`. Components use the tokens; a hard-coded surface
+  `:root[data-theme="dark"]`. Components use the tokens; a hard-coded surface
   or text colour will break the dark theme. The photo card's info bar and the
   viewer are the deliberate exceptions (they sit on photos).
 - Page scrollbars are hidden (`html { scrollbar-width: none }`) because they

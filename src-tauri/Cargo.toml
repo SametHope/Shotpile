@@ -1,11 +1,11 @@
 [package]
 name = "shotpile"
-version = "1.0.0"
+version = "1.1.0"
 description = "Local-first screenshot review with month/random queues, swipe decisions and safe Recycle Bin deletes"
 authors = ["SametHope"]
 license = "PolyForm-Noncommercial-1.0.0"
 publish = false
-repository = "https://github.com/SametHope/Screenshot-Sifter"
+repository = "https://github.com/SametHope/Shotpile"
 edition = "2021"
 rust-version = "1.82"
 

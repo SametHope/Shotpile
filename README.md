@@ -1,34 +1,17 @@
 # Shotpile
 
-A Windows app for clearing out a folder full of screenshots. It shows them one
-at a time, month by month: swipe left to mark one for deletion, right to keep
-it, up to decide later. Marked files stay where they are until you confirm,
-then go to the Recycle Bin, so a mistake can still be restored.
+A desktop app for Windows, macOS and Linux for clearing out a folder full of
+screenshots. It shows them one at a time, month by month: swipe left to mark
+one for deletion, right to keep it, up to decide later. Marked files stay where
+they are until you confirm, then go to the Recycle Bin (the Trash on macOS and
+Linux), so a mistake can still be restored.
 
 <p align="center">
   <img src="docs/screenshots/swipe.webp" width="760" alt="Sorting a month of screenshots: a card dragged right is kept, one dragged left is marked for deletion, then the arrow keys keep, skip and undo.">
 </p>
 
 It works entirely offline: no account, no network access, nothing uploaded.
-
-## Download
-
-Get it from the
-[latest release](https://github.com/SametHope/Screenshot-Sifter/releases/latest).
-Shotpile is for Windows 10 and 11 (64-bit) only; there are no macOS or Linux
-builds.
-
-- `Shotpile_<version>_x64-setup.exe` installs it for your user, with a
-  Start menu entry and an uninstaller.
-- `Shotpile_<version>_x64-portable.exe` runs as is, without installing.
-
-The builds are not code-signed, so Windows SmartScreen may say *Windows
-protected your PC*. Choose **More info**, then **Run anyway**. The app needs
-Microsoft Edge WebView2, which current Windows already has; the installer
-fetches it if it is missing.
-
-Updating from 1.0.0, which was called *Screenshot Sifter*: the first start
-moves its database over, so your decisions carry on.
+[Download it](#download) for Windows, macOS or Linux.
 
 ## A quick tour
 
@@ -62,13 +45,42 @@ the deletions would free, and offers the next month that still has work.
 **Delete when you are ready.** Marked files wait on the *To delete* pile, still
 on disk. Each one has a *Don't delete* button for anything you marked by
 mistake, or you can check them one by one as cards. *Move to Recycle Bin* asks
-once, with *Cancel* focused, so Enter never deletes by accident.
+once, with *Cancel* focused, so Enter never deletes by accident. Each folder
+has its own pile.
 
 ![The deletion pile: a grid of the screenshots marked for deletion, each with a Don't delete button, and Move to Recycle Bin at the top.](docs/screenshots/pile.webp)
 
-**Light or dark.** It follows the Windows theme, or the choice in Options.
+**Light or dark.** It follows the system theme, or the choice in Options.
 
 ![The library in the dark theme: the overview bar and the months, each with its thumbnails and progress.](docs/screenshots/library-dark.webp)
+
+## Download
+
+Get it from the
+[latest release](https://github.com/SametHope/Shotpile/releases/latest).
+
+| System | File |
+| --- | --- |
+| Windows 10/11, 64-bit | `Shotpile_<version>_x64-setup.exe` installs it for your user, with a Start menu entry and an uninstaller. `Shotpile_<version>_x64-portable.exe` runs as is. |
+| macOS 10.15 or later, Apple silicon or Intel | `Shotpile_<version>_macos-universal.dmg` |
+| Linux, x86_64 | `Shotpile_<version>_linux-x86_64.AppImage` runs on most distributions (`chmod +x` it first). `Shotpile_<version>_linux-amd64.deb` is for Debian and Ubuntu. |
+
+The builds are not code-signed:
+
+- **Windows**: SmartScreen may say *Windows protected your PC*. Choose
+  **More info**, then **Run anyway**. The app needs Microsoft Edge WebView2,
+  which current Windows already has; the installer fetches it if it is
+  missing.
+- **macOS**: the first open is blocked. Open **System Settings › Privacy &
+  Security** and choose **Open Anyway**.
+
+Windows is where the app is used and tested by hand. The Linux build passes
+the same automated tests in CI. **The macOS build is untested**: it is built
+from the same code, but nobody has run it on a Mac yet, so treat it as a
+preview and report what breaks.
+
+Updating from 1.0.0 (Windows only), which was called *Screenshot Sifter*: the
+first start moves its database over, so your decisions carry on.
 
 ## Details
 
@@ -79,20 +91,21 @@ once, with *Cancel* focused, so Enter never deletes by accident.
   again and you skip it again, it stays skipped and the pass moves on.
 - **Undo and redo** (`Z` / `Y`, or `Ctrl+Z` / `Ctrl+Y` anywhere) bring a card
   back from the side it left, and throw it again. A file already in the
-  Recycle Bin is never brought back.
+  Recycle Bin is never brought back. If you restore one from there yourself,
+  the next scan of its folder counts it as kept.
 - **The filmstrip** under the buttons shows the last few decisions and what is
   coming; click any of them to jump there.
 - **Zoom.** Scroll to zoom the card around the cursor (up to 8×); once zoomed,
   a drag pans instead of deciding. The whole app zooms with `Ctrl` and `+`,
   `-`, `0` or the mouse wheel, and the layout tightens up at 125% or 150%
-  Windows scaling rather than cutting things off.
+  display scaling rather than cutting things off.
 - **Several folders.** The folder name in the header switches between saved
   folders, adds another, or forgets one. Forgetting only removes it from the
   app's database; no file is touched.
 - **Options** (the sliders button, or `Ctrl+,`): theme, zoom, where your data
   and logs live with buttons to open them, and the versions and licences.
 - **Right-click** a card, a pile tile or a filmstrip thumbnail to open it, show
-  it in File Explorer, copy its path, or decide it; a month offers to sort it.
+  it in the file manager, copy its path, or decide it; a month offers to sort it.
 - `?` lists every shortcut.
 
 ### Keyboard
@@ -102,7 +115,7 @@ once, with *Cancel* focused, so Enter never deletes by accident.
 | `←` `→` `↑` | Delete (mark), keep, skip. Holding a key decides once. |
 | `Z`, `Backspace`, `Ctrl+Z` | Undo. `Ctrl+Z` also works outside a review. |
 | `Y`, `Ctrl+Y`, `Ctrl+Shift+Z` | Redo |
-| `Ctrl` + `+` `-` `0` | Zoom the whole app; `Ctrl+,` opens Options |
+| `Ctrl` + `+` `-` `0` | Zoom the whole app; `Ctrl+,` opens Options (`Cmd` works for `Ctrl` on macOS) |
 | `Space` | Open the current photo full screen (and close it again) |
 | `+` `-` `0` | Zoom the card in, out, back to 100%. Arrows pan while zoomed. |
 | `Esc` | Close the viewer or a dialog |
@@ -114,15 +127,12 @@ once, with *Cancel* focused, so Enter never deletes by accident.
 
 You need:
 
-- Windows 10/11 with WebView2 (preinstalled on current Windows). The app is
-  built and tested for Windows only.
-- [Rust](https://rustup.rs) with the MSVC toolchain.
+- [Rust](https://rustup.rs) (on Windows with the MSVC toolchain).
 - Node.js only for the Tauri CLI and the tests.
-
-Linux works for development and the test suites (CI runs them there), but is
-not a supported platform for the app itself. It needs the usual Tauri
-packages (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `librsvg2-dev`,
-`libayatana-appindicator3-dev`).
+- The [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your
+  system: WebView2 on Windows (preinstalled on current Windows), the Xcode
+  command line tools on macOS, and on Linux `libwebkit2gtk-4.1-dev`,
+  `libgtk-3-dev`, `librsvg2-dev` and `libayatana-appindicator3-dev`.
 
 ```powershell
 npm install
@@ -143,13 +153,14 @@ the top (which needs ffmpeg on `PATH`).
 
 ### Releases
 
-`.github/workflows/release.yml` builds the installer and the portable exe on a
-Windows runner and publishes them as a GitHub release. Start it either by
-pushing a version tag:
+`.github/workflows/release.yml` builds the Windows installer and portable exe,
+a universal macOS `.dmg`, and a Linux AppImage and `.deb`, each on its own
+runner, and publishes them as one GitHub release. Start it either by pushing a
+version tag:
 
 ```powershell
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.1.0
+git push origin v1.1.0
 ```
 
 or by hand from the Actions tab (*Release*, *Run workflow*): pick the branch
@@ -168,8 +179,8 @@ Two logs, because a release build cannot always be attached to a debugger:
 - **DevTools**: press `F12` or `Ctrl+Shift+I`. The frontend logs every command,
   view change, decision and error to the console via `src/log.js`. Type
   `__shotpileLog.dump()` in the console to print the recent history.
-- **File log**: the backend appends to
-  `%APPDATA%\com.samethope.shotpile\logs\shotpile.log` (dated lines, rotated at
+- **File log**: the backend appends to `logs/shotpile.log` in the data folder
+  (see [Data](#data); dated lines, rotated at
   2 MiB, the previous file kept as `shotpile.log.old`). Frontend warnings and
   errors are forwarded there too, tagged `[ui:…]`, and panics are written there
   before the process exits. Press `Ctrl+Shift+L` to read the tail in the app.
@@ -181,8 +192,8 @@ Both are always on, including in release builds.
 ```powershell
 npm test                                  # both JS suites
 npm run test:logic                        # 44 logic tests (node --test)
-npm run test:gui                          # 227 GUI assertions in headless Chrome
-cd src-tauri; cargo test                  # 70 unit + 4 end-to-end tests
+npm run test:gui                          # 230 GUI assertions in headless Chrome
+cd src-tauri; cargo test                  # 71 unit + 4 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
 ```
@@ -245,18 +256,22 @@ through a plugin permission.
 | `staged` | marked for deletion | **yes** |
 | `kept` | keep | yes |
 | `skipped` | revisit later | yes |
-| `deleted` | sent to Recycle Bin | no |
+| `deleted` | sent to the Recycle Bin or Trash | no |
 
 A rescan refreshes size, dates and the missing flag but never resets a
 decision, so deleting a folder and restoring it later does not undo your work.
+The one exception: a `deleted` file that is back on disk was restored from the
+bin by hand, so the rescan marks it `kept`.
 Files that vanish from disk outside the app are flagged missing and drop out of
 the review queues; files the app itself sent to the Recycle Bin are not
 "missing", so the freed-space figures survive a rescan.
 
 ## Data
 
-The database lives in Tauri's app data directory
-(`%APPDATA%\com.samethope.shotpile\`):
+The database lives in the app data folder, which Options shows and opens:
+`%APPDATA%\com.samethope.shotpile\` on Windows,
+`~/Library/Application Support/com.samethope.shotpile/` on macOS and
+`~/.local/share/com.samethope.shotpile/` on Linux.
 
 - `shotpile.db`: SQLite, WAL mode. (1.0.0 kept it as `sifter.db` under
   `com.hope.screenshotsifter`; the first start of a newer version moves it.)
@@ -267,7 +282,7 @@ folder menu.
 
 ## Supported formats
 
-Previewable by WebView2: `png`, `jpg`/`jpeg`, `jfif`, `webp`, `bmp`, `gif`, `avif`.
+Previewable: `png`, `jpg`/`jpeg`, `jfif`, `webp`, `bmp`, `gif`, `avif`.
 
 Tracked but not previewable, shown as a placeholder you can still decide on:
 `heic`, `heif`, `tif`, `tiff`. Video files are ignored.
@@ -276,15 +291,11 @@ Tracked but not previewable, shown as a placeholder you can still decide on:
 
 - Undo and redo are per session. Decisions survive a restart; the ability to
   walk them back does not.
-- Staging and the Recycle Bin commit are global across every saved folder,
-  while the library is per folder.
 - Thumbnails are the original images, scaled by the WebView; there is no
   thumbnail cache yet.
-- A file restored from the Recycle Bin stays `deleted` in the database, since a
-  rescan never changes a decision.
-- On a drive without a Recycle Bin (most network shares, some USB drives),
-  Windows asks before deleting each file permanently; cancelling leaves it on
-  the pile.
+- On Windows, on a drive without a Recycle Bin (most network shares, some USB
+  drives), Windows asks before deleting each file permanently; cancelling
+  leaves it on the pile.
 
 ## License
 

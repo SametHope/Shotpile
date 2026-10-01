@@ -230,6 +230,7 @@ export function scanSummary(report) {
   if (report.added) bits.push(`${formatCount(report.added)} new`);
   if (report.refreshed) bits.push(`${formatCount(report.refreshed)} already known`);
   if (!report.added && !report.refreshed) bits.push("no screenshots found");
+  if (report.restored) bits.push(`${formatCount(report.restored)} restored, now kept`);
   if (report.unviewable) bits.push(`${formatCount(report.unviewable)} without preview`);
   if (report.missing) bits.push(`${formatCount(report.missing)} missing on disk`);
   return bits.join(" · ");

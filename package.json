@@ -3,7 +3,7 @@
   "private": true,
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
-  "description": "Shotpile: swipe through a screenshot folder, keep or mark for deletion, then send the marked files to the Recycle Bin.",
+  "description": "Shotpile: swipe through a screenshot folder, keep or mark for deletion, then send the marked files to the Recycle Bin or Trash.",
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",

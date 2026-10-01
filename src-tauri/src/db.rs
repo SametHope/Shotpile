@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use rusqlite::types::Value;
 use rusqlite::{params, Connection, OptionalExtension, Row};
@@ -106,7 +106,7 @@ pub struct MonthStat {
 }
 
 /// Header figures for one root (or every root). Every count and size except
-/// `missing` and the `*_staged_all` pair leaves out rows flagged missing, the
+/// `missing` and the `pile` pair leaves out rows flagged missing, the
 /// same rows `months` groups, so the header and the month list always agree.
 /// Committed rows are never flagged missing (see `flag_root_missing`), so the
 /// deleted figures keep their history across rescans.
@@ -115,12 +115,12 @@ pub struct Summary {
     pub total: i64,
     pub pending: i64,
     pub staged: i64,
-    /// Staged across every root, because `staged_list` and `commit_deletes`
-    /// are global. `staged` is root-filtered and only used for month rows.
-    /// Missing files count here too: the commit still has to settle them.
-    pub staged_all: i64,
-    /// Size of everything in `staged_all`.
-    pub bytes_staged_all: i64,
+    /// The deletion pile: what `staged_list` shows and `commit_deletes` moves.
+    /// Unlike `staged`, it counts missing files too, since the commit still
+    /// has to settle them.
+    pub pile: i64,
+    /// Size of everything in `pile`.
+    pub bytes_pile: i64,
     pub kept: i64,
     pub deleted: i64,
     pub skipped: i64,
@@ -419,14 +419,22 @@ impl Db {
             created_ms = excluded.created_ms,
             modified_ms = excluded.modified_ms,
             date_source = excluded.date_source,
-            missing = 0";
+            missing = 0,
+            status = CASE WHEN status = 'deleted' THEN 'kept' ELSE status END,
+            decided_ms = CASE WHEN status = 'deleted' THEN ?10 ELSE decided_ms END";
 
-    /// Upserts a whole scan in one transaction. Returns `(added, refreshed)`.
+    /// Upserts a whole scan in one transaction. Returns `(added, refreshed,
+    /// restored)`.
+    ///
+    /// Decisions are left alone, with one exception: a `deleted` row whose file
+    /// is on disk again was restored from the Recycle Bin by hand, which is a
+    /// clear "keep", so it becomes `kept` (`restored` counts those).
     pub fn upsert_shots_bulk(
         &self,
         root_id: i64,
         files: &[super::scan::ScannedFile],
-    ) -> Result<(usize, usize), String> {
+    ) -> Result<(usize, usize, usize), String> {
+        let now = super::scan::now_ms();
         let tx = self
             .conn
             .unchecked_transaction()
@@ -435,22 +443,26 @@ impl Db {
         // One query for the known paths. A per-row `SELECT` would need a
         // statement reset between executions, which `CachedStatement` keeps
         // private.
-        let known: HashSet<String> = {
+        let known: HashMap<String, bool> = {
             let mut stmt = tx
-                .prepare("SELECT path FROM screenshots WHERE root_id = ?1")
+                .prepare("SELECT path, status = 'deleted' FROM screenshots WHERE root_id = ?1")
                 .map_err(|e| e.to_string())?;
             let rows = stmt
-                .query_map(params![root_id], |r| r.get::<_, String>(0))
+                .query_map(params![root_id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?))
+                })
                 .map_err(|e| e.to_string())?;
-            let mut set = HashSet::with_capacity(files.len());
-            for p in rows {
-                set.insert(p.map_err(|e| e.to_string())?);
+            let mut map = HashMap::with_capacity(files.len());
+            for row in rows {
+                let (path, deleted) = row.map_err(|e| e.to_string())?;
+                map.insert(path, deleted);
             }
-            set
+            map
         };
 
         let mut added = 0usize;
         let mut refreshed = 0usize;
+        let mut restored = 0usize;
         {
             let mut upsert = tx
                 .prepare_cached(Self::UPSERT_SQL)
@@ -466,18 +478,27 @@ impl Db {
                         f.taken_ms,
                         f.created_ms,
                         f.modified_ms,
-                        f.date_source
+                        f.date_source,
+                        now
                     ])
                     .map_err(|e| format!("{}: {e}", f.path))?;
-                if known.contains(&f.path) {
-                    refreshed += 1;
-                } else {
-                    added += 1;
+                match known.get(&f.path) {
+                    Some(&deleted) => {
+                        refreshed += 1;
+                        restored += deleted as usize;
+                    }
+                    None => added += 1,
                 }
             }
         }
         tx.commit().map_err(|e| e.to_string())?;
-        Ok((added, refreshed))
+        if restored > 0 {
+            crate::log::info(
+                "scan",
+                &format!("{restored} file(s) back from the Recycle Bin, now kept"),
+            );
+        }
+        Ok((added, refreshed, restored))
     }
 
     /// Returns `true` when the path was new, `false` when an existing row was refreshed.
@@ -507,8 +528,8 @@ impl Db {
             .optional()
             .map_err(|e| e.to_string())?
             .unwrap_or(false);
-        // Decisions (status / decided_ms) are intentionally left untouched so a
-        // rescan never resurrects a file the user already reviewed.
+        // Decisions (status / decided_ms) are left untouched, except that a
+        // committed file found on disk again counts as kept (see the bulk form).
         self.conn
             .execute(
                 Self::UPSERT_SQL,
@@ -521,7 +542,8 @@ impl Db {
                     taken_ms,
                     created_ms,
                     modified_ms,
-                    date_source
+                    date_source,
+                    super::scan::now_ms()
                 ],
             )
             .map_err(|e| format!("{path}: {e}"))?;
@@ -592,7 +614,7 @@ impl Db {
              WHERE 1 = 1{filter}",
             month = month_expr(tz_offset_min),
         );
-        let (staged_all, bytes_staged_all) = self.staged_totals()?;
+        let (pile, bytes_pile) = self.staged_totals(root_id)?;
         let mut stmt = self.conn.prepare(&sql).map_err(|e| e.to_string())?;
         let refs = to_sql_refs(&args);
         stmt.query_row(refs.as_slice(), |row| {
@@ -600,8 +622,8 @@ impl Db {
                 total: row.get(0)?,
                 pending: row.get(1)?,
                 staged: row.get(2)?,
-                staged_all,
-                bytes_staged_all,
+                pile,
+                bytes_pile,
                 kept: row.get(3)?,
                 deleted: row.get(4)?,
                 skipped: row.get(5)?,
@@ -784,18 +806,21 @@ impl Db {
         Ok(out)
     }
 
-    /// Staged rows joined with their screenshot paths, oldest first.
-    pub fn staged_rows(&self) -> Result<Vec<StagedRow>, String> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT s.id, s.path, s.name, s.size FROM staged g
-                 JOIN screenshots s ON s.id = g.screenshot_id
-                 ORDER BY g.staged_ms ASC, s.taken_ms ASC",
-            )
-            .map_err(|e| e.to_string())?;
+    /// The deletion pile of one root (or every root): staged rows joined with
+    /// their screenshot paths, oldest first.
+    pub fn staged_rows(&self, root_id: Option<i64>) -> Result<Vec<StagedRow>, String> {
+        let (filter, args) = root_filter(root_id);
+        let sql = format!(
+            "SELECT s.id, s.path, s.name, s.size FROM staged g
+             JOIN screenshots s ON s.id = g.screenshot_id
+             WHERE 1 = 1{}
+             ORDER BY g.staged_ms ASC, s.taken_ms ASC",
+            filter.replace("root_id", "s.root_id")
+        );
+        let mut stmt = self.conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let refs = to_sql_refs(&args);
         let rows = stmt
-            .query_map([], |r| {
+            .query_map(refs.as_slice(), |r| {
                 Ok(StagedRow {
                     id: r.get(0)?,
                     path: r.get(1)?,
@@ -808,17 +833,20 @@ impl Db {
             .map_err(|e| e.to_string())
     }
 
-    /// `(count, bytes)` of everything staged, across every root. One aggregate
-    /// over the same join `staged_rows` reads, so the badge counts exactly what
-    /// a commit would process.
-    pub fn staged_totals(&self) -> Result<(i64, i64), String> {
+    /// `(count, bytes)` of the deletion pile of one root (or every root). One
+    /// aggregate over the same join `staged_rows` reads, so the badge counts
+    /// exactly what a commit would process.
+    pub fn staged_totals(&self, root_id: Option<i64>) -> Result<(i64, i64), String> {
+        let (filter, args) = root_filter(root_id);
+        let sql = format!(
+            "SELECT COUNT(*), COALESCE(SUM(s.size), 0) FROM staged g
+             JOIN screenshots s ON s.id = g.screenshot_id
+             WHERE 1 = 1{}",
+            filter.replace("root_id", "s.root_id")
+        );
+        let refs = to_sql_refs(&args);
         self.conn
-            .query_row(
-                "SELECT COUNT(*), COALESCE(SUM(s.size), 0) FROM staged g
-                 JOIN screenshots s ON s.id = g.screenshot_id",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
+            .query_row(&sql, refs.as_slice(), |r| Ok((r.get(0)?, r.get(1)?)))
             .map_err(|e| e.to_string())
     }
 }
@@ -1094,21 +1122,21 @@ mod tests {
         seed(&db, "/photos/2.png", 2_000);
 
         db.set_status(1, STATUS_STAGED, Some(10)).unwrap();
-        assert_eq!(db.staged_rows().unwrap().len(), 1);
+        assert_eq!(db.staged_rows(None).unwrap().len(), 1);
 
         // flipping to kept must also unstage
         db.set_status(1, STATUS_KEPT, Some(11)).unwrap();
-        assert!(db.staged_rows().unwrap().is_empty());
+        assert!(db.staged_rows(None).unwrap().is_empty());
 
         // re-staging reuses the same row
         db.set_status(1, STATUS_STAGED, Some(12)).unwrap();
-        assert_eq!(db.staged_rows().unwrap().len(), 1);
+        assert_eq!(db.staged_rows(None).unwrap().len(), 1);
         db.set_status(1, STATUS_STAGED, Some(13)).unwrap();
-        assert_eq!(db.staged_rows().unwrap().len(), 1);
+        assert_eq!(db.staged_rows(None).unwrap().len(), 1);
 
         // committed deletes leave the staged table
         db.set_status(1, STATUS_DELETED, Some(14)).unwrap();
-        assert!(db.staged_rows().unwrap().is_empty());
+        assert!(db.staged_rows(None).unwrap().is_empty());
         assert_eq!(db.shot(1).unwrap().unwrap().status, STATUS_DELETED);
     }
 
@@ -1172,7 +1200,7 @@ mod tests {
     }
 
     #[test]
-    fn summary_reports_staged_across_all_roots() {
+    fn the_deletion_pile_is_per_root() {
         let db = Db::open_in_memory().expect("in-memory db");
         let a = db.upsert_root("/a").unwrap();
         let b = db.upsert_root("/b").unwrap();
@@ -1199,14 +1227,20 @@ mod tests {
         db.set_status(a_ids[0], STATUS_STAGED, Some(1)).unwrap();
         db.set_status(b_ids[0], STATUS_STAGED, Some(2)).unwrap();
 
-        // The root-filtered view is per root...
         assert_eq!(db.summary(Some(a), 0).unwrap().staged, 1);
         assert_eq!(db.summary(Some(b), 0).unwrap().staged, 1);
-        // ...but the drawer and the commit are global, so this must be too.
-        assert_eq!(db.summary(Some(a), 0).unwrap().staged_all, 2);
-        assert_eq!(db.summary(Some(b), 0).unwrap().staged_all, 2);
-        assert_eq!(db.summary(None, 0).unwrap().staged_all, 2);
-        assert_eq!(db.summary(Some(a), 0).unwrap().bytes_staged_all, 200);
+        // The pile and the commit follow the folder too.
+        let pile = |r| {
+            let s = db.summary(r, 0).unwrap();
+            (s.pile, s.bytes_pile)
+        };
+        assert_eq!(pile(Some(a)), (1, 100));
+        assert_eq!(pile(Some(b)), (1, 100));
+        assert_eq!(pile(None), (2, 200));
+        let rows = db.staged_rows(Some(a)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, a_ids[0]);
+        assert_eq!(db.staged_rows(None).unwrap().len(), 2);
     }
 
     /// Seeds a row in root 1 with an explicit size and returns its id.
@@ -1315,7 +1349,7 @@ mod tests {
         assert_eq!(s.bytes_pending, 100);
         assert_eq!(s.bytes_deleted, 400);
         // The staged pair is the commit's scope, gone file included.
-        assert_eq!((s.staged_all, s.bytes_staged_all), (2, 1_600 + 3_200));
+        assert_eq!((s.pile, s.bytes_pile), (2, 1_600 + 3_200));
         assert_eq!(db.summary(None, 0).unwrap().bytes_deleted, 400 + 10_000);
 
         // The header and the month list count the same rows.
@@ -1396,8 +1430,8 @@ mod tests {
 
         // /a's rows and its staged entry are gone, with no orphans left...
         assert!(db.items(&a_ids).unwrap().is_empty());
-        assert_eq!(db.staged_rows().unwrap().len(), 1);
-        assert!(b_ids.contains(&db.staged_rows().unwrap()[0].id));
+        assert_eq!(db.staged_rows(None).unwrap().len(), 1);
+        assert!(b_ids.contains(&db.staged_rows(None).unwrap()[0].id));
         let orphans: i64 = db
             .conn
             .query_row(
@@ -1413,7 +1447,7 @@ mod tests {
         assert_eq!(roots.len(), 1);
         assert_eq!((roots[0].id, roots[0].total, roots[0].staged), (b, 2, 1));
         assert_eq!(db.items(&b_ids).unwrap().len(), 2);
-        assert_eq!(db.summary(None, 0).unwrap().staged_all, 1);
+        assert_eq!(db.summary(None, 0).unwrap().pile, 1);
 
         assert!(db.forget_root(a).is_err(), "an unknown root is an error");
     }
@@ -1496,8 +1530,8 @@ mod tests {
             scanned("/photos/1.png", 1_000),
             scanned("/photos/2.png", 2_000),
         ];
-        assert_eq!(db.upsert_shots_bulk(1, &files).unwrap(), (2, 0));
-        assert_eq!(db.upsert_shots_bulk(1, &files).unwrap(), (0, 2));
+        assert_eq!(db.upsert_shots_bulk(1, &files).unwrap(), (2, 0, 0));
+        assert_eq!(db.upsert_shots_bulk(1, &files).unwrap(), (0, 2, 0));
         assert_eq!(db.count_in_root(1).unwrap(), 2);
         assert_eq!(db.count_missing_in_root(1).unwrap(), 0);
     }
@@ -1515,8 +1549,33 @@ mod tests {
     }
 
     #[test]
+    fn a_committed_file_found_again_counts_as_kept() {
+        let db = db();
+        let files = vec![
+            scanned("/photos/1.png", 1_000),
+            scanned("/photos/2.png", 2_000),
+        ];
+        db.upsert_shots_bulk(1, &files).unwrap();
+        db.set_status(1, STATUS_DELETED, Some(42)).unwrap();
+        db.set_status(2, STATUS_DELETED, Some(42)).unwrap();
+        // Only the first one was restored from the Recycle Bin.
+        db.flag_root_missing(1).unwrap();
+        assert_eq!(db.upsert_shots_bulk(1, &files[..1]).unwrap(), (0, 1, 1));
+        let back = db.shot(1).unwrap().unwrap();
+        assert_eq!(back.status, STATUS_KEPT);
+        assert_ne!(back.decided_ms, Some(42));
+        let still = db.shot(2).unwrap().unwrap();
+        assert_eq!(
+            (still.status.as_str(), still.decided_ms),
+            (STATUS_DELETED, Some(42))
+        );
+        // Another rescan changes nothing more.
+        assert_eq!(db.upsert_shots_bulk(1, &files[..1]).unwrap(), (0, 1, 0));
+    }
+
+    #[test]
     fn bulk_upsert_of_nothing_is_a_no_op() {
         let db = db();
-        assert_eq!(db.upsert_shots_bulk(1, &[]).unwrap(), (0, 0));
+        assert_eq!(db.upsert_shots_bulk(1, &[]).unwrap(), (0, 0, 0));
     }
 }

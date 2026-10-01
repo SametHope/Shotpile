@@ -74,9 +74,9 @@ pub fn commit_deletes_for_tests(
     db: &Db,
     undo: &mut UndoStack,
 ) -> Result<commands::CommitReport, String> {
-    let rows = db.staged_rows()?;
+    let rows = db.staged_rows(None)?;
     let outcome = commands::trash_staged(rows);
-    commands::apply_commit(db, undo, outcome)
+    commands::apply_commit(db, undo, None, outcome)
 }
 
 /// The data folder and database name before the app was renamed to Shotpile.

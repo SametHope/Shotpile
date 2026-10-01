@@ -35,16 +35,20 @@
     "copyright": "Copyright (c) 2026 SametHope",
     "license": "PolyForm-Noncommercial-1.0.0",
     "licenseFile": "../LICENSE",
-    "targets": ["nsis"],
+    "targets": ["nsis", "app", "dmg", "appimage", "deb"],
     "category": "Utility",
     "shortDescription": "Swipe through screenshots, keep or delete",
-    "longDescription": "Review screenshots month by month or at random, keep, skip or stage them for deletion, then commit staged files to the Windows Recycle Bin.",
+    "longDescription": "Review screenshots month by month or at random, keep, skip or stage them for deletion, then send the marked files to the Recycle Bin or Trash. Works offline.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "signingIdentity": "-",
+      "minimumSystemVersion": "10.15"
+    }
   }
 }

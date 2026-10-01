@@ -1,6 +1,6 @@
 name: Release
 
-# Builds the Windows installer and a portable exe and publishes them as a
+# Builds Shotpile for Windows, macOS and Linux and publishes the files as a
 # GitHub release, in either of two ways:
 #
 # - Push a version tag: git tag v1.2.0 && git push origin v1.2.0
@@ -32,23 +32,26 @@ permissions:
 concurrency:
   group: release-${{ github.event.inputs.tag || github.ref_name }}
 
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  DRY_RUN: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
+
 jobs:
-  windows:
-    name: Windows installer
-    runs-on: windows-latest
-    timeout-minutes: 60
-    env:
-      TAG: ${{ github.event.inputs.tag || github.ref_name }}
-      DRY_RUN: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
+  check:
+    name: Version and licences
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       # The pushed tag, or the head of the branch the run was started on.
       - uses: actions/checkout@v4
 
       - name: Check the tag
-        shell: bash
+        id: version
         run: |
           version=$(awk -F'"' '/^version *=/ { print $2; exit }' src-tauri/Cargo.toml)
-          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           if [ "$DRY_RUN" = true ]; then
             echo "Dry run on $GITHUB_REF_NAME: builds $version, publishes nothing"
             exit 0
@@ -66,40 +69,122 @@ jobs:
             exit 1
           fi
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      # The licence texts of every Rust dependency on every platform, which
+      # their MIT and Apache licences require next to the binaries. Fails on a
+      # licence src-tauri/about.toml does not accept.
+      - run: |
+          mkdir release
+          cd src-tauri && cargo about generate about.hbs -o ../release/THIRD-PARTY-LICENSES.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: licences
+          path: release/
+
+  build:
+    name: Build (${{ matrix.name }})
+    needs: check
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            args: --bundles nsis
+          - name: macOS
+            os: macos-latest
+            args: --target universal-apple-darwin --bundles dmg
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+          # The oldest supported runner, so the Linux builds run on older
+          # glibc versions too.
+          - name: Linux
+            os: ubuntu-22.04
+            args: --bundles appimage,deb
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux build dependencies for Tauri
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        run: |
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: ${{ matrix.name }}
       - run: npm ci
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-about
 
-      # tauri build: the release exe, then the NSIS installer around it.
-      - run: npm run build
+      - run: npm run build -- ${{ matrix.args }}
 
-      - name: Collect the release files
+      - name: Collect the files
         shell: bash
         run: |
-          # The Cargo package name (Windows paths ignore case, so this also finds
-          # the product-named Shotpile.exe).
-          exe=src-tauri/target/release/shotpile.exe
-          setup=(src-tauri/target/release/bundle/nsis/*-setup.exe)
-          if [ ! -f "$exe" ] || [ ${#setup[@]} -ne 1 ] || [ ! -f "${setup[0]}" ]; then
-            echo "::error::missing build output; release dir has: $(ls src-tauri/target/release src-tauri/target/release/bundle/nsis)"
-            exit 1
-          fi
-          mkdir release
-          # The licence texts of every Rust dependency, which their MIT and
-          # Apache licences require next to the binaries. Fails on a licence
-          # src-tauri/about.toml does not accept.
-          (cd src-tauri && cargo about generate about.hbs -o ../release/THIRD-PARTY-LICENSES.html)
-          cp "${setup[0]}" "release/Shotpile_${VERSION}_x64-setup.exe"
-          cp "$exe" "release/Shotpile_${VERSION}_x64-portable.exe"
+          shopt -s nullglob
+          mkdir out
+          one() {
+            if [ $# -ne 1 ]; then
+              echo "::error::expected one build file, found $#: $*"
+              exit 1
+            fi
+            echo "$1"
+          }
+          case "$RUNNER_OS" in
+            Windows)
+              # The Cargo package name (Windows paths ignore case, so this
+              # also finds the product-named Shotpile.exe).
+              exe=$(one src-tauri/target/release/shotpile.exe)
+              setup=$(one src-tauri/target/release/bundle/nsis/*-setup.exe)
+              cp "$setup" "out/Shotpile_${VERSION}_x64-setup.exe"
+              cp "$exe" "out/Shotpile_${VERSION}_x64-portable.exe"
+              ;;
+            macOS)
+              dmg=$(one src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg)
+              cp "$dmg" "out/Shotpile_${VERSION}_macos-universal.dmg"
+              ;;
+            Linux)
+              appimage=$(one src-tauri/target/release/bundle/appimage/*.AppImage)
+              deb=$(one src-tauri/target/release/bundle/deb/*.deb)
+              cp "$appimage" "out/Shotpile_${VERSION}_linux-x86_64.AppImage"
+              cp "$deb" "out/Shotpile_${VERSION}_linux-amd64.deb"
+              ;;
+          esac
+          ls -l out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.name }}
+          path: out/
+
+  publish:
+    name: Publish
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
           cd release
           sha256sum -- * > SHA256SUMS.txt
           cat SHA256SUMS.txt
@@ -113,19 +198,22 @@ jobs:
 
       - name: Publish the release
         if: env.DRY_RUN != 'true'
-        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           notes=$(cat <<EOF
-          For Windows 10 or 11, 64-bit.
+          | System | File |
+          | --- | --- |
+          | Windows 10/11, 64-bit | **Shotpile_${VERSION}_x64-setup.exe** installs for your user, with a Start menu entry and an uninstaller. **Shotpile_${VERSION}_x64-portable.exe** runs without installing. |
+          | macOS 10.15 or later (Apple silicon and Intel) | **Shotpile_${VERSION}_macos-universal.dmg** (untested: built from the same code, but not run on a Mac yet) |
+          | Linux, x86_64 | **Shotpile_${VERSION}_linux-x86_64.AppImage** runs on most distributions (\`chmod +x\` it first). **Shotpile_${VERSION}_linux-amd64.deb** is for Debian and Ubuntu. |
 
-          - **Shotpile_${VERSION}_x64-setup.exe** installs the app for your user, with a Start menu entry and an uninstaller.
-          - **Shotpile_${VERSION}_x64-portable.exe** runs without installing.
+          The files are not code-signed:
+          - **Windows**: SmartScreen may say *Windows protected your PC*. Choose **More info**, then **Run anyway**. The app needs Microsoft Edge WebView2, which current Windows already has; the installer fetches it if it is missing.
+          - **macOS**: the first open is blocked. Open **System Settings › Privacy & Security** and choose **Open Anyway**.
 
-          Free for noncommercial use under the PolyForm Noncommercial License 1.0.0. \`THIRD-PARTY-LICENSES.html\` lists the open-source components inside, with their licences.
-
-          The files are not code-signed yet, so Windows SmartScreen may say *Windows protected your PC*: choose **More info**, then **Run anyway**. The app needs Microsoft Edge WebView2, which current Windows already has; the installer fetches it if it is missing. \`SHA256SUMS.txt\` has the checksums.
+          Free for noncommercial use under the PolyForm Noncommercial License 1.0.0. \`THIRD-PARTY-LICENSES.html\` lists the open-source components inside, with their licences. \`SHA256SUMS.txt\` has the checksums.
           EOF
           )
           # A rerun replaces the files of a release that already exists.
