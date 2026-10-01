@@ -78,7 +78,7 @@ is always `db`, then `undo`.
 ```powershell
 npm run test:logic                          # 44 frontend logic tests
 npm run test:gui                            # 227 GUI assertions in headless Chrome
-cd src-tauri; cargo test                    # 71 unit + 4 end-to-end tests
+cd src-tauri; cargo test                    # 69 unit + 4 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
 ```

@@ -12,7 +12,7 @@ that made these changes); CI runs them on Linux and Windows.
 | --- | --- | --- |
 | Frontend logic | `npm run test:logic` | 44 passed |
 | GUI (real `app.js` in headless Chrome) | `npm run test:gui` | 227 passed, 0 console errors |
-| Rust | `cd src-tauri; cargo test` | 71 unit + 4 e2e |
+| Rust | `cd src-tauri; cargo test` | 69 unit + 4 e2e |
 | Rust lint / format | `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` | clean |
 
 Releases are built by `.github/workflows/release.yml`, from a pushed `v*` tag
