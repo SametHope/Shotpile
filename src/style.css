@@ -1466,6 +1466,13 @@ body.ready #splash { opacity: 0; visibility: hidden; }
 .about-list dt { color: var(--muted); }
 .about-list dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .about-note { margin: 0; font-size: 12.5px; color: var(--muted); }
+.shortcuts-list { display: grid; gap: 6px; }
+.shortcut-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; background: var(--surface-2); border-radius: 6px; font-size: 13px; }
+.shortcut-label { flex: 1; }
+.shortcut-key { min-width: 80px; text-align: center; font-family: var(--font-mono); font-weight: 600; }
+.shortcut-key.waiting { opacity: 0.6; animation: pulse 1s infinite; }
+.shortcut-key.conflict { background: var(--error, #d32f2f) !important; color: white !important; }
+@keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
 
 /* ------------------------------------------------------------ small windows */
 

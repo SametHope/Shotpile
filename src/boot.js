@@ -17,6 +17,7 @@
     if (THEMES.indexOf(saved.theme) !== -1) prefs.theme = saved.theme;
     if (typeof saved.zoom === "number" && saved.zoom >= 0.5 && saved.zoom <= 2) prefs.zoom = saved.zoom;
     if (typeof saved.showDone === "boolean") prefs.showDone = saved.showDone;
+    if (typeof saved.keyBindings === "object" && saved.keyBindings !== null) prefs.keyBindings = saved.keyBindings;
   } catch (e) {
     // Storage can be unavailable or hold junk; the defaults stand.
   }
@@ -32,12 +33,21 @@
   window.shotpilePrefs = {
     THEMES: THEMES,
     get: function () {
-      return { theme: prefs.theme, zoom: prefs.zoom, showDone: prefs.showDone };
+      var result = { theme: prefs.theme, zoom: prefs.zoom, showDone: prefs.showDone };
+      if (prefs.keyBindings) result.keyBindings = prefs.keyBindings;
+      return result;
     },
     set: function (patch) {
       if (patch.theme !== undefined && THEMES.indexOf(patch.theme) !== -1) prefs.theme = patch.theme;
       if (typeof patch.zoom === "number") prefs.zoom = Math.min(2, Math.max(0.5, Math.round(patch.zoom * 100) / 100));
       if (typeof patch.showDone === "boolean") prefs.showDone = patch.showDone;
+      if (patch.keyBindings !== undefined) {
+        if (patch.keyBindings === null || (typeof patch.keyBindings === "object" && Object.keys(patch.keyBindings).length === 0)) {
+          delete prefs.keyBindings;
+        } else if (typeof patch.keyBindings === "object") {
+          prefs.keyBindings = patch.keyBindings;
+        }
+      }
       try {
         localStorage.setItem(KEY, JSON.stringify(prefs));
       } catch (e) {
