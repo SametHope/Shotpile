@@ -406,9 +406,35 @@
       const m = /scale\(([\d.]+)\)/.exec(c.style.transform || "");
       return m ? Number(m[1]) : 1;
     },
-    stampOpacity: (dir) => {
+stampOpacity: (dir) => {
       const s = document.querySelector(`#card .stamp.${dir}`);
-      return s ? Number(s.style.opacity || 0) : null;
+      return s ? s.style.opacity : null;
+    },
+    // --- info bar + deck, during a drag ---
+    footBackground: () => {
+      const f = document.querySelector("#card .foot");
+      return f ? f.style.background || "" : null;
+    },
+    footBackgroundComputed: () => {
+      const f = document.querySelector("#card .foot");
+      return f ? getComputedStyle(f).backgroundImage : null;
+    },
+    cardScale: () => {
+      const c = document.querySelector("#card");
+      const m = /scale\(([\d.]+)\)/.exec(c?.style.transform || "");
+      return m ? Number(m[1]) : 1;
+    },
+    deck1Transform: () => document.querySelector(".deck .deck-1")?.style.transform || "",
+    deck1Dy: () => {
+      const n = document.querySelector(".deck .deck-1");
+      if (!n) return null;
+      const m = /translateY\((-?[\d.]+)px\)/.exec(n.style.transform || "");
+      return m ? Number(m[1]) : 0;
+    },
+    deckStacking: () => !!document.querySelector(".deck.stacking"),
+    deck1ComputedTransition: () => {
+      const n = document.querySelector(".deck .deck-1");
+      return n ? getComputedStyle(n).transitionDuration : null;
     },
 
     // --- card zoom ---

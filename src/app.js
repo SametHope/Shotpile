@@ -1216,13 +1216,35 @@ function capture(node, pointerId) {
   }
 }
 
-// RGB triples for the three drag outcomes, used for both the card tint and
-// the stamp fills.
+// RGB triples for the three drag outcomes, used for the card tint, the info
+// bar and the stamp fills.
 const DRAG_RGB = {
   [ACTION.DELETE]: "220,38,38",
   [ACTION.KEEP]: "21,128,61",
   [ACTION.SKIP]: "180,83,9",
 };
+
+// How far a card shrinks at full drag, and over what distance. The shrink is
+// driven by the raw pointer distance rather than the clamped gesture progress so
+// that dragging further keeps shrinking, instead of stopping dead at the
+// threshold the way a progress-driven scale did.
+const SHRINK_MAX = 0.3;
+const SHRINK_REACH = GESTURE_THRESHOLD * 2.6;
+
+// Stacked deck offsets, matching the `--deck-dy` / `--deck-scale` CSS values.
+const DECK_DY = [0, 22, 44];
+const DECK_SCALE = [1, 0.95, 0.9];
+
+/**
+ * Glides the deck back behind the current card. Used when a gesture is
+ * cancelled, and when a decision fails so the card stays on screen.
+ */
+function resetStack() {
+  const deck = document.querySelector(".deck");
+  if (!deck) return;
+  deck.classList.remove("stacking");
+  for (const n of deck.querySelectorAll(".deck-1, .deck-2")) n.style.transform = "";
+}
 
 function attachGestures() {
   const stage = document.getElementById("stage");
@@ -1230,6 +1252,8 @@ function attachGestures() {
   if (!stage || !cardEl) return;
 
   const tint = cardEl.querySelector(".tint");
+  const foot = cardEl.querySelector(".foot");
+  const deckCards = [null, document.querySelector(".deck .deck-1"), document.querySelector(".deck .deck-2")];
   const stamps = {
     [ACTION.DELETE]: cardEl.querySelector(".stamp.left"),
     [ACTION.KEEP]: cardEl.querySelector(".stamp.right"),
@@ -1246,6 +1270,8 @@ function attachGestures() {
       s.style.background = "transparent";
     }
     if (tint) tint.style.opacity = "0";
+    // Back to the resting scrim; the drag tint is an inline override.
+    if (foot) foot.style.background = "";
   };
 
   const onDown = (e) => {
@@ -1272,6 +1298,9 @@ function attachGestures() {
       action: null,
       active: false,
     };
+    // The deck tracks the pointer directly, so its transition is suppressed
+    // until the gesture ends and it can glide instead.
+    document.querySelector(".deck")?.classList.add("stacking");
     capture(cardEl, e.pointerId);
   };
 
@@ -1301,8 +1330,10 @@ function attachGestures() {
     d.action = v.action;
 
     // The card shrinks as it is dragged away, so it reads as receding rather
-    // than just sliding. Capped at 12% so the photo stays legible.
-    const shrink = 1 - Math.min(0.12, v.progress * 0.12);
+    // than just sliding. Driven by distance, so it keeps shrinking the further
+    // you go, up to SHRINK_MAX.
+    const dist = Math.hypot(d.dx, d.dy);
+    const shrink = 1 - Math.min(SHRINK_MAX, (dist / SHRINK_REACH) * SHRINK_MAX);
     const angle = (v.vertical ? d.dy : d.dx) * 0.035;
     cardEl.style.transform =
       `translate(-50%, -50%) translate(${d.dx}px, ${d.dy}px) rotate(${angle}deg) scale(${shrink})`;
@@ -1320,6 +1351,24 @@ function attachGestures() {
         cardEl.classList.remove("tinted");
         tint.style.opacity = "0";
       }
+    }
+
+    // The info bar carries the action colour too, in the same fading-scrim
+    // shape as its resting state so it does not read as a separate slab.
+    if (foot) {
+      foot.style.background = col
+        ? `linear-gradient(to top, rgba(${col},${0.2 + v.progress * 0.45}) 0%, rgba(${col},${v.progress * 0.18}) 58%, rgba(${col},0) 100%)`
+        : "";
+    }
+
+    // The deck glides forward as the top card recedes, so the card that will
+    // replace it is already in place instead of snapping into position.
+    for (let i = 1; i < deckCards.length; i++) {
+      const node = deckCards[i];
+      if (!node) continue;
+      const t = 1 - v.progress;
+      node.style.transform =
+        `translate(-50%, -50%) translateY(${DECK_DY[i] * t}px) scale(${1 + (DECK_SCALE[i] - 1) * t})`;
     }
 
     // The stamps stay on top of the tint and fill with their colour.
@@ -1347,6 +1396,8 @@ function attachGestures() {
       cardEl.classList.add("settling");
       cardEl.style.transform = "";
       setTimeout(() => cardEl.classList.remove("settling"), 240);
+      // Cancelled: glide the deck back behind the card that stayed.
+      resetStack();
       return;
     }
     const v = exitVector(action, Math.max(900, window.innerWidth));
@@ -1376,6 +1427,7 @@ function attachGestures() {
     state.pan = null;
     clearDragVisuals();
     cardEl.style.transform = "";
+    resetStack();
     if (d) state.dragged = false;
   });
   stage.addEventListener("dragstart", (e) => e.preventDefault());

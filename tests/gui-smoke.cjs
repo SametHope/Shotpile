@@ -226,25 +226,46 @@ const CTRL_SHIFT = 2 | 8;
   // Drag distances are absolute offsets from where the drag started, and each
   // direction must clear GESTURE_THRESHOLD (90) before a decision is implied.
   await js("p.dragStart();");
-  await js("p.dragTo(120, 0);");
+await js("p.dragTo(120, 0);");
   ok("the card tints on a right drag", (await probe("p.tintOpacity()")) > 0, String(await probe("p.tintOpacity()")));
   ok("the card shrinks as it is dragged", (await probe("p.cardScale()")) < 1, String(await probe("p.cardScale()")));
   ok("the keep stamp shows on a right drag", (await probe("p.stampOpacity('right')")) > 0.5, String(await probe("p.stampOpacity('right')")));
-  ok("the delete stamp stays hidden", (await probe("p.stampOpacity('left')")) === 0, String(await probe("p.stampOpacity('left')")));
+  ok("the delete stamp stays hidden", Number(await probe("p.stampOpacity('left')")) === 0, String(await probe("p.stampOpacity('left')")));
+
+  // The info bar must carry the action colour too, otherwise the only tinted
+  // area is the letterbox margin around the photo.
+  const footRight = await probe("p.footBackground()");
+  ok("the info bar takes the keep colour", /21,\s*128,\s*61/.test(footRight), footRight);
   await js("p.dragTo(-120, 0);");
   ok("the tint follows a left drag", (await probe("p.tintOpacity()")) > 0, String(await probe("p.tintOpacity()")));
   ok("the delete stamp shows on a left drag", (await probe("p.stampOpacity('left')")) > 0.5, String(await probe("p.stampOpacity('left')")));
+  ok("the info bar takes the delete colour", /220,\s*38,\s*38/.test(await probe("p.footBackground()")), String(await probe("p.footBackground()")));
   await js("p.dragTo(0, -120);");
   ok("the tint follows an up drag", (await probe("p.tintOpacity()")) > 0, String(await probe("p.tintOpacity()")));
   ok("the skip stamp shows on an up drag", (await probe("p.stampOpacity('up')")) > 0.5, String(await probe("p.stampOpacity('up')")));
+  ok("the info bar takes the skip colour", /180,\s*83,\s*9/.test(await probe("p.footBackground()")), String(await probe("p.footBackground()")));
+
+  // The shrink has to keep going as the drag gets longer, not stop at the
+  // threshold the way the old progress-driven scale did.
+  await js("p.dragTo(120, 0);");
+  const shrinkNear = await probe("p.cardScale()");
+  await js("p.dragTo(300, 0);");
+  const shrinkFar = await probe("p.cardScale()");
+  ok("dragging further shrinks the card more", shrinkFar < shrinkNear, `${shrinkNear} at 120px -> ${shrinkFar} at 300px`);
+  ok("the shrink has a floor, it does not vanish", shrinkFar >= 0.7, `scale ${shrinkFar} at 300px`);
+  ok("the deck starts gliding forward with the drag", (await probe("p.deck1Dy()")) < 22, `deck-1 dy ${await probe("p.deck1Dy()")}`);
+
   await js("p.dragTo(10, 10);");
-  ok("no tint before the threshold is crossed", (await probe("p.tintOpacity()")) === 0, String(await probe("p.tintOpacity()")));
+  ok("no tint before the threshold is crossed", Number(await probe("p.tintOpacity()")) === 0, String(await probe("p.tintOpacity()")));
+  ok("the info bar drops its tint below the threshold", (await probe("p.footBackground()")) === "", String(await probe("p.footBackground()")));
   // Release below the threshold: the card must snap back and clear every
   // visual, so a rejected drag leaves no tint or transform behind.
   await js("p.dragEnd();");
   await sleep(320);
-  ok("a cancelled drag clears the tint", (await probe("p.tintOpacity()")) === 0, String(await probe("p.tintOpacity()")));
+  ok("a cancelled drag clears the tint", Number(await probe("p.tintOpacity()")) === 0, String(await probe("p.tintOpacity()")));
   ok("a cancelled drag restores the card size", (await probe("p.cardScale()")) === 1, String(await probe("p.cardScale()")));
+  ok("a cancelled drag restores the info bar", (await probe("p.footBackground()")) === "", String(await probe("p.footBackground()")));
+  ok("a cancelled drag puts the deck back", Math.abs(await probe("p.deck1Dy()")) < 0.5, `deck-1 dy ${await probe("p.deck1Dy()")}`);
 
   // ---- in-card zoom, no full screen needed ----
   ok("the card starts unzoomed", (await probe("p.cardZoomScale()")) === 1, String(await probe("p.cardZoomScale()")));

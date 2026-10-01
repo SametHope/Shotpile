@@ -16,9 +16,11 @@ live on the local machine.
   Swipe left to stage for deletion, right to keep, up to skip. Arrow keys and
   on-screen buttons do the same thing; `Z` / `Ctrl+Z` / `Backspace` undoes.
   The current card sits on top of a small deck, so the next couple of photos peek
-  out below it and a swipe always has somewhere to land. The card itself tints as
-  you drag — red to delete, green to keep, yellow to skip — while the photo stays
-  untinted, and it shrinks slightly as it recedes before animating off-screen.
+  out below it and a swipe always has somewhere to land. As you drag, the card
+  tints red to delete, green to keep, or yellow to skip — the photo stays
+  untinted, the info bar picks up the colour, and the card shrinks further the
+  further you pull (to a limit) as it recedes. The deck underneath glides forward
+  with the drag, so the next card is already in place when the swipe lands.
 - **See the whole photo.** The photo fills the card and is never cropped or hidden
   behind the info bar: the filename, date, size and format sit in a translucent
   overlay pinned to the bottom edge, so they cost the image no height.
@@ -78,7 +80,7 @@ Both are always on, including in release builds.
 
 ```powershell
 npm run test:logic   # 28 frontend logic tests (node --test)
-npm run test:gui     # 114 GUI assertions: the real src/app.js in headless Chrome
+npm run test:gui     # 123 GUI assertions: the real src/app.js in headless Chrome
 cd src-tauri; cargo test                  # 39 unit + 2 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check

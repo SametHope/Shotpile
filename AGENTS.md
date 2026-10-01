@@ -47,7 +47,7 @@ src-tauri/src/commands.rs the entire command surface
 
 ```powershell
 npm run test:logic                          # 28 frontend logic tests
-npm run test:gui                            # 114 GUI assertions in headless Chrome
+npm run test:gui                            # 123 GUI assertions in headless Chrome
 cd src-tauri; cargo test                    # 39 unit + 2 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
@@ -101,10 +101,27 @@ probe there. Chrome must be installed; the script has no npm dependencies.
   `position: absolute; inset: 0` and lets `object-fit: contain` do the fitting,
   which cannot overflow whatever the container does.
 - **The card info bar is an overlay, not a layout row.** `.card .foot` is
-  `position: absolute` at the card's bottom with a translucent background and
+  `position: absolute` at the card's bottom with a fading gradient scrim and
   `pointer-events: none`, so the photo gets the card's full height and the bar
-  never blocks a swipe or a zoom. Do not give it `flex: 0 0 auto` or an opaque
-  background: that is what made it eat the photo's height.
+  never blocks a swipe or a zoom. Do not give it `flex: 0 0 auto` or a flat
+  opaque background: that is what made it eat the photo's height.
+- The info bar's resting background **must stay a gradient**, because `onMove`
+  overrides `foot.style.background` with the drag colour in the same
+  `linear-gradient(to top, ...)` shape. A flat colour there makes the swipe tint
+  pop in as a different-looking slab.
+- During a drag the info bar carries the action colour too, not just the card
+  surface. The card's own `.tint` layer is *under* the photo (`z-index: 1` vs the
+  image's `2`), so it only shows in the letterbox margins — tinting the bar was
+  required for the swipe colour to actually read.
+- The drag shrink is driven by raw pointer distance (`SHRINK_REACH`), not by
+  `gestureVisual().progress`, which saturates at `GESTURE_THRESHOLD`. Driving it
+  from progress capped the shrink the moment the threshold was crossed, so
+  dragging further did nothing. `SHRINK_MAX` is the floor.
+- The deck advances during the drag: `onMove` interpolates `.deck-1` / `.deck-2`
+  toward the top position so the incoming card is already in place instead of
+  snapping when the decision lands. `.deck.stacking` suppresses the transition
+  while the pointer moves (otherwise it lags a frame behind); `resetStack()`
+  removes it and glides the cards back for a cancelled gesture or a failed write.
 - Because the image box now fills the frame and the photo is *letterboxed*
   inside it, the box size is not the photo size. Two places must measure the
   content instead: `clampPan()` (bounds panning) and the zoom-anchor test.
