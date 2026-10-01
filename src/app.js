@@ -36,6 +36,7 @@ import {
   statusSegments,
   timeAgo,
   tzOffsetMinutes,
+  wheelZoomFactor,
 } from "./logic.js";
 import { log } from "./log.js";
 import {
@@ -426,6 +427,8 @@ function renderLibrary() {
           ? [h("b", { text: formatCount(pending) }), " left to sort", facts.length ? ` · ${facts.join(" · ")}` : ""]
           : [icon("check-circle", { size: 16, cls: "ok" }), " Everything here is sorted", facts.length ? ` · ${facts.join(" · ")}` : ""])),
       h("div", { class: "overview-actions" },
+        h("button", { class: "btn", id: "btn-filter", title: "Filter the month list", onclick: showFilters },
+          icon("filter", { size: 16 }), "Filter", prefs.get().showDone ? null : h("span", { class: "btn-dot", "aria-hidden": "true" })),
         pending
           ? h("button", { class: "btn primary lg", id: "btn-sort-all", onclick: () => openQueue("unreviewed", null, "All unsorted") },
               icon("play", { size: 16 }), decided ? "Continue sorting" : "Start sorting", h("span", { class: "btn-count", text: formatCount(pending) }))
@@ -439,11 +442,19 @@ function renderLibrary() {
     segbar(s, "lg"),
     legend({ ...s, pending }, ["kept", "staged", "deleted", "skipped", "pending"]));
 
-  const years = groupByYear(state.months).map((g) => h("section", { class: "year" },
+  const showDone = prefs.get().showDone;
+  const shown = showDone ? state.months : state.months.filter((m) => !progressOf(m).done);
+  const hidden = state.months.length - shown.length;
+  const years = groupByYear(shown).map((g) => h("section", { class: "year" },
     h("h2", { class: "section-label", text: g.year }),
     h("div", { class: "months" }, g.months.map(monthRow))));
+  const hiddenNote = hidden
+    ? h("p", { class: "filter-note" },
+        `${countOf(hidden, "sorted month")} hidden. `,
+        h("button", { class: "linklike", onclick: showFilters }, "Change filter"))
+    : null;
 
-  el.view.replaceChildren(h("div", { class: "page" }, overview, years));
+  el.view.replaceChildren(h("div", { class: "page" }, overview, years, hiddenNote));
   el.view.scrollTop = state.libraryScroll;
 }
 
@@ -1040,6 +1051,8 @@ function wireStage(stage) {
   stage.addEventListener("pointerup", onPointerUp);
   stage.addEventListener("pointercancel", onPointerCancel);
   stage.addEventListener("wheel", onWheel, { passive: false });
+  stage.addEventListener("gesturestart", onPinchStart);
+  stage.addEventListener("gesturechange", onPinchChange);
   stage.addEventListener("dblclick", onDoubleClick);
   stage.addEventListener("click", onCardClick);
   stage.addEventListener("dragstart", (e) => e.preventDefault());
@@ -1166,7 +1179,22 @@ function onWheel(e) {
   const zoom = zoomOf(card);
   if (!zoom) return;
   e.preventDefault();
-  zoom.zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY);
+  zoom.zoomBy(wheelZoomFactor(e.deltaY, e.deltaMode, e.ctrlKey), e.clientX, e.clientY);
+}
+
+// WKWebView reports a touchpad pinch as gesture events, not ctrl+wheel.
+function onPinchStart(e) {
+  const zoom = zoomOf(topCard());
+  if (!zoom) return;
+  e.preventDefault();
+  zoom.pinchBase = zoom.zoom.scale;
+}
+
+function onPinchChange(e) {
+  const zoom = zoomOf(topCard());
+  if (!zoom) return;
+  e.preventDefault();
+  zoom.zoomBy((zoom.pinchBase * e.scale) / zoom.zoom.scale, e.clientX, e.clientY);
 }
 
 function onDoubleClick(e) {
@@ -1786,6 +1814,32 @@ async function copyText(text, what) {
   }
 }
 
+/** What the library lists. Today that is whether sorted months show; more
+    filters can join here. */
+function showFilters() {
+  const buttons = [[false, "Hide"], [true, "Show"]].map(([value, label]) => h("button", {
+    type: "button",
+    "aria-pressed": String(prefs.get().showDone === value),
+    dataset: { showDone: String(value) },
+    text: label,
+    onclick: (e) => {
+      prefs.set({ showDone: value });
+      log.info("filter", `sorted months ${label.toLowerCase()}`);
+      for (const b of e.currentTarget.parentElement.children) b.setAttribute("aria-pressed", String(b === e.currentTarget));
+      render();
+    },
+  }));
+  modal({
+    title: "Filter",
+    cls: "options-sheet",
+    body: h("section", { class: "opt-group" },
+      h("div", { class: "opt-row" },
+        h("div", { class: "opt-label" }, "Sorted months", h("small", { text: "Months with nothing left to sort. Their screenshots still count in the totals." })),
+        h("div", { class: "segmented", role: "group", "aria-label": "Sorted months" }, buttons))),
+    actions: [{ label: "Close" }],
+  });
+}
+
 const THEME_LABEL = { system: "System", light: "Light", dark: "Dark" };
 
 function showOptions() {
@@ -2105,11 +2159,19 @@ el.undo.addEventListener("click", () => undo());
 el.redo.addEventListener("click", () => redo());
 el.options.addEventListener("click", showOptions);
 document.addEventListener("contextmenu", onContextMenu);
+const WHEEL_STEP = 40;
+let wheelAcc = 0;
 // Ctrl + wheel zooms the app in steps, through the same preference.
 window.addEventListener("wheel", (e) => {
-  if (!e.ctrlKey) return;
+  // Over a photo the wheel (and a pinch, which arrives as ctrl+wheel) already
+  // zoomed the photo; elsewhere ctrl zooms the app. A pinch is many tiny
+  // events, so they add up to a step instead of stepping once each.
+  if (!e.ctrlKey || e.defaultPrevented) return;
   e.preventDefault();
-  zoomApp(e.deltaY < 0 ? 1 : -1);
+  wheelAcc += e.deltaMode === 0 ? e.deltaY : e.deltaY * 16;
+  if (Math.abs(wheelAcc) < WHEEL_STEP) return;
+  zoomApp(wheelAcc < 0 ? 1 : -1);
+  wheelAcc = 0;
 }, { passive: false });
 el.stagedBtn.addEventListener("click", openStaged);
 el.help.addEventListener("click", showShortcuts);
