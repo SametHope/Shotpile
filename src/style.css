@@ -547,18 +547,32 @@ main {
 .card.enter.enter-right { animation: cardEnterRight .26s var(--ease); }
 .card.enter.enter-up { animation: cardEnterUp .26s var(--ease); }
 
-/* One compact row. This used to be a two-row grid taking 59px, which was 37%
-   of the card's height on a short window - the photo paid for it in lost
-   pixels. The name now ellipsizes (full text in the tooltip) and never wraps,
-   so a long filename cannot eat the frame either. */
+/* Info bar: overlay, not part of the image's layout. Keeps the photo at full
+   height, stays readable over any shot, and becomes barely visible when the
+   cursor is not over the card. */
 .card .foot {
-  flex: 0 0 auto;
-  border-top: 1px solid var(--line);
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
   padding: 7px 12px;
-  background: #fbfcfe;
+  background: rgba(251, 252, 254, 0.82);
+  backdrop-filter: saturate(140%) blur(8px);
+  -webkit-backdrop-filter: saturate(140%) blur(8px);
+  border-top: 1px solid rgba(226, 232, 240, 0.6);
   display: flex;
   align-items: baseline;
   gap: 10px;
+  opacity: 0.95;
+  transition: opacity 0.15s ease;
+  pointer-events: none; /* doesn't block panning/gestures */
+}
+
+.card:hover .foot,
+.card.dragging .foot,
+.card.zoomed .foot {
+  opacity: 1;
 }
 
 .card .fname {
@@ -569,16 +583,18 @@ main {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-shadow: 0 1px 0 rgba(255,255,255,0.5);
 }
 
 .card .fmeta {
   flex: 0 0 auto;
-  color: var(--muted);
+  color: rgba(55, 65, 81, 0.92);
   font-size: 12px;
   display: flex;
   gap: 8px;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 0 rgba(255,255,255,0.5);
 }
 
 .card .fmeta .missing { color: var(--danger); font-weight: 600; }

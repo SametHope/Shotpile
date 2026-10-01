@@ -47,7 +47,7 @@ src-tauri/src/commands.rs the entire command surface
 
 ```powershell
 npm run test:logic                          # 28 frontend logic tests
-npm run test:gui                            # 113 GUI assertions in headless Chrome
+npm run test:gui                            # 114 GUI assertions in headless Chrome
 cd src-tauri; cargo test                    # 39 unit + 2 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
@@ -97,10 +97,14 @@ probe there. Chrome must be installed; the script has no npm dependencies.
   `max-width/max-height: 100%` as an in-flow grid item of `.imgwrap`, and that
   constrained nothing: `.imgwrap`'s height comes from flex distribution, so the
   percentage had no definite height to resolve against and a 2000x1500 shot
-  rendered at its full 696x522 inside a 100px frame. The info bar then covered
-  422px of the photo. `.card .imgwrap img` is now `position: absolute; inset: 0`
-  and lets `object-fit: contain` do the fitting, which cannot overflow whatever
-  the container does. `tests/gui-smoke.cjs` asserts the overlap is zero.
+  rendered at its full 696x522 inside a 100px frame. `.card .imgwrap img` is now
+  `position: absolute; inset: 0` and lets `object-fit: contain` do the fitting,
+  which cannot overflow whatever the container does.
+- **The card info bar is an overlay, not a layout row.** `.card .foot` is
+  `position: absolute` at the card's bottom with a translucent background and
+  `pointer-events: none`, so the photo gets the card's full height and the bar
+  never blocks a swipe or a zoom. Do not give it `flex: 0 0 auto` or an opaque
+  background: that is what made it eat the photo's height.
 - Because the image box now fills the frame and the photo is *letterboxed*
   inside it, the box size is not the photo size. Two places must measure the
   content instead: `clampPan()` (bounds panning) and the zoom-anchor test.

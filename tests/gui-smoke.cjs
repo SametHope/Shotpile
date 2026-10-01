@@ -308,15 +308,17 @@ const CTRL_SHIFT = 2 | 8;
   const nat = await probe("p.imgNatural()");
   ok("the card image loads at full size", nat && nat.w > 100, JSON.stringify(nat));
 
-  // The card's info bar must never cover the photo. It did once: the image was
-  // sized with `max-height: 100%` on an in-flow grid item, which resolved
-  // against nothing, so a 2000x1500 shot rendered 696x522 inside a 100px frame
-  // and the foot covered 422px of it.
+  // The card's info bar must never cost the photo any height, and the photo must
+// fit its frame. The bar used to be an opaque in-flow row that both ate 59px of
+// card height and, because the image was sized with `max-height: 100%` on an
+// in-flow grid item (which resolved against nothing), sat on top of 422px of a
+// 2000x1500 shot. It is now a translucent overlay.
   const geo = await probe("p.cardGeometry()");
   ok("the image is fully visible inside its frame", geo && geo.imgOverflowsWrap === 0, JSON.stringify(geo));
-  ok("the info bar does not cover the image", geo && geo.imgHiddenByFoot === 0, geo ? `overlap ${geo.imgHiddenByFoot}px` : "no card");
-  ok("the image does not spill out of the card", geo && geo.imgOverflowsCard === 0, geo ? `over by ${geo.imgOverflowsCard}px` : "no card");
-  ok("the info bar stays a small share of the card", geo && geo.footShare <= 0.3, geo ? `foot is ${Math.round(geo.footShare * 100)}% of the card` : "no card");
+  ok("the info bar does not take layout height", geo && geo.footInFlow === false, geo ? `foot position ${geo.footPosition}` : "no card");
+  ok("the info bar is translucent, not opaque", geo && geo.footAlpha < 1, geo ? `alpha ${geo.footAlpha}` : "no card");
+  ok("the photo gets the whole card height", geo && geo.imgBoxH >= geo.card.h - 3, geo ? `photo box ${geo.imgBoxH}px vs card ${geo.card.h}px` : "no card");
+  ok("the overlay is shallow", geo && geo.footShare <= 0.3, geo ? `foot is ${Math.round(geo.footShare * 100)}% of the card` : "no card");
   ok("the name does not wrap", geo && geo.fnameLines === 1, geo ? `name wraps to ${geo.fnameLines} lines` : "no card");
 
   // ---- photo viewer ----
@@ -546,3 +548,4 @@ const CTRL_SHIFT = 2 | 8;
   console.log(`\n${results.length - failed.length} passed, ${failed.length} failed, ${consoleErrors.length} console errors`);
   process.exit(failed.length || consoleErrors.length || (pageFails && pageFails.length) ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(2); });
+

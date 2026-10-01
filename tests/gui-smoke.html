@@ -319,13 +319,18 @@
       const f = foot.getBoundingClientRect();
       const fname = card.querySelector(".fname");
       const r = (x) => ({ top: Math.round(x.top), bottom: Math.round(x.bottom), left: Math.round(x.left), right: Math.round(x.right), h: Math.round(x.height), w: Math.round(x.width) });
+      const cs = getComputedStyle(foot);
+      const alpha = (() => {
+        const m = /rgba?\([^)]*?,\s*([\d.]+)\s*\)$/.exec(cs.backgroundColor);
+        return m ? Number(m[1]) : 1;
+      })();
       return {
         card: r(c), img: r(i), wrap: r(w), foot: r(f),
-        // How much of the card the info bar takes.
-        footShare: +(f.height / c.height).toFixed(3),
+        // Height the photo actually gets, and the overlay's share of it.
+        imgBoxH: Math.round(i.height), footShare: +(f.height / c.height).toFixed(3),
+        footPosition: cs.position, footInFlow: cs.position === "static", footAlpha: alpha,
         // Does the image spill past the frame it is supposed to sit in?
         imgOverflowsWrap: +(Math.max(0, i.bottom - w.bottom) + Math.max(0, i.top - w.top)).toFixed(1),
-        imgHiddenByFoot: +(Math.max(0, i.bottom - f.top)).toFixed(1),
         imgOverflowsCard: +(Math.max(0, i.bottom - c.bottom)).toFixed(1),
         fnameLines: fname ? Math.round(fname.getBoundingClientRect().height / 20) : 0,
       };

@@ -19,6 +19,9 @@ live on the local machine.
   out below it and a swipe always has somewhere to land. The card itself tints as
   you drag — red to delete, green to keep, yellow to skip — while the photo stays
   untinted, and it shrinks slightly as it recedes before animating off-screen.
+- **See the whole photo.** The photo fills the card and is never cropped or hidden
+  behind the info bar: the filename, date, size and format sit in a translucent
+  overlay pinned to the bottom edge, so they cost the image no height.
 - **Inspect** without leaving the queue. Scroll to zoom the current card in place
   around the cursor (up to 8×) and double-click to toggle 1×/2×. Zoom past 20% and
   a drag pans the zoomed image instead of swiping, so you cannot decide a photo by
@@ -75,7 +78,7 @@ Both are always on, including in release builds.
 
 ```powershell
 npm run test:logic   # 28 frontend logic tests (node --test)
-npm run test:gui     # 113 GUI assertions: the real src/app.js in headless Chrome
+npm run test:gui     # 114 GUI assertions: the real src/app.js in headless Chrome
 cd src-tauri; cargo test                  # 39 unit + 2 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
