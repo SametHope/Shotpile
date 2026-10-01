@@ -1814,6 +1814,16 @@ async function copyText(text, what) {
   }
 }
 
+async function copyImage(id) {
+  try {
+    await api("copy_image", { id });
+    toast("Copied the image", { ms: 1600 });
+  } catch (e) {
+    log.warn("clipboard", `couldn't copy image: ${e}`);
+    toast("Couldn't copy the image", { tone: "error" });
+  }
+}
+
 /** What the library lists. Today that is whether sorted months show; more
     filters can join here. */
 function showFilters() {
@@ -1922,7 +1932,9 @@ function onContextMenu(e) {
   const hit = shotAt(t);
   if (hit?.shot) {
     const { shot, node } = hit;
-    const onTop = node.classList.contains("card") && node === topCard() && state.card?.id === shot.id;
+    const isCard = node.classList.contains("card");
+    const isTile = node.classList.contains("tile");
+    const onTop = isCard && node === topCard() && state.card?.id === shot.id;
     items.push({ label: "Open full screen", icon: "expand", meta: onTop ? "Space" : null, onClick: () => openShotViewer(shot, onTop ? node : null) });
     if (onTop) {
       items.push(
@@ -1930,10 +1942,15 @@ function onContextMenu(e) {
         { label: "Mark for deletion", icon: "trash", meta: "←", danger: true, onClick: () => decide(ACTION.DELETE, { via: "button" }) });
       if (state.scope?.scope !== "staged") items.push({ label: "Skip for now", icon: "skip", meta: "↑", onClick: () => decide(ACTION.SKIP, { via: "button" }) });
     }
-    if (node.classList.contains("tile")) items.push({ label: "Don't delete", sub: "Take it off the deletion pile", icon: "undo", onClick: () => unstageOne(shot.id, node) });
-    items.push({ separator: true },
+    if (isTile) {
+      items.push({ label: "Restore", sub: "Take it off the deletion pile", icon: "undo", onClick: () => unstageOne(shot.id, node) });
+    }
+    items.push({ separator: true });
+    if (isCard && shot.viewable) items.push({ label: "Copy image", icon: "image", onClick: () => copyImage(shot.id) });
+    items.push(
       { label: `Show in ${fileManager()}`, icon: "folder", onClick: () => reveal("shot", shot.id) },
-      { label: "Copy file path", icon: "copy", onClick: () => copyText(shot.path, "the file path") });
+      { label: "Copy file path", icon: "copy", onClick: () => copyText(shot.path, "the file path") },
+      { label: "Copy file name", icon: "copy", onClick: () => copyText(basename(shot.path), "the file name") });
   } else {
     const month = t.closest?.(".month[data-month]");
     if (month) {
