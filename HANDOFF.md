@@ -58,3 +58,13 @@ Nothing is known broken. In rough priority order:
    keeping the `apply_*` logic testable. Related: render the month and pile
    grids in batches (e.g. per animation frame or on scroll) instead of
    building every tile at once.
+9. **Local statistics.** Track many counters, all local: files and bytes
+   deleted, swipes per direction, keeps/stages/skips, undos and redos,
+   commits, app launches, folders added, time in review, longest streak, and so
+   on. The more the better, but cheap to record. Viewable and resettable from
+   Options (a reset per group and a reset all, behind a confirm dialog), and
+   possibly an infographic window later. Design notes: store in SQLite (a
+   counters table keyed by name, so new stats need no migration) rather than
+   prefs; increment in the `apply_*` functions so the tests cover it; a
+   forgotten folder must not erase the lifetime totals; nothing leaves the
+   machine, and the README's Data section should say so.
