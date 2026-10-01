@@ -5,16 +5,28 @@ import {
   ACTION,
   GESTURE_THRESHOLD,
   MAX_ZOOM,
+  PassTally,
   ReviewQueue,
   ZOOM_PAN_THRESHOLD,
   anchorZoom,
+  basename,
   classifyGesture,
   clampScale,
+  containedSize,
+  countOf,
+  dragTilt,
   exitVector,
   formatBytes,
+  formatCount,
   gestureVisual,
+  groupByYear,
   monthLabel,
+  nextMonthWithWork,
+  panLimit,
   progressOf,
+  scanSummary,
+  statusSegments,
+  timeAgo,
 } from "../src/logic.js";
 
 test("monthLabel renders English month names", () => {
@@ -22,6 +34,102 @@ test("monthLabel renders English month names", () => {
   assert.equal(monthLabel("2026-01"), "January 2026");
   assert.equal(monthLabel("2026-12"), "December 2026");
   assert.equal(monthLabel("2026-09", { short: true }), "Sep 2026");
+  assert.equal(monthLabel("2026-09", { year: false }), "September");
+});
+
+test("countOf pluralises and groups digits", () => {
+  assert.equal(countOf(1, "file"), "1 file");
+  assert.equal(countOf(0, "file"), "0 files");
+  assert.equal(countOf(2, "file"), "2 files");
+  assert.equal(countOf(1284, "screenshot"), "1,284 screenshots");
+  assert.equal(countOf(3, "entry", "entries"), "3 entries");
+  assert.equal(countOf(undefined, "file"), "0 files");
+  assert.equal(formatCount(1234567), "1,234,567");
+});
+
+test("basename takes the last segment on either separator", () => {
+  assert.equal(basename("C:\\Users\\me\\Pictures\\Screenshots"), "Screenshots");
+  assert.equal(basename("C:\\Users\\me\\Pictures\\"), "Pictures");
+  assert.equal(basename("/home/me/shots/"), "shots");
+  assert.equal(basename("C:"), "C:");
+  assert.equal(basename(""), "");
+  assert.equal(basename(null), "");
+});
+
+test("scanSummary describes a scan in one line", () => {
+  assert.equal(
+    scanSummary({ added: 12, refreshed: 1400, unviewable: 2, missing: 0 }),
+    "12 new · 1,400 already known · 2 without preview"
+  );
+  assert.equal(scanSummary({ added: 0, refreshed: 0, missing: 3 }), "no screenshots found · 3 missing on disk");
+  assert.equal(scanSummary(null), "");
+});
+
+test("statusSegments orders segments and leaves pending as the remainder", () => {
+  const segs = statusSegments({ total: 10, kept: 4, staged: 1, deleted: 0, skipped: 2, remaining: 3 });
+  assert.deepEqual(segs.map((s) => s.key), ["kept", "staged", "skipped"]);
+  assert.equal(segs[0].ratio, 0.4);
+  assert.deepEqual(statusSegments({ total: 0, kept: 3 }), []);
+  assert.deepEqual(statusSegments(null), []);
+});
+
+test("groupByYear keeps newest-first order", () => {
+  const groups = groupByYear([{ month: "2026-02" }, { month: "2026-01" }, { month: "2025-12" }]);
+  assert.deepEqual(groups.map((g) => g.year), ["2026", "2025"]);
+  assert.deepEqual(groups[0].months.map((m) => m.month), ["2026-02", "2026-01"]);
+  assert.deepEqual(groupByYear(undefined), []);
+});
+
+test("nextMonthWithWork prefers the next older month, then any with work", () => {
+  const months = [
+    { month: "2026-03", remaining: 4 },
+    { month: "2026-02", remaining: 0 },
+    { month: "2026-01", remaining: 2 },
+  ];
+  assert.equal(nextMonthWithWork(months, "2026-03"), "2026-01");
+  assert.equal(nextMonthWithWork(months, "2026-01"), "2026-03", "wraps to the newest with work");
+  assert.equal(nextMonthWithWork([{ month: "2026-03", remaining: 4 }], "2026-03"), null);
+});
+
+test("timeAgo reads naturally", () => {
+  const now = Date.UTC(2026, 8, 30, 12);
+  assert.equal(timeAgo(now - 10_000, now), "just now");
+  assert.equal(timeAgo(now - 5 * 60_000, now), "5 min ago");
+  assert.equal(timeAgo(now - 3600_000, now), "1 hour ago");
+  assert.equal(timeAgo(now - 3 * 86400_000, now), "3 days ago");
+  assert.equal(timeAgo(null, now), "never");
+});
+
+test("dragTilt follows the horizontal drag and flips for a low grab", () => {
+  assert.ok(dragTilt(100) > 0);
+  assert.ok(dragTilt(100, true) < 0);
+  assert.equal(dragTilt(0), 0);
+  assert.equal(dragTilt(10_000), 14, "clamped");
+});
+
+test("containedSize letterboxes like object-fit: contain", () => {
+  assert.deepEqual(containedSize(2000, 1000, 500, 500), { w: 500, h: 250 });
+  assert.deepEqual(containedSize(0, 0, 500, 400), { w: 500, h: 400 }, "unknown size falls back to the frame");
+});
+
+test("panLimit allows the anchored zoom on a letterboxed photo", () => {
+  // A 500x250 photo in a 500x500 frame at 2x: content grew by 250 on y, so the
+  // anchor may need up to 125px; "content minus frame" would have said 0.
+  assert.equal(panLimit(250, 500, 2), 125);
+  // A small photo at 1.2x still has leftover frame to slide in.
+  assert.equal(panLimit(100, 500, 1.2), 190);
+});
+
+test("PassTally counts the latest decision per file and reverts", () => {
+  const t = new PassTally();
+  t.record(1, ACTION.KEEP);
+  const prev = t.record(1, ACTION.DELETE, 2048); // re-decided after a jump back
+  t.record(2, ACTION.SKIP);
+  assert.deepEqual(t.counts(), { keep: 0, delete: 1, skip: 1, deleteBytes: 2048 });
+  t.revert(1, prev);
+  assert.deepEqual(t.counts(), { keep: 1, delete: 0, skip: 1, deleteBytes: 0 });
+  t.revert(2, undefined);
+  assert.equal(t.size, 1);
 });
 
 test("monthLabel passes through malformed input", () => {
@@ -71,13 +179,20 @@ test("gestureVisual reports progress and axis", () => {
 });
 
 test("formatBytes scales and rounds sensibly", () => {
-  assert.equal(formatBytes(0), "0 B");
-  assert.equal(formatBytes(512), "512 B");
-  assert.equal(formatBytes(1024), "1.0 KB");
-  assert.equal(formatBytes(1536), "1.5 KB");
-  assert.equal(formatBytes(20 * 1024), "20 KB");
-  assert.equal(formatBytes(5 * 1024 * 1024), "5.0 MB");
-  assert.equal(formatBytes(2 * 1024 * 1024 * 1024), "2.0 GB");
+  // Compared with plain spaces; the real separator is a non-breaking one.
+  const f = (n) => formatBytes(n).replace(/\u00a0/g, " ");
+  assert.equal(f(0), "0 B");
+  assert.equal(f(512), "512 B");
+  assert.equal(f(1024), "1.0 KB");
+  assert.equal(f(1536), "1.5 KB");
+  assert.equal(f(20 * 1024), "20 KB");
+  assert.equal(f(5 * 1024 * 1024), "5.0 MB");
+  assert.equal(f(2 * 1024 * 1024 * 1024), "2.0 GB");
+});
+
+test("formatBytes never lets a size wrap between number and unit", () => {
+  assert.equal(formatBytes(189 * 1024), "189\u00a0KB");
+  assert.ok(!/ /.test(formatBytes(5 * 1024 * 1024)));
 });
 
 test("exitVector sends the card the right way", () => {
@@ -136,7 +251,52 @@ test("focusId finds a deferred item, which a cursor step-back would miss", () =>
   // Undo of the skip must land on 1, which now sits at the end.
   q.focusId(1);
   assert.equal(q.current(), 1);
-  assert.deepEqual(q.ids, [2, 3, 1]);
+});
+
+test("undoing a skip restores the pre-skip order instead of ending the pass", () => {
+  // The old behaviour seeked to the deferred item at the back. Deciding it then
+  // advanced past the end and silently dropped 2 and 3 from the pass.
+  const q = new ReviewQueue([1, 2, 3]);
+  q.deferCurrent();
+  q.focusId(1);
+  assert.deepEqual(q.ids, [1, 2, 3]);
+  assert.equal(q.cursor, 0);
+  assert.equal(q.deferred, 0);
+  q.advance(); // decide 1
+  assert.equal(q.current(), 2, "the items that were waiting are still ahead");
+  // The undone skip no longer counts, so 1 could be skipped again later.
+  assert.equal(q.deferredIds.has(1), false);
+});
+
+test("each item is deferred at most once per pass", () => {
+  const q = new ReviewQueue([1, 2]);
+  q.deferCurrent(); // [2, 1]
+  q.advance(); // decide 2, now on the deferred 1
+  assert.equal(q.current(), 1);
+  // Skipping it a second time moves on instead of showing it yet again.
+  assert.equal(q.deferCurrent(), 1);
+  assert.equal(q.atEnd(), true);
+  assert.equal(q.deferred, 1);
+});
+
+test("skipping the last item ends the pass instead of looping on it", () => {
+  const q = new ReviewQueue([7]);
+  assert.equal(q.deferCurrent(), 7);
+  assert.equal(q.atEnd(), true);
+  assert.equal(q.deferred, 0);
+});
+
+test("snapshot and restore cover the deferred set", () => {
+  const q = new ReviewQueue([1, 2, 3]);
+  const before = q.snapshot();
+  q.deferCurrent();
+  q.restore(before);
+  assert.equal(q.deferredIds.size, 0);
+  q.deferCurrent();
+  const mid = q.snapshot();
+  q.advance();
+  q.restore(mid);
+  assert.equal(q.deferredIds.has(1), true);
 });
 
 test("focusId leaves an id that is not in this queue alone", () => {

@@ -2,71 +2,101 @@
  * Screenshot Sifter — UI controller.
  *
  * All filesystem, database and Recycle Bin work happens in Rust behind the
- * commands in src-tauri/src/commands.rs. This file only orchestrates views,
- * gestures and keyboard input.
+ * commands in src-tauri/src/commands.rs. This file orchestrates views, the
+ * review deck, gestures and keyboard input. DOM primitives live in dom.js, the
+ * full-screen viewer in viewer.js, and everything testable without a DOM in
+ * logic.js.
  */
 
 import {
   ACTION,
   DATE_SOURCE_LABELS,
   GESTURE_THRESHOLD,
+  PassTally,
   ReviewQueue,
   ZOOM_PAN_THRESHOLD,
   anchorZoom,
-  classifyGesture,
+  basename,
   clampScale,
+  classifyGesture,
+  containedSize,
+  countOf,
+  dragTilt,
   exitVector,
   formatBytes,
+  formatCount,
   formatDateTime,
   gestureVisual,
+  groupByYear,
   monthLabel,
+  nextMonthWithWork,
+  panLimit,
   progressOf,
+  scanSummary,
+  statusSegments,
+  timeAgo,
   tzOffsetMinutes,
 } from "./logic.js";
 import { log } from "./log.js";
+import {
+  closeMenu,
+  confirmDialog,
+  h,
+  icon,
+  initModal,
+  kbd,
+  menuOpen,
+  modal,
+  modalOpen,
+  openMenu,
+  reducedMotion,
+  replay,
+  toast,
+  wait,
+} from "./dom.js";
+import { iconSvg } from "./icons.js";
+import { closeViewer, openViewer, viewerKeydown, viewerOpen } from "./viewer.js";
 
-const { invoke } = window.__TAURI__.core;
-const convertFileSrc = window.__TAURI__.core.convertFileSrc;
+const { invoke, convertFileSrc } = window.__TAURI__.core;
 
 const el = {
   view: document.getElementById("view"),
   back: document.getElementById("btn-back"),
+  folderBtn: document.getElementById("btn-folder"),
+  folderName: document.getElementById("folder-name"),
   scan: document.getElementById("btn-scan"),
-  folder: document.getElementById("btn-folder"),
   stagedBtn: document.getElementById("btn-staged"),
-  scannedNote: document.getElementById("scanned-note"),
+  stagedBadge: document.getElementById("staged-badge"),
+  help: document.getElementById("btn-help"),
   footbar: document.getElementById("footbar"),
   stagedN: document.getElementById("staged-n"),
+  stagedSize: document.getElementById("staged-size"),
   commit: document.getElementById("btn-commit"),
   undo: document.getElementById("btn-undo"),
-  modal: document.getElementById("modal"),
-  modalTitle: document.getElementById("modal-title"),
-  modalBody: document.getElementById("modal-body"),
-  modalFoot: document.getElementById("modal-foot"),
-  toast: document.getElementById("toast"),
 };
 
 const state = {
-  view: "loading", // loading | setup | months | review | staged
+  view: "loading", // loading | setup | scanning | months | review | staged
   info: null,
   roots: [],
   rootId: null,
   months: [],
   summary: null,
-  thumbs: null, // month -> [path, path, ...] for the preview strip
+  thumbs: new Map(), // month -> [path, ...] for the month-row fan
   queue: new ReviewQueue(),
+  pass: new PassTally(), // decisions made in the current pass, for the tally and the summary
+  history: [], // [{ id, action, prevInPass, pass }] decisions made this session, newest last
   cache: new Map(), // id -> shot
-  scope: null, // { scope, month }
-  card: null, // current shot
+  scope: null, // { scope, month, label }
+  card: null, // current shot, null on the end-of-pass summary
+  enter: null, // how the next full render brings the top card in
   drag: null,
   pan: null, // active panning gesture on a zoomed card
-  dragged: false, // true once the current gesture moved, so a click isn't a swipe
-  animating: false, // true while a swipe exit animation is playing
-  entering: false, // true when the next card should animate in
-  cardZoom: null, // { zoom, apply, panning } for the current card, if zoomable
-  zoomReadout: null,
-  busy: false,
-  toastTimer: null,
+  dragged: false, // true once the current gesture moved, so its click is not a "click"
+  deciding: false, // a decision write is in flight
+  busy: false, // a commit is running: decisions and undo wait for it
+  scanning: null, // path being scanned; scans never touch decisions, so they block nothing else
+  stagedToken: 0, // guards the async staged view against a stale paint
 };
 
 // ---------------------------------------------------------------- tauri glue
@@ -81,148 +111,55 @@ async function api(cmd, args = {}) {
   }
 }
 
+// Warnings and errors also go to the backend file log, so a release build
+// keeps them after the window closes. Called with invoke directly, not api():
+// a failing log_write must not log an error that triggers another log_write.
+// Rate-limited, so an error in a render loop cannot flood the file.
+const forward = { windowStart: 0, sent: 0 };
+log.setSink((level, scope, msg) => {
+  const now = Date.now();
+  if (now - forward.windowStart > 60_000) {
+    forward.windowStart = now;
+    forward.sent = 0;
+  }
+  if (++forward.sent > 40) return;
+  invoke("log_write", { level, scope, msg }).catch(() => {});
+});
+
+window.addEventListener("error", (e) => {
+  log.error("window", e.message || "uncaught error", e.error?.stack || `${e.filename}:${e.lineno}`);
+});
+window.addEventListener("unhandledrejection", (e) => {
+  log.error("promise", "unhandled rejection", e.reason?.stack || String(e.reason));
+});
+
 function tzArgs() {
   return { rootId: state.rootId ?? null, tz: tzOffsetMinutes() };
 }
 
+function currentRoot() {
+  return state.roots.find((r) => r.id === state.rootId) || null;
+}
+
 async function refreshCounts() {
   state.summary = await api("summary", tzArgs());
-  const staged = state.summary.staged_all || 0;
-  el.stagedN.textContent = String(staged);
-  // The footbar is always in the layout and expands/collapses with a
-  // transition, so showing it never shifts the content under it.
-  el.footbar.classList.toggle("on", staged > 0);
-  el.stagedBtn.hidden = staged === 0;
-  el.stagedBtn.textContent = `To Delete (${staged})`;
+  paintCounts();
 }
 
-// ------------------------------------------------------------------- helpers
-
-function h(tag, attrs = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v === null || v === undefined || v === false) continue;
-    if (k === "class") node.className = v;
-    else if (k === "html") node.innerHTML = v;
-    else if (k === "text") node.textContent = v;
-    else if (k.startsWith("on")) node.addEventListener(k.slice(2).toLowerCase(), v);
-    else if (k === "dataset") Object.assign(node.dataset, v);
-    else node.setAttribute(k, v === true ? "" : String(v));
-  }
-  for (const c of children.flat(Infinity)) {
-    if (c === null || c === undefined || c === false) continue;
-    node.append(c instanceof Node ? c : document.createTextNode(String(c)));
-  }
-  return node;
-}
-
-function toast(message, { action, onAction, ms = 4200 } = {}) {
-  const msg = el.toast.querySelector(".msg");
-  const btn = el.toast.querySelector("button");
-  msg.textContent = message;
-  clearTimeout(state.toastTimer);
-  if (action) {
-    btn.hidden = false;
-    btn.textContent = action;
-    btn.onclick = () => {
-      hideToast();
-      onAction?.();
-    };
-  } else {
-    btn.hidden = true;
-    btn.onclick = null;
-  }
-  el.toast.classList.add("on");
-  state.toastTimer = setTimeout(hideToast, ms);
-}
-
-function hideToast() {
-  el.toast.classList.remove("on");
-  clearTimeout(state.toastTimer);
-}
-
-function modal({ title, body, actions, wide = false }) {
-  el.modalTitle.textContent = title;
-  // `flat()` with no argument only flattens one level, which turned a nested
-  // body (e.g. the delete preview grid inside its summary) into
-  // "[object HTMLDivElement]". Flatten fully.
-  el.modalBody.replaceChildren(...[body].flat(Infinity).filter(Boolean));
-  el.modalFoot.replaceChildren(
-    ...actions.map((a) =>
-      h("button", {
-        class: `btn ${a.variant || ""}`.trim(),
-        onclick: () => {
-          closeModal();
-          a.onClick?.();
-        },
-      }, a.label)
-    )
-  );
-  // `el.modal` is the backdrop; the sizing modifier belongs on the dialog box
-  // inside it.
-  el.modal.querySelector(".modal")?.classList.toggle("wide", !!wide);
-  el.modal.hidden = false;
-  el.modalFoot.querySelector("button")?.focus();
-}
-
-function closeModal() {
-  el.modal.hidden = true;
-}
-
-el.modal.addEventListener("click", (e) => {
-  if (e.target === el.modal) closeModal();
-});
-
-/** Opens the file log in a modal, for diagnosing without DevTools. */
-async function showLog() {
-  log.info("log", "opening log");
-  let text;
-  try {
-    text = await api("log_read", { maxLines: 500 });
-  } catch (e) {
-    text = `Couldn't read log: ${e}`;
-  }
-  modal({
-    title: "Log",
-    body: [h("pre", { class: "logview", text: text || "(log is empty)" })],
-    actions: [{ label: "Close" }],
-  });
-}
-
-function confirmDialog({ title, message, confirmLabel, variant = "danger", extra, body, wide }) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const done = (value) => {
-      if (settled) return;
-      settled = true;
-      document.removeEventListener("keydown", onKey, true);
-      // Always tear the dialog down here, not just on button clicks: the
-      // Escape and Enter paths settle the promise too, and leaving a live
-      // modal on screen would block the rest of the app.
-      closeModal();
-      resolve(value);
-    };
-    const onKey = (e) => {
-      if (el.modal.hidden) return;
-      if (e.key === "Escape") {
-        e.preventDefault();
-        done(false);
-      }
-      // Enter is deliberately not handled here. The focused button's own
-      // activation runs instead, and `modal()` focuses the first one ("Cancel"),
-      // so the safe option stays the default for a destructive confirm.
-    };
-    document.addEventListener("keydown", onKey, true);
-    modal({
-      title,
-      body: [h("div", { text: message }), body, extra].filter(Boolean),
-      wide,
-      actions: [
-        { label: "Cancel", onClick: () => done(false) },
-        { label: confirmLabel, variant, onClick: () => done(true) },
-      ],
-    });
-  });
+/** The staged badge and the footer bar, from `state.summary`. */
+function paintCounts() {
+  const s = state.summary || {};
+  const staged = s.staged_all || 0;
+  el.stagedBadge.textContent = formatCount(staged);
+  el.stagedBtn.hidden = staged === 0 || state.view === "setup" || state.view === "scanning";
+  el.stagedBtn.classList.toggle("is-active", state.view === "staged");
+  el.stagedN.textContent = countOf(staged, "screenshot");
+  el.stagedSize.textContent = s.bytes_staged_all ? `(${formatBytes(s.bytes_staged_all)})` : "";
+  // The footer bar is always in the layout and expands/collapses with a
+  // transition, so showing it never shifts the content above. It stays out of
+  // the review: the header badge carries the count there, and a commit button
+  // in the middle of a pass invites deleting half-way through.
+  el.footbar.classList.toggle("on", staged > 0 && state.view !== "review" && state.view !== "staged");
 }
 
 // ----------------------------------------------------------------- data load
@@ -235,16 +172,16 @@ async function loadMonths() {
   const [months, summary, thumbs] = await Promise.all([
     api("months", tzArgs()),
     api("summary", tzArgs()),
-    api("month_thumbs", { ...tzArgs(), limit: 5 }),
+    api("month_thumbs", { ...tzArgs(), limit: 3 }),
   ]);
   state.months = months;
   state.summary = summary;
   state.thumbs = new Map(thumbs.map((t) => [t.month, t.paths]));
-  await refreshCounts();
+  paintCounts();
 }
 
 async function hydrate(ids) {
-  const missing = ids.filter((id) => !state.cache.has(id));
+  const missing = [...new Set(ids)].filter((id) => id !== null && id !== undefined && !state.cache.has(id));
   if (missing.length) {
     const rows = await api("items", { ids: missing });
     for (const row of rows) state.cache.set(row.id, row);
@@ -252,1093 +189,784 @@ async function hydrate(ids) {
   return ids.map((id) => state.cache.get(id)).filter(Boolean);
 }
 
+// ---------------------------------------------------------------- navigation
+
 async function openQueue(scope, month = null, label = "") {
-  const ids = await api("queue_ids", { scope, month, ...tzArgs() });
-  state.cache.clear();
-  state.queue = new ReviewQueue(ids);
-  state.scope = { scope, month, label };
+  let ids;
+  try {
+    ids = await api("queue_ids", { scope, month, ...tzArgs() });
+  } catch (e) {
+    toast(`Couldn't open that queue: ${e}`, { tone: "error" });
+    return;
+  }
   if (ids.length === 0) {
     log.info("queue", `${label || scope}: no files`);
-    state.view = "months";
-    render();
-    toast("No files to review in this queue");
+    toast(scope === "month" ? `Nothing left to sort in ${label}` : "Nothing to review here");
     return;
   }
   log.info("queue", `${label || scope}: ${ids.length} files`);
+  state.cache.clear();
+  state.queue = new ReviewQueue(ids);
+  state.pass = new PassTally();
+  state.scope = { scope, month, label };
   state.view = "review";
-  await showCurrent();
+  await showCurrent({ enter: "fade" });
 }
 
-async function showCurrent({ entering = false } = {}) {
+/**
+ * Full render of the review around the queue's current item. Used when a
+ * queue opens, after a jump, after an undo, and as the fallback whenever the
+ * deck on screen does not match the queue.
+ */
+async function showCurrent({ enter = "fade" } = {}) {
   const id = state.queue.current();
-  state.card = id === null ? null : state.cache.get(id) || null;
-  if (id !== null && !state.card) {
-    const [shot] = await hydrate([id]);
-    state.card = shot || null;
+  try {
+    // The deck and the filmstrip window are hydrated before the first paint,
+    // otherwise the deck would show one card until the preload landed.
+    await hydrate([id, ...state.queue.upcoming(DECK_DEPTH, 1), ...filmWindowIds()]);
+  } catch (e) {
+    log.warn("review", `couldn't load card details: ${e}`);
   }
-  // Hydrate the upcoming cards before rendering so the deck can show them on
-  // the first paint, not only after the background preload lands.
-  await hydrate(state.queue.upcoming(2, 1));
-  state.entering = entering;
+  state.card = id === null ? null : state.cache.get(id) || null;
+  state.enter = enter;
   render();
   if (id !== null) preload();
 }
 
-/**
- * Advances the review by one card, without re-rendering the whole deck.
- *
- * This is the smooth path, and it exists because a full `render()` throws the
- * entire deck away and rebuilds it. The card that was gliding forward under the
- * top one got destroyed mid-animation and replaced by a brand-new node that
- * then faded in from opacity 0 — which read as a flicker, a snap, and a fade
- * all at once.
- *
- * Instead the already-painted nodes are kept and promoted:
- *
- *   - the outgoing top card is removed once its exit animation has finished,
- *   - the card that already slid into the top position becomes the new top card
- *     with no animation at all, because it is already exactly where it belongs,
- *   - the new deck-1 slides up from where deck-2 was,
- *   - a fresh card is built for the back of the stack.
- *
- * Everything is driven by CSS transitions on transform, so nothing blocks the
- * next swipe and there is no JS timer racing the animation.
- *
- * Falls back to `showCurrent()` when the DOM does not have the shape it
- * expects, so a stale or partially-built deck can never wedge the review.
- */
-async function advanceDeck() {
-  const deck = document.querySelector(".deck");
-  const outgoing = deck?.querySelector(".deck-top");
-  const incoming = deck?.querySelector(".deck-1");
-  if (!deck || !outgoing || !incoming) return showCurrent();
-
-  const id = state.queue.current();
-  if (id === null) return showCurrent();
-  const shot = state.cache.get(id);
-  if (!shot) return showCurrent();
-
-  // The outgoing card may still be animating out. Removing it here is safe: it
-  // has already faded to 0 opacity by the time a write completes, and its node
-  // is not reused for anything.
-  outgoing.remove();
-
-  // Promote the incoming card. It is already sitting at translateY(0) scale(1)
-  // because the drag moved it there, so this is a pure relabel: no transition,
-  // no opacity change, no animation. Clearing the inline styles is what lets it
-  // inherit the `.deck-top` position instead of the drag's leftovers.
-  incoming.classList.remove("deck-card", "deck-1");
-  incoming.classList.add("deck-top");
-  incoming.id = "card";
-  incoming.style.transform = "";
-  incoming.style.opacity = "";
-  incoming.style.transition = "";
-  incoming.classList.remove("zoomed", "pannable", "dragging", "tinted", "settling");
-
-  // deck-2 becomes the new deck-1. It carries its own inline transform from the
-  // drag, so clear it and let the transition animate it up from the -2 slot.
-  const second = deck.querySelector(".deck-2");
-  if (second) {
-    second.classList.remove("deck-2");
-    second.classList.add("deck-1");
-    second.style.transform = "";
-  }
-
-  deck.classList.remove("stacking");
-  deck.classList.add("inert");
-
-  state.card = shot;
-  state.cardZoom = null;
-  state.zoomReadout = null;
-
-  // Rebuild the back of the stack so the queue does not visibly shrink. This is
-  // a new card appearing *behind* everything, so it needs no animation.
-  //
-  // The tail is hydrated here rather than assumed: `showCurrent()` only warms
-  // `upcoming(2, 1)`, and the slot we just freed up is `upcoming(1, 2)`, which
-  // may not be in the cache yet on a cold pass. Without the await the deck
-  // silently shrinks to two cards and never recovers.
-  const tailIds = state.queue.upcoming(1, 2);
-  if (tailIds.length) await hydrate(tailIds);
-  const tailShot = tailIds.length ? state.cache.get(tailIds[0]) : null;
-  if (tailShot) {
-    const node = card(tailShot);
-    node.classList.add("deck-card", "deck-2");
-    deck.append(node);
-  }
-
-  // The promoted card needs the behaviour the fresh top card would have had:
-  // zoom and click-to-viewer. `attachGestures()` is bound to the stage, so the
-  // promoted node has to be wired up explicitly.
-  const imgwrap = incoming.querySelector(".imgwrap");
-  const img = imgwrap?.querySelector("img");
-  if (img) state.cardZoom = attachCardZoom(incoming, imgwrap, img);
-  incoming.addEventListener("click", () => {
-    if (!state.dragged) openViewer(shot);
-  });
-
-  renderReviewChrome();
-
-  // Re-enable input once the promoted node is wired and painted. Held until the
-  // next animation frame so the first frame after a promotion cannot swallow a
-  // click that was aimed at the card that just left.
-  requestAnimationFrame(() => deck.classList.remove("inert"));
-  preload();
+function preload() {
+  const next = state.queue.upcoming(4, 1);
+  if (next.length) hydrate(next).catch(() => {});
 }
 
-function preload() {
-  const next = state.queue.upcoming(3, 1);
-  if (next.length) hydrate(next).catch(() => {});
+function backToMonths() {
+  // Leaving a pass mid-review is fine; decisions are already saved.
+  closeViewer();
+  state.view = "months";
+  state.card = null;
+  render();
+  loadMonths()
+    .then(() => state.view === "months" && render())
+    .catch((e) => {
+      log.error("months", "couldn't load the library", e);
+      toast(`Couldn't load the library: ${e}`, { tone: "error" });
+    });
+}
+
+function openStaged() {
+  closeViewer();
+  state.view = "staged";
+  render();
 }
 
 // -------------------------------------------------------------------- render
 
 function render() {
   log.debug("view", state.view);
+  closeMenu();
+  document.body.dataset.view = state.view;
   el.view.classList.toggle("reviewing", state.view === "review");
-  el.back.hidden = state.view !== "review";
-  const busy = state.busy;
-  el.scan.disabled = busy;
-  el.folder.disabled = busy;
-  el.stagedBtn.hidden = (state.summary?.staged_all || 0) === 0;
+  renderHeader();
+  paintCounts();
 
-  if (state.view === "loading") {
-    el.view.replaceChildren(h("div", { class: "empty" }, h("span", { class: "busy" })));
-    return;
+  switch (state.view) {
+    case "loading":
+      el.view.replaceChildren(h("div", { class: "empty" }, h("span", { class: "busy" })));
+      return;
+    case "scanning":
+      return renderScanning();
+    case "setup":
+      return renderSetup();
+    case "months":
+      return renderLibrary();
+    case "review":
+      return renderReview();
+    case "staged":
+      return renderStaged();
+    default:
+      return undefined;
   }
-  if (state.view === "setup") return renderSetup();
-  if (state.view === "months") return renderMonths();
-  if (state.view === "review") return renderReview();
-  if (state.view === "staged") return renderStaged();
 }
+
+function renderHeader() {
+  const v = state.view;
+  el.back.hidden = !(v === "review" || v === "staged");
+  const root = currentRoot();
+  const inFolder = !!root && (v === "months" || v === "review" || v === "staged");
+  el.folderBtn.hidden = !inFolder;
+  if (root) {
+    el.folderName.textContent = basename(root.path) || root.path;
+    el.folderBtn.title = `${root.path} — switch folder`;
+  }
+  el.scan.hidden = !(root && v === "months");
+  el.scan.disabled = state.busy || !!state.scanning;
+  el.scan.replaceChildren(icon("refresh", { size: 16, cls: state.scanning ? "spin" : "" }), state.scanning ? "Scanning…" : "Rescan");
+}
+
+// ---------------------------------------------------------------------- setup
 
 function renderSetup() {
-  const nodes = [
-      h("div", { class: "empty" },
-      h("h2", { text: "Start reviewing screenshots" }),
-      h("p", { text: "Pick a folder. Browse by month or in a random order, and send the ones you don't want to the Recycle Bin." }),
-      h("button", { class: "btn primary", onclick: addFolder }, "Choose Folder")
-    ),
-  ];
+  const hero = h("section", { class: "onboard" },
+    h("div", { class: "onboard-mark", html: iconSvg("sieve", 40) }),
+    h("h1", { text: "Sort a pile of screenshots in minutes" }),
+    h("p", { class: "onboard-lead", text: "Point it at the folder your screenshots pile up in. They get grouped by month and dealt out one at a time." }),
+    gestureLegend(),
+    h("button", { class: "btn primary lg", onclick: addFolder }, icon("folder-plus"), "Choose a folder"),
+    h("p", { class: "onboard-fine", text: "Everything stays on this PC. A swipe only marks a file; nothing leaves the disk until you confirm, and then it goes to the Recycle Bin." })
+  );
+  el.view.replaceChildren(h("div", { class: "page narrow" }, hero));
+}
 
-  if (state.roots.length) {
-    nodes.push(h("div", { class: "panel", style: "padding:14px" },
-      h("div", { class: "hint", style: "margin-bottom:8px", text: "Saved folders" }),
-      h("div", { class: "staged-list" }, state.roots.map(rootRow))
-    ));
+function gestureLegend() {
+  const item = (cls, ico, stamp, caption, key) => h("div", { class: `legend-item ${cls}`, role: "listitem" },
+    h("div", { class: "legend-card", "aria-hidden": "true" },
+      h("span", { class: "mini-stamp" }, icon(ico, { size: 15 }), stamp)),
+    h("div", { class: "legend-caption" }, kbd(key), h("span", { text: caption })));
+  return h("div", { class: "gesture-legend", role: "list", "aria-label": "How sorting works" },
+    item("is-delete", "trash", "Delete", "Swipe left", "←"),
+    item("is-skip", "skip", "Skip", "Swipe up", "↑"),
+    item("is-keep", "check", "Keep", "Swipe right", "→"));
+}
+
+function renderScanning() {
+  el.view.replaceChildren(h("div", { class: "empty scanning" },
+    h("span", { class: "busy lg" }),
+    h("h2", { text: "Looking for screenshots…" }),
+    h("p", { class: "muted", text: state.scanning || "" })));
+}
+
+// -------------------------------------------------------------------- library
+
+const SEG_LABEL = { kept: "kept", staged: "to delete", deleted: "deleted", skipped: "skipped", pending: "unsorted" };
+
+function segbar(stat, size = "") {
+  const segs = statusSegments(stat);
+  const label = segs.map((s) => `${formatCount(s.n)} ${SEG_LABEL[s.key]}`).join(", ") || "nothing sorted yet";
+  return h("div", { class: `segbar${size ? ` ${size}` : ""}`, role: "img", "aria-label": label },
+    segs.map((s) => h("i", { class: `seg seg-${s.key}`, style: `width:${(s.ratio * 100).toFixed(2)}%` })));
+}
+
+/** The dot-and-count key under a status bar, for the non-zero `keys` of `stat`. */
+function legend(stat, keys) {
+  return h("ul", { class: "legend" }, keys
+    .filter((k) => stat[k])
+    .map((k) => h("li", { class: `lg-${k}` }, h("i"), h("b", { text: formatCount(stat[k]) }), ` ${SEG_LABEL[k]}`)));
+}
+
+function renderLibrary() {
+  const s = state.summary || {};
+  if (!state.months.length) {
+    el.view.replaceChildren(h("div", { class: "page" }, h("div", { class: "empty" },
+      h("div", { class: "empty-glyph" }, icon("image", { size: 26 })),
+      h("h2", { text: "No screenshots in this folder" }),
+      h("p", { text: "Image files in it and in its subfolders show up here after a scan." }),
+      h("div", { class: "row center" },
+        h("button", { class: "btn primary", onclick: rescan }, icon("refresh", { size: 16 }), "Scan again"),
+        h("button", { class: "btn", onclick: addFolder }, icon("folder-plus", { size: 16 }), "Choose another folder")))));
+    return;
   }
-  el.view.replaceChildren(...nodes);
-}
 
-function rootRow(root) {
-  return h("div", { class: "root" },
-    h("div", { style: "flex:1;min-width:0" },
-      h("div", { class: "path", text: root.path }),
-      h("div", { class: "meta", text: root.total === 0
-        ? "not scanned yet"
-        : `${root.total} files · ${root.pending} pending${root.staged ? ` · ${root.staged} waiting to delete` : ""}${root.last_scan_ms ? ` · last scan ${formatDateTime(root.last_scan_ms)}` : ""}` })
-    ),
-    h("button", {
-      class: "btn primary sm",
-      onclick: () => selectRoot(root),
-    }, root.total === 0 ? "Scan" : "Open")
-  );
-}
+  const pending = s.pending || 0;
+  const decided = (s.kept || 0) + (s.staged || 0) + (s.deleted || 0) + (s.skipped || 0);
 
-function renderMonths() {
-  const s = state.summary;
-  const strip = h("div", { class: "stat-strip" },
-    stat(s?.total, "total"),
-    stat(s?.pending, "pending"),
-    stat(s?.kept, "kept"),
-    stat(s?.deleted, "deleted"),
-    stat(s?.skipped, "skipped"),
-    stat(formatBytes(s?.bytes_pending || 0), "size")
-  );
+  const facts = [];
+  if (s.bytes_pending) facts.push(`${formatBytes(s.bytes_pending)} unsorted`);
+  if (s.bytes_deleted) facts.push(`${formatBytes(s.bytes_deleted)} freed so far`);
 
-  const actions = h("div", { style: "display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px" },
-    h("button", { class: "btn primary", onclick: () => openQueue("unreviewed", null, "All") },
-      "Unreviewed"),
-    h("button", { class: "btn", onclick: () => openQueue("random", null, "Random") }, "Random"),
-    h("button", { class: "btn", onclick: () => openQueue("skipped", null, "Skipped") }, "Skipped"),
-    h("button", { class: "btn", onclick: () => openQueue("staged", null, "To Delete") }, "To Delete")
-  );
+  const overview = h("section", { class: "overview" },
+    h("div", { class: "overview-top" },
+      h("div", { class: "overview-title" },
+        h("h1", {}, h("span", { class: "num", text: formatCount(s.total) }), ` ${s.total === 1 ? "screenshot" : "screenshots"}`),
+        h("p", { class: "overview-sub" }, pending
+          ? [h("b", { text: formatCount(pending) }), " left to sort", facts.length ? ` · ${facts.join(" · ")}` : ""]
+          : [icon("check-circle", { size: 16, cls: "ok" }), " Everything here is sorted", facts.length ? ` · ${facts.join(" · ")}` : ""])),
+      h("div", { class: "overview-actions" },
+        pending
+          ? h("button", { class: "btn primary lg", id: "btn-sort-all", onclick: () => openQueue("unreviewed", null, "All unsorted") },
+              icon("play", { size: 16 }), decided ? "Continue sorting" : "Start sorting", h("span", { class: "btn-count", text: formatCount(pending) }))
+          : null,
+        pending > 1
+          ? h("button", { class: "btn", title: "Review the unsorted screenshots in random order", onclick: () => openQueue("random", null, "Shuffle") }, icon("shuffle", { size: 16 }), "Shuffle")
+          : null,
+        s.skipped
+          ? h("button", { class: "btn", title: "Review the screenshots you skipped", onclick: () => openQueue("skipped", null, "Skipped") }, icon("skip", { size: 16 }), "Skipped", h("span", { class: "btn-count", text: formatCount(s.skipped) }))
+          : null)),
+    segbar(s, "lg"),
+    legend({ ...s, pending }, ["kept", "staged", "deleted", "skipped", "pending"]));
 
-  const list = state.months.length
-    ? h("div", { class: "months" }, state.months.map(monthRow))
-    : h("div", { class: "empty" },
-        h("h2", { text: "No screenshots yet" }),
-        h("p", { text: "Scan a folder." }),
-        h("button", { class: "btn primary", onclick: rescan }, "Rescan"));
+  const years = groupByYear(state.months).map((g) => h("section", { class: "year" },
+    h("h2", { class: "section-label", text: g.year }),
+    h("div", { class: "months" }, g.months.map(monthRow))));
 
-  el.view.replaceChildren(strip, actions, list);
-}
-
-const STAT_ICONS = {
-  total: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>',
-  pending: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>',
-  kept: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg>',
-  deleted: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2m1 0v14a2 2 0 01-2 2H9a2 2 0 01-2-2V6"/></svg>',
-  skipped: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4l10 8-10 8V4z"/><path d="M19 5v14"/></svg>',
-  size: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 14h.01M11 14h.01"/></svg>',
-};
-
-function stat(n, k) {
-  return h("div", { class: `stat stat-${k}` },
-    h("span", { class: "stat-icon", html: STAT_ICONS[k] || "" }),
-    h("div", {},
-      h("div", { class: "n", text: String(n ?? 0) }),
-      h("div", { class: "k", text: k })
-    )
-  );
+  el.view.replaceChildren(h("div", { class: "page" }, overview, years));
 }
 
 function monthRow(m) {
   const p = progressOf(m);
-  const chips = [];
-  if (p.kept) chips.push(h("span", { class: "chip kept", text: `${p.kept} kept` }));
-  if (p.deleted) chips.push(h("span", { class: "chip", text: `${p.deleted} deleted` }));
-  if (p.staged) chips.push(h("span", { class: "chip staged", text: `${p.staged} waiting to delete` }));
-  if (p.skipped) chips.push(h("span", { class: "chip skipped", text: `${p.skipped} skipped` }));
-
-  const thumbs = state.thumbs?.get(m.month) || [];
+  const thumbs = (state.thumbs.get(m.month) || []).slice(0, 3);
+  const parts = [];
+  if (p.kept) parts.push(`${formatCount(p.kept)} kept`);
+  if (p.staged) parts.push(`${formatCount(p.staged)} to delete`);
+  if (p.deleted) parts.push(`${formatCount(p.deleted)} deleted`);
+  if (p.skipped) parts.push(`${formatCount(p.skipped)} skipped`);
+  const label = monthLabel(m.month);
 
   return h("button", {
-    class: "month",
-    disabled: p.total === 0,
-    onclick: () => openQueue("month", m.month, monthLabel(m.month)),
+    class: `month${p.done ? " is-done" : ""}`,
+    dataset: { month: m.month },
+    "aria-label": `${label}: ${countOf(p.total, "screenshot")}, ${p.done ? "sorted" : `${formatCount(p.remaining)} left`}`,
+    onclick: () => (p.done ? toast(`${label} is already sorted`) : openQueue("month", m.month, label)),
   },
-    h("div", {},
-      h("div", { class: "label", text: monthLabel(m.month) }),
-      h("div", { class: "counts", text: `${p.total} files` })
-    ),
-    h("div", { class: "right" },
+    h("span", { class: `fan n${thumbs.length}` },
+      thumbs.length
+        ? thumbs.map((path, i) => h("img", { src: convertFileSrc(path), alt: "", loading: "lazy", decoding: "async", draggable: "false", style: `--i:${i}` }))
+        : icon("image", { size: 20 })),
+    h("span", { class: "month-main" },
+      h("span", { class: "month-title" },
+        h("span", { class: "label", text: monthLabel(m.month, { year: false }) }),
+        h("span", { class: "counts", text: countOf(p.total, "screenshot") })),
+      segbar(m),
+      h("span", { class: "month-meta", text: parts.join(" · ") || "Not started" })),
+    h("span", { class: "month-side" },
       p.done
-        ? h("span", { class: "done-tag", text: "done" })
-        : h("span", { text: `${p.remaining} left` })
-    ),
-    h("div", { class: `bar${p.done ? " complete" : ""}` }, h("i", { style: `width:${Math.round(p.ratio * 100)}%` })),
-    chips.length ? h("div", { class: "chips" }, chips) : null,
-    thumbs.length
-      ? h("div", { class: "thumbs" }, thumbs.map((path) =>
-          h("img", { src: convertFileSrc(path), alt: "", loading: "lazy", draggable: "false" })))
-      : null
-  );
+        ? h("span", { class: "done-tag" }, icon("check-circle", { size: 16 }), "Sorted")
+        : h("span", { class: "left-tag" }, h("b", { text: formatCount(p.remaining) }), " left"),
+      icon("chevron-right", { size: 18, cls: "month-go" })));
+}
+
+// --------------------------------------------------------------------- review
+
+/** Upcoming cards painted behind the top one, and their resting offsets. */
+const DECK_DEPTH = 2;
+const DECK_SLOTS = [{ dy: 0, scale: 1 }, { dy: 22, scale: 0.95 }, { dy: 44, scale: 0.9 }];
+const ENTER_CLASSES = ["enter-fade", "enter-from-left", "enter-from-right", "enter-from-top"];
+const FILM_BEFORE = 5;
+const FILM_AFTER = 9;
+
+/** Exit animation length; keep in step with `.card.leaving` in style.css. */
+const EXIT_MS = 320;
+
+// RGB triples for the three outcomes: the card tint, the info bar and stamps.
+const DRAG_RGB = {
+  [ACTION.DELETE]: "220,38,38",
+  [ACTION.KEEP]: "21,128,61",
+  [ACTION.SKIP]: "180,83,9",
+};
+
+// How far a card shrinks at full drag, and over what distance. Driven by the
+// raw pointer distance rather than the clamped gesture progress, so dragging
+// further keeps shrinking instead of stopping dead at the threshold.
+const SHRINK_MAX = 0.3;
+const SHRINK_REACH = GESTURE_THRESHOLD * 2.6;
+
+const topCard = () => document.querySelector("#stage .deck .card.deck-top:not(.leaving)");
+const deckEl = () => document.querySelector("#stage .deck");
+
+function filmWindowIds() {
+  const ids = state.queue.ids;
+  if (!ids.length) return [];
+  const cursor = Math.min(state.queue.cursor, ids.length - 1);
+  return ids.slice(Math.max(0, cursor - FILM_BEFORE), Math.min(ids.length, cursor + FILM_AFTER + 1));
 }
 
 function renderReview() {
-  if (!state.card) {
-    const q = state.queue;
-    el.view.replaceChildren(h("div", { class: "review" },
-      h("div", { class: "wrap" },
-        h("div", { class: "panel finale" },
-          h("div", { class: "big", text: String(q.deferred) }),
-          h("h2", { text: q.deferred ? "All files scanned" : "This queue is done" }),
-          h("p", { class: "hint", text: q.deferred ? "Skipped ones came back in the same pass." : "Pick another month or random mode." }),
-          h("div", { style: "display:flex;gap:8px;justify-content:center;margin-top:12px" },
-            h("button", { class: "btn primary", onclick: backToMonths }, "Back to months"),
-            h("button", { class: "btn", onclick: () => openQueue("random", null, "Random") }, "Random continue")
-          )
-        )
-      )
-    ));
-    return;
-  }
+  // A full render replaces every card, so a gesture in progress has lost its
+  // card; a stale drag would otherwise keep blocking the decision keys.
+  state.drag = null;
+  state.pan = null;
+  if (!state.card) return renderFinale();
 
-  const wrap = h("div", { class: "wrap" },
+  const stage = h("div", { class: "stage", id: "stage" }, buildDeck());
+  el.view.replaceChildren(h("div", { class: "review" },
     reviewHead(),
-    h("div", { class: "stage", id: "stage" }, cardStack()),
+    stage,
     reviewActions(),
-    filmstrip()
-  );
-  el.view.replaceChildren(h("div", { class: "review" }, wrap));
-  attachGestures();
+    h("div", { class: "filmstrip", id: "filmstrip", role: "list", "aria-label": "Queue" })));
+  wireStage(stage);
+  renderReviewChrome();
+  paintZoomReadout(1);
 
-  // First paint of a card (queue opened, or a jump landed on a new card) fades
-  // it in. Advancing through the queue does NOT use this: `advanceDeck()`
-  // promotes the card that is already on screen, so there is nothing to fade.
-  if (state.entering && state.card) {
-    const top = document.getElementById("card");
-    if (top) {
-      top.classList.add("enter");
-      const done = () => {
-        top.classList.remove("enter");
-        top.removeEventListener("animationend", done);
-      };
-      top.addEventListener("animationend", done);
-      // Fallback in case the animation never fires (reduced motion, or a
-      // display quirk), so the card cannot be stuck mid-transition.
-      setTimeout(done, 420);
-    }
-  }
-  state.entering = false;
+  const top = topCard();
+  const enter = state.enter;
+  state.enter = null;
+  if (top && enter) playEnter(top, enter);
+}
+
+function playEnter(card, enter) {
+  const cls = `enter-${enter}`;
+  if (!ENTER_CLASSES.includes(cls)) return;
+  card.classList.add(cls);
+  const done = () => card.classList.remove(cls);
+  card.addEventListener("animationend", done, { once: true });
+  // In case the animation never fires (reduced motion, a hidden window), the
+  // card must not keep a class that overrides the drag's inline position.
+  setTimeout(done, 700);
 }
 
 function reviewHead() {
-  const q = state.queue;
-  const label = state.scope?.label || "";
-  const total = q.length;
-  const pos = q.position();
-
-  const head = h("div", { class: "progress-row" },
-    h("span", { text: label }),
-    h("span", { class: "bar" }, h("i", { style: `width:${total ? Math.round((pos / total) * 100) : 0}%` })),
-    h("span", { text: total ? `${pos} / ${total}` : "0 / 0" }),
-    q.deferred ? h("span", { class: "chip skipped", text: `${q.deferred} skipped` }) : null
-  );
-  // The zoom readout lives in the existing progress row, not as its own line, so
-  // it costs the stage no height.
-  head.append(zoomReadout());
-  return head;
+  const c = state.pass.counts();
+  const chip = (action, ico, n, title) =>
+    h("span", { class: `tally-chip t-${action}`, dataset: { action }, title }, icon(ico, { size: 14 }), h("b", { text: formatCount(n) }));
+  return h("div", { class: "review-head", id: "review-head" },
+    h("div", { class: "review-title" },
+      h("span", { class: "review-label", text: state.scope?.label || "" }),
+      h("span", { class: "review-pos", id: "review-pos" }),
+      h("span", { class: "zoom-readout", id: "zoom-readout", text: "100%" })),
+    h("div", { class: "tally", role: "group", "aria-label": "Decided in this pass" },
+      chip(ACTION.KEEP, "check", c.keep, "Kept in this pass"),
+      chip(ACTION.DELETE, "trash", c.delete, "Marked for deletion in this pass"),
+      chip(ACTION.SKIP, "skip", c.skip, "Skipped in this pass")),
+    h("div", { class: "review-bar", "aria-hidden": "true" }, h("i", { id: "review-bar" })));
 }
 
 function reviewActions() {
-  return h("div", { class: "actions" },
-    h("button", { class: "btn danger", onclick: () => decide(ACTION.DELETE), title: "←" },
-      "Delete ", kbd("←")),
-    h("button", { class: "btn", onclick: () => decide(ACTION.SKIP), title: "↑" },
-      "Skip ", kbd("↑")),
-    h("button", { class: "btn ok", onclick: () => decide(ACTION.KEEP), title: "→" },
-      "Keep ", kbd("→")),
-    h("button", { class: "btn ghost", onclick: undo, title: "Ctrl+Z" }, "Undo ", kbd("Z"))
-  );
+  const btn = (action, cls, ico, label, key, title) => h("button", {
+    class: `act ${cls}`,
+    dataset: { action },
+    title,
+    onclick: () => decide(action, { via: "button" }),
+  }, icon(ico, { size: 18 }), h("span", { class: "act-label", text: label }), kbd(key));
+  return h("div", { class: "actions", id: "review-actions" },
+    btn(ACTION.DELETE, "act-delete", "trash", "Delete", "←", "Mark for deletion (←)"),
+    btn(ACTION.SKIP, "act-skip", "skip", "Skip", "↑", "Skip for now; it comes back once at the end (↑)"),
+    btn(ACTION.KEEP, "act-keep", "check", "Keep", "→", "Keep (→)"),
+    h("button", { class: "act act-undo", title: "Undo the last decision (Z)", "aria-label": "Undo", onclick: () => undo() },
+      icon("undo", { size: 18 }), kbd("Z")));
 }
 
 /**
- * Re-renders only the chrome around the deck (progress row, actions,
- * filmstrip), leaving the stage and its cards untouched.
- *
- * Used by `advanceDeck()`: the cards must not be rebuilt, but the counter, the
- * chips and the filmstrip all still have to reflect the new position.
+ * Updates the chrome around the deck (position, tally, progress, filmstrip) in
+ * place. The stage and its cards are left alone: the advance has to stay one
+ * continuous motion, and rebuilding the deck is what used to make it flicker.
  */
-function renderReviewChrome() {
-  const wrap = document.querySelector(".review .wrap");
-  if (!wrap) return render();
-  const stage = wrap.querySelector(".stage");
-  if (!stage) return render();
-
-  const nodes = [reviewHead(), stage, reviewActions()];
-  const film = filmstrip();
-  if (film) nodes.push(film);
-  wrap.replaceChildren(...nodes);
-  state.zoomReadout = document.querySelector(".zoom-readout");
+function renderReviewChrome(bumped = null) {
+  const q = state.queue;
+  const pos = document.getElementById("review-pos");
+  if (!pos) return;
+  pos.textContent = `${formatCount(q.position())} of ${formatCount(q.length)}`;
+  const bar = document.getElementById("review-bar");
+  if (bar) bar.style.width = `${q.length ? (Math.min(q.cursor, q.length) / q.length) * 100 : 0}%`;
+  const c = state.pass.counts();
+  for (const chip of document.querySelectorAll(".tally-chip")) {
+    const n = { keep: c.keep, delete: c.delete, skip: c.skip }[chip.dataset.action];
+    chip.querySelector("b").textContent = formatCount(n);
+    chip.classList.toggle("zero", !n);
+    if (chip.dataset.action === bumped) replay(chip, "bump");
+  }
+  paintFilmstrip();
 }
 
-/** Live zoom percentage for the current card, shown only while zoomed. */
-function zoomReadout() {
-  const node = h("span", { class: "zoom-readout", text: "100%" });
-  state.zoomReadout = node;
-  return node;
-}
-
-/** Resets the current card's zoom to 100%, used by the test harness. */
-function resetCardZoom() {
-  const z = state.cardZoom;
-  if (!z) return;
-  z.zoom.scale = 1;
-  z.zoom.x = 0;
-  z.zoom.y = 0;
-  z.apply();
-}
-
-function kbd(text) {
-  return h("kbd", { text });
+function paintZoomReadout(scale) {
+  const node = document.getElementById("zoom-readout");
+  if (!node) return;
+  node.textContent = `${Math.round(scale * 100)}%`;
+  node.classList.toggle("on", scale > 1.001);
 }
 
 /**
- * A scrollable filmstrip of the queue: the previous few decisions, the current
- * item, and the next few. Clicking an item jumps back to it, so a pass can be
- * walked without undoing everything.
+ * The queue around the cursor: recent decisions, the current card, and what is
+ * next. Clicking an item jumps to it, so a pass can be walked back without
+ * undoing everything.
  */
-function filmstrip() {
+function paintFilmstrip() {
+  const strip = document.getElementById("filmstrip");
+  if (!strip) return;
   const q = state.queue;
   const ids = q.ids;
-  if (!ids.length) return null;
+  if (!ids.length) {
+    strip.replaceChildren();
+    return;
+  }
   const cursor = Math.min(q.cursor, ids.length - 1);
-  const start = Math.max(0, cursor - 3);
-  const end = Math.min(ids.length, cursor + 5);
+  const start = Math.max(0, cursor - FILM_BEFORE);
+  const end = Math.min(ids.length, cursor + FILM_AFTER + 1);
+  const missing = [];
   const items = [];
   for (let i = start; i < end; i++) {
     const shot = state.cache.get(ids[i]);
+    if (!shot) missing.push(ids[i]);
     const status = shot?.status || "pending";
-    // The status is carried on a child so the `.current` ring can never be
-    // overridden by the status colour, which was the whole reason a decided
-    // item looked unselected.
+    const current = i === q.cursor;
     items.push(h("button", {
-      class: `film-item${i === cursor ? " current" : ""}`,
-      dataset: { status },
+      class: `film-item${current ? " current" : ""}`,
+      role: "listitem",
+      dataset: { status, index: String(i) },
+      title: shot ? `${shot.name}${status !== "pending" ? ` — ${STATUS_LABEL[status] || status}` : ""}` : `#${ids[i]}`,
+      "aria-current": current ? "true" : null,
       onclick: () => jumpTo(i),
-      title: shot?.name || `#${ids[i]}`,
-      "aria-current": i === cursor ? "true" : null,
     },
-      h("span", { class: "film-mark" }),
       h("span", { class: "film-thumb" },
-        shot?.viewable ? h("img", { src: convertFileSrc(shot.path), alt: "", loading: "lazy" }) : null),
-      h("span", { class: "film-name", text: shot?.name || `#${ids[i]}` })
-    ));
+        shot?.viewable && !shot.missing
+          ? h("img", { src: convertFileSrc(shot.path), alt: "", loading: "lazy", decoding: "async", draggable: "false" })
+          : h("span", { class: "film-ext", text: shot ? shot.ext.toUpperCase() : "" })),
+      h("span", { class: "film-mark", "aria-hidden": "true" })));
   }
-  return h("div", { class: "filmstrip", dataset: { start: String(start) } }, items);
+  strip.replaceChildren(...items);
+  strip.dataset.start = String(start);
+  if (missing.length) {
+    hydrate(missing).then(() => {
+      if (state.view === "review" && missing.some((id) => state.cache.has(id))) paintFilmstrip();
+    }).catch(() => {});
+  }
 }
+
+const STATUS_LABEL = { kept: "kept", staged: "marked for deletion", skipped: "skipped", deleted: "deleted", pending: "not sorted" };
 
 function jumpTo(index) {
-  if (state.view !== "review") return;
-  if (index < 0 || index >= state.queue.ids.length) return;
+  if (state.view !== "review" || state.deciding) return;
+  if (index < 0 || index >= state.queue.ids.length || index === state.queue.cursor) return;
   state.queue.cursor = index;
-  state.scope = { ...state.scope };
-  // Jumping back is a deliberate navigation, not a decision, so the card that
-  // was already on screen fades in rather than sliding.
-  showCurrent();
+  showCurrent({ enter: "fade" });
 }
 
-function card(shot, top = false) {
-  const imgwrap = h("div", { class: "imgwrap" });
-  let img = null;
-  if (shot.viewable) {
-    img = h("img", { src: convertFileSrc(shot.path), alt: shot.name, draggable: "false" });
-    imgwrap.append(img);
-  } else {
-    imgwrap.append(h("div", { class: "noimg" },
-      h("div", { text: `No ${shot.ext.toUpperCase()} preview` }),
-      h("code", { text: "This format can't be opened by WebView2; decide from the name and size." })));
-  }
+// ------------------------------------------------------------------------ deck
 
-  // The date-source diagnostic only lives in the tooltip now. It was noise in
-  // the meta row on every single card.
+/**
+ * The review deck: the current card on top, the next couple peeking out below
+ * so a decision always has somewhere to land.
+ *
+ * Every card sits in a slot (`.deck-top`, `.deck-1`, `.deck-2`) whose offset
+ * comes from `--deck-dy` / `--deck-scale` through `transform`. The drag moves
+ * the top card with the individual `translate` / `rotate` / `scale`
+ * properties, which compose with that transform instead of replacing it, so
+ * no inline style ever has to restate the slot position.
+ */
+function buildDeck() {
+  const deck = h("div", { class: "deck" });
+  const ids = [state.card.id, ...state.queue.upcoming(DECK_DEPTH, 1)];
+  for (let slot = ids.length - 1; slot >= 0; slot--) {
+    const shot = slot === 0 ? state.card : state.cache.get(ids[slot]);
+    if (shot) deck.append(cardNode(shot, slot));
+  }
+  return deck;
+}
+
+function setSlot(node, slot) {
+  node.classList.remove("deck-top", "deck-1", "deck-2", "deck-card");
+  node.style.removeProperty("--deck-dy");
+  node.style.removeProperty("--deck-scale");
+  if (slot === 0) {
+    node.classList.add("deck-top");
+    node.id = "card";
+    node.removeAttribute("aria-hidden");
+  } else {
+    node.classList.add("deck-card", `deck-${slot}`);
+    node.removeAttribute("id");
+    node.setAttribute("aria-hidden", "true");
+  }
+}
+
+function placeholder(title, detail) {
+  return h("div", { class: "noimg" },
+    icon("image", { size: 28 }),
+    h("div", { class: "noimg-title", text: title }),
+    h("div", { class: "noimg-detail", text: detail }));
+}
+
+function photo(shot) {
+  if (!shot.viewable) {
+    return placeholder(`No preview for .${shot.ext.toLowerCase()} files`, "The app can't render this format. Decide from the name, date and size.");
+  }
+  if (shot.missing) {
+    return placeholder("File not found", "It was moved or deleted outside Screenshot Sifter since the last scan.");
+  }
+  const img = h("img", { src: convertFileSrc(shot.path), alt: shot.name, draggable: "false", decoding: "async" });
+  img.addEventListener("error", () => {
+    log.warn("card", `couldn't load ${shot.path}`);
+    img.replaceWith(placeholder("Couldn't load this image", "The file may be damaged, or it changed since the last scan."));
+  }, { once: true });
+  return img;
+}
+
+function cardNode(shot, slot) {
   const when = h("span", {
     text: formatDateTime(shot.taken_ms),
+    // The date-source diagnostic lives in the tooltip: it was noise on every card.
     title: `Date ${DATE_SOURCE_LABELS[shot.date_source] || shot.date_source}`,
   });
-
-  const node = h("div", { class: "card", id: top ? "card" : null },
-    // Tints the card (not the image) so the whole surface shifts colour as the
-    // drag progresses. Kept as its own layer so it can sit under the stamps
-    // and above the image without tinting the photo heavily.
+  const node = h("div", { class: "card", dataset: { id: String(shot.id) } },
+    // Under the photo (z 1 vs 2), so the card and its letterbox change colour
+    // while the screenshot itself stays untinted.
     h("div", { class: "tint" }),
-    h("div", { class: "stamp left", text: "Delete" }),
-    h("div", { class: "stamp right", text: "Keep" }),
-    h("div", { class: "stamp up", text: "Skip" }),
-    imgwrap,
+    h("div", { class: "stamp left" }, icon("trash", { size: 18 }), "Delete"),
+    h("div", { class: "stamp right" }, icon("check", { size: 18 }), "Keep"),
+    h("div", { class: "stamp up" }, icon("skip", { size: 18 }), "Skip"),
+    h("div", { class: "imgwrap" }, photo(shot)),
     h("div", { class: "foot" },
-      // The name ellipsizes to keep the info bar one line, so the full text lives in
-    // the tooltip.
-    h("div", { class: "fname", text: shot.name, title: shot.name }),
+      // The name ellipsizes to keep the info bar one line; the full text is in
+      // the tooltip.
+      h("div", { class: "fname", text: shot.name, title: shot.name }),
       h("div", { class: "fmeta" },
         when,
         h("span", { text: formatBytes(shot.size) }),
         h("span", { text: shot.ext.toUpperCase() }),
-        shot.missing ? h("span", { class: "missing", text: "file missing on disk" }) : null
-      )
-    )
-  );
-
-  // Always assigned, including the null case: a card with no viewable image
-  // must not inherit the previous card's zoom, or the gesture code would treat
-  // it as pannable and the drag would decide nothing.
-  state.cardZoom = top && img ? attachCardZoom(node, imgwrap, img) : null;
-  // Only the card actually entering needs the class; deck cards behind it would
-  // otherwise carry a stale one. There is no direction: promotion is continuous,
-  // so an entry can only mean a card that genuinely appeared (queue open/jump).
-  if (top && state.entering) node.classList.add("enter");
+        shot.missing ? h("span", { class: "missing", text: "missing on disk" }) : null)));
+  setSlot(node, slot);
   return node;
 }
 
 /**
- * In-card zoom: the wheel zooms the card's own image around the cursor without
- * opening the full-screen viewer.
+ * Advances the review by one card without rebuilding the deck.
  *
- * Past ZOOM_PAN_THRESHOLD a drag pans the zoomed image instead of swiping, so
- * the swipe gesture is untouched at rest. `state.cardZoom` is null when the
- * current card has no viewable image, which the gesture code treats as
- * "always swipe".
+ * The card waiting in slot 1 becomes the top card and slot 2 moves up; both
+ * glide there through the slot transition (a swipe has usually carried them
+ * most of the way already). A fresh card fades in at the back. Falls back to a
+ * full `showCurrent()` whenever the deck does not hold the expected card, so a
+ * stale deck can never show the wrong file.
  */
-function attachCardZoom(cardEl, imgwrap, img) {
+function promoteDeck(bumped) {
+  const deck = deckEl();
+  const id = state.queue.current();
+  const shot = id === null ? null : state.cache.get(id);
+  const incoming = deck?.querySelector(".deck-1:not(.leaving)");
+  if (!deck || !shot || !incoming || incoming.dataset.id !== String(id)) {
+    showCurrent({ enter: "fade" });
+    return;
+  }
+
+  state.card = shot;
+  deck.classList.remove("stacking");
+  // Inert for a frame, so the tail of a click aimed at the card that just left
+  // cannot land on the one taking its place.
+  deck.classList.add("inert");
+  const second = deck.querySelector(".deck-2:not(.leaving)");
+  setSlot(incoming, 0);
+  if (second) setSlot(second, 1);
+  fillDeckTail(deck);
+
+  renderReviewChrome(bumped);
+  paintZoomReadout(1);
+  requestAnimationFrame(() => requestAnimationFrame(() => deck.classList.remove("inert")));
+  preload();
+}
+
+/** Adds any upcoming card the deck is missing, behind the others. */
+function fillDeckTail(deck) {
+  const want = state.queue.upcoming(DECK_DEPTH, 1);
+  want.forEach((id, i) => {
+    const slot = i + 1;
+    const present = () => deck.querySelector(`.card[data-id="${id}"]:not(.leaving)`);
+    if (present()) return;
+    const add = (shot) => {
+      // The queue may have moved on while the row was loading.
+      if (!shot || !deck.isConnected || present() || state.queue.upcoming(DECK_DEPTH, 1)[i] !== id) return;
+      const node = cardNode(shot, slot);
+      node.classList.add("arriving");
+      deck.prepend(node);
+    };
+    const cached = state.cache.get(id);
+    if (cached) add(cached);
+    else hydrate([id]).then(([s]) => add(s)).catch(() => {});
+  });
+}
+
+/** Glides the cards behind the top one back to their slots. */
+function resetStack() {
+  const deck = deckEl();
+  if (!deck) return;
+  deck.classList.remove("stacking");
+  for (const n of deck.querySelectorAll(".deck-card")) {
+    n.style.removeProperty("--deck-dy");
+    n.style.removeProperty("--deck-scale");
+  }
+}
+
+/**
+ * Colours a card for an outcome: the tint layer, the info bar (in the same
+ * fading-scrim shape as its resting gradient, so it never reads as a slab) and
+ * the matching stamp. `progress` 0 clears everything.
+ */
+function paintIntent(card, action, progress) {
+  const col = DRAG_RGB[action];
+  const on = !!col && progress > 0;
+  card.classList.toggle("tinted", on);
+  const tint = card.querySelector(".tint");
+  if (tint) {
+    tint.style.background = on ? `rgb(${col})` : "";
+    tint.style.opacity = on ? String(progress * 0.3) : "0";
+  }
+  const foot = card.querySelector(".foot");
+  if (foot) {
+    foot.style.background = on
+      ? `linear-gradient(to top, rgba(${col},${0.2 + progress * 0.45}) 0%, rgba(${col},${progress * 0.18}) 58%, rgba(${col},0) 100%)`
+      : "";
+  }
+  const stamps = { [ACTION.DELETE]: ".stamp.left", [ACTION.KEEP]: ".stamp.right", [ACTION.SKIP]: ".stamp.up" };
+  for (const [a, sel] of Object.entries(stamps)) {
+    const s = card.querySelector(sel);
+    if (s) s.style.opacity = on && a === action ? String(0.45 + progress * 0.55) : "0";
+  }
+  // Re-arming restarts the stamp's pop animation (see `[data-armed]` in CSS).
+  card.dataset.armed = on ? action : "";
+}
+
+function clearDrag(card) {
+  card.classList.remove("dragging");
+  paintIntent(card, null, 0);
+}
+
+/** Sends a released-but-undecided card back to rest. */
+function settle(card) {
+  clearDrag(card);
+  card.classList.add("settling");
+  card.style.translate = "";
+  card.style.rotate = "";
+  card.style.scale = "";
+  setTimeout(() => card.classList.remove("settling"), 360);
+}
+
+/**
+ * Throws the top card off the deck in the direction of `action`. It stops being
+ * the top card at once (so input goes to the next one) and removes itself when
+ * the animation ends. A swipe continues from wherever the drag left it.
+ */
+function flyOut(card, action, from = null) {
+  card.classList.add("leaving");
+  card.classList.remove("deck-top", "dragging", ...ENTER_CLASSES);
+  card.removeAttribute("id");
+  card.setAttribute("aria-hidden", "true");
+  paintIntent(card, action, 1);
+
+  const v = exitVector(action, Math.max(900, window.innerWidth));
+  const x = action === ACTION.SKIP ? (from?.dx || 0) : v.x;
+  const y = action === ACTION.SKIP ? v.y : (from?.dy || 0) + v.y;
+  const tilt = action === ACTION.SKIP ? 0 : Math.sign(v.x) * 16;
+  // Commit the starting position, so the exit animates from it.
+  void card.offsetWidth;
+  card.style.translate = `${x}px ${y}px`;
+  card.style.rotate = `${tilt}deg`;
+  card.style.scale = "0.72";
+  card.style.opacity = "0";
+  const remove = () => card.remove();
+  card.addEventListener("transitionend", (e) => {
+    if (e.target === card && e.propertyName === "opacity") remove();
+  });
+  setTimeout(remove, EXIT_MS + 250);
+}
+
+/**
+ * Speaks a short status line to screen readers: the card swap itself is
+ * silent, so without this a decision gave no feedback at all.
+ */
+function announce(text) {
+  const node = document.getElementById("sr-status");
+  if (node) node.textContent = text;
+}
+
+const SPOKEN = { [ACTION.KEEP]: "Kept", [ACTION.DELETE]: "Marked for deletion", [ACTION.SKIP]: "Skipped" };
+
+/** Lights the on-screen button for a keyboard decision, so it reads as pressed. */
+function flashAction(action) {
+  replay(document.querySelector(`.act[data-action="${action}"]`), "flash", 260);
+}
+
+/**
+ * A small copy of the photo arcs into the "To delete" badge, which bumps: the
+ * file did not vanish, it went onto a pile you can still open.
+ */
+function flyToPile(card) {
+  const target = el.stagedBtn;
+  const img = card?.querySelector(".imgwrap img");
+  if (!img || !target || reducedMotion()) return;
+  target.hidden = false;
+  const from = img.getBoundingClientRect();
+  const to = target.getBoundingClientRect();
+  if (!from.width || !to.width) return;
+  const w = Math.min(140, from.width);
+  const hgt = w * 0.66;
+  const x0 = from.left + from.width / 2 - w / 2;
+  const y0 = from.top + from.height / 2 - hgt / 2;
+  const dx = to.left + to.width / 2 - (x0 + w / 2);
+  const dy = to.top + to.height / 2 - (y0 + hgt / 2);
+  const ghost = h("img", { class: "pile-ghost", src: img.currentSrc || img.src, alt: "", "aria-hidden": "true" });
+  ghost.style.cssText = `left:${x0}px;top:${y0}px;width:${w}px;height:${hgt}px`;
+  document.body.append(ghost);
+  const anim = ghost.animate([
+    { transform: "translate(0, 0) scale(1)", opacity: 0.95 },
+    { transform: `translate(${dx * 0.45}px, ${dy * 0.55 - 60}px) scale(.6)`, opacity: 0.9, offset: 0.5 },
+    { transform: `translate(${dx}px, ${dy}px) scale(.14)`, opacity: 0.2 },
+  ], { duration: 560, easing: "cubic-bezier(.45,0,.2,1)" });
+  anim.finished
+    .then(() => replay(target, "bump", 450))
+    .catch(() => {})
+    .finally(() => ghost.remove());
+}
+
+// --------------------------------------------------------------- card zoom
+
+/**
+ * In-card zoom: the wheel zooms the card's own image around the cursor without
+ * opening the viewer. Past ZOOM_PAN_THRESHOLD a drag pans the zoomed image
+ * instead of swiping, so the user cannot decide a photo they are inspecting.
+ *
+ * The controller lives on the card node, so it follows the card through a
+ * promotion with nothing to re-wire. Null for a card without a photo, which
+ * the gesture code treats as "always swipe".
+ */
+function zoomOf(card) {
+  if (!card) return null;
+  if (card.__zoom) return card.__zoom;
+  const imgwrap = card.querySelector(".imgwrap");
+  const img = imgwrap?.querySelector("img");
+  if (!img) return null;
   const zoom = { scale: 1, x: 0, y: 0 };
-  state.cardZoom = null;
 
   const apply = () => {
     img.style.transform = `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`;
-    cardEl.classList.toggle("zoomed", zoom.scale > 1.001);
-    cardEl.classList.toggle("pannable", zoom.scale >= ZOOM_PAN_THRESHOLD);
-    const readout = state.zoomReadout;
-    if (readout) {
-      readout.textContent = `${Math.round(zoom.scale * 100)}%`;
-      readout.classList.toggle("on", zoom.scale > 1.001);
-    }
+    card.classList.toggle("zoomed", zoom.scale > 1.001);
+    card.classList.toggle("pannable", zoom.scale >= ZOOM_PAN_THRESHOLD);
+    if (card.classList.contains("deck-top")) paintZoomReadout(zoom.scale);
   };
-
-  const zoomBy = (factor, cx, cy) => {
-    const next = clampScale(zoom.scale, factor);
-    if (next === zoom.scale) return;
-    const rect = imgwrap.getBoundingClientRect();
-    const next2 = anchorZoom(
-      (cx ?? rect.left + rect.width / 2) - (rect.left + rect.width / 2),
-      (cy ?? rect.top + rect.height / 2) - (rect.top + rect.height / 2),
-      zoom.x,
-      zoom.y,
-      next,
-      zoom.scale
-    );
-    zoom.x = next2.x;
-    zoom.y = next2.y;
-    zoom.scale = next;
-    clampPan();
-    apply();
+  const measure = () => {
+    const r = imgwrap.getBoundingClientRect();
+    return { r, ...containedSize(img.naturalWidth, img.naturalHeight, r.width, r.height) };
   };
-
-  // Keep the image from being dragged entirely off the card once it is bigger
-  // than the frame.
-  //
-  // The image box now fills `.imgwrap` and `object-fit: contain` letterboxes the
-  // photo inside it, so the box is NOT the photo. The bounds below are taken
-  // from the visible content, and there are two of them:
-  //
-  //   - half the content's growth, because that is the most translate an
-  //     anchored zoom point can ever need. Without it the clamp zeroes the
-  //     anchor on a letterboxed photo, where scaled-content-minus-frame goes
-  //     negative and a naive clamp reads it as "no panning possible".
-  //   - half the leftover frame, so a photo smaller than the frame can still be
-  //     slid around without ever leaving it.
   const clampPan = () => {
     if (zoom.scale <= 1.001) {
       zoom.x = 0;
       zoom.y = 0;
       return;
     }
-    const rect = imgwrap.getBoundingClientRect();
-    const nw = img.naturalWidth;
-    const nh = img.naturalHeight;
-    let w = rect.width;
-    let hgt = rect.height;
-    if (nw && nh && rect.width && rect.height) {
-      const k = Math.min(rect.width / nw, rect.height / nh);
-      w = nw * k;
-      hgt = nh * k;
-    }
-    const limit = (content, frame) => Math.max(
-      0,
-      (content * zoom.scale - content) / 2,
-      (frame - content * zoom.scale) / 2
-    );
-    const maxX = limit(w, rect.width);
-    const maxY = limit(hgt, rect.height);
-    zoom.x = Math.min(maxX, Math.max(-maxX, zoom.x));
-    zoom.y = Math.min(maxY, Math.max(-maxY, zoom.y));
+    const m = measure();
+    const mx = panLimit(m.w, m.r.width, zoom.scale);
+    const my = panLimit(m.h, m.r.height, zoom.scale);
+    zoom.x = Math.min(mx, Math.max(-mx, zoom.x));
+    zoom.y = Math.min(my, Math.max(-my, zoom.y));
   };
-
-  imgwrap.addEventListener("wheel", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY);
-  }, { passive: false });
-
-  imgwrap.addEventListener("dblclick", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (zoom.scale > 1) {
-      zoom.scale = 1;
-      zoom.x = 0;
-      zoom.y = 0;
-    } else {
-      zoomBy(2);
-    }
+  const zoomBy = (factor, cx = null, cy = null) => {
+    const next = clampScale(zoom.scale, factor);
+    if (next === zoom.scale) return;
+    const r = imgwrap.getBoundingClientRect();
+    const ox = r.left + r.width / 2;
+    const oy = r.top + r.height / 2;
+    const pos = anchorZoom((cx ?? ox) - ox, (cy ?? oy) - oy, zoom.x, zoom.y, next, zoom.scale);
+    zoom.x = pos.x;
+    zoom.y = pos.y;
+    zoom.scale = next;
+    clampPan();
     apply();
-  });
-
-  state.cardZoom = {
-    zoom,
-    apply,
-    clampPan,
-    panning: () => zoom.scale >= ZOOM_PAN_THRESHOLD,
   };
-  apply();
-  return state.cardZoom;
+  const reset = () => {
+    zoom.scale = 1;
+    zoom.x = 0;
+    zoom.y = 0;
+    apply();
+  };
+  /** The pan as a fraction of the photo, which is what the viewer needs. */
+  const share = () => {
+    const m = measure();
+    return { scale: zoom.scale, fx: m.w ? zoom.x / m.w : 0, fy: m.h ? zoom.y / m.h : 0 };
+  };
+
+  card.__zoom = { zoom, apply, clampPan, zoomBy, reset, share, panning: () => zoom.scale >= ZOOM_PAN_THRESHOLD };
+  return card.__zoom;
 }
 
-/**
- * The review deck: the current card on top, the next couple peeking out below
- * it. The upcoming shots are already in the cache because `preload()` hydrates
- * them when the current card is shown.
- */
-function cardStack() {
-  const current = state.card;
-  const nextIds = state.queue.upcoming(2, 1);
-  const nextShots = nextIds.map((id) => state.cache.get(id)).filter(Boolean);
-
-  const deck = h("div", { class: "deck" });
-  // Paint the farthest first so the closest upcoming card sits on top.
-  for (let i = nextShots.length - 1; i >= 0; i--) {
-    const el = card(nextShots[i]);
-    el.classList.add("deck-card", `deck-${i + 1}`);
-    deck.append(el);
-  }
-  const top = card(current, true);
-  top.classList.add("deck-top");
-  // Clicking the card opens the viewer. The gesture captures the pointer, so
-  // the click lands on the card, not the image — and a swipe must not trigger
-  // it, hence the `dragged` check.
-  top.addEventListener("click", () => {
-    if (!state.dragged) openViewer(current);
-  });
-  deck.append(top);
-  return deck;
+function openShotViewer(shot, card = null) {
+  if (!shot?.viewable || shot.missing) return;
+  openViewer(shot, { src: convertFileSrc(shot.path), inherit: zoomOf(card)?.share() || null });
 }
 
-// ---------------------------------------------------------------- photo viewer
-
-const viewer = { el: null, img: null, imgwrap: null, label: null, scale: 1, x: 0, y: 0, drag: null };
-
-function openViewer(shot) {
-  if (!shot?.viewable) return;
-  // The full-screen viewer opens at the card's current zoom, so inspecting at
-  // 3x in the card and then opening it does not throw the zoom away.
-  const inherited = state.cardZoom?.zoom;
-  closeViewer();
-  if (inherited && inherited.scale > 1.001) {
-    viewer.scale = inherited.scale;
-    viewer.x = inherited.x;
-    viewer.y = inherited.y;
-  } else {
-    viewer.scale = 1;
-    viewer.x = 0;
-    viewer.y = 0;
-  }
-
-  const img = h("img", { src: convertFileSrc(shot.path), alt: shot.name, draggable: "false" });
-  const label = h("span", { class: "viewer-zoom", text: "100%" });
-  const imgwrap = h("div", { class: "viewer-imgwrap" }, img);
-
-  const overlay = h("div", { class: "viewer", id: "viewer" },
-    imgwrap,
-    h("div", { class: "viewer-bar" },
-      h("span", { class: "viewer-name", text: shot.name }),
-      h("div", { class: "spacer" }),
-      h("button", { class: "btn sm", onclick: () => zoomBy(1 / 1.25) }, "−"),
-      label,
-      h("button", { class: "btn sm", onclick: () => zoomBy(1.25) }, "+"),
-      h("button", { class: "btn sm", onclick: resetZoom }, "Reset"),
-      h("button", { class: "btn sm", onclick: closeViewer }, "Close (Esc)")
-    )
-  );
-
-  viewer.el = overlay;
-  viewer.img = img;
-  viewer.imgwrap = imgwrap;
-  viewer.label = label;
-  document.body.append(overlay);
-
-  overlay.addEventListener("wheel", (e) => {
-    e.preventDefault();
-    zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY);
-  }, { passive: false });
-
-  imgwrap.addEventListener("pointerdown", (e) => {
-    viewer.drag = { px: e.clientX, py: e.clientY, ox: viewer.x, oy: viewer.y };
-    capture(imgwrap, e.pointerId);
-  });
-  imgwrap.addEventListener("pointermove", (e) => {
-    if (!viewer.drag) return;
-    viewer.x = viewer.drag.ox + (e.clientX - viewer.drag.px);
-    viewer.y = viewer.drag.oy + (e.clientY - viewer.drag.py);
-    applyView();
-  });
-  const endDrag = () => { viewer.drag = null; };
-  imgwrap.addEventListener("pointerup", endDrag);
-  imgwrap.addEventListener("pointercancel", endDrag);
-
-  imgwrap.addEventListener("dblclick", (e) => {
-    e.preventDefault();
-    if (viewer.scale > 1) {
-      resetZoom();
-      return;
-    }
-    // Double-click zooms in around the click point, not the centre.
-    zoomBy(2, e.clientX, e.clientY);
-  });
-
-  applyView();
-  log.info("viewer", shot.name);
-}
-
-function closeViewer() {
-  if (!viewer.el) return;
-  viewer.el.remove();
-  viewer.el = null;
-  viewer.img = null;
-  viewer.imgwrap = null;
-  viewer.label = null;
-  viewer.drag = null;
-  viewer.scale = 1;
-  viewer.x = 0;
-  viewer.y = 0;
-}
-
-function applyView() {
-  if (!viewer.img) return;
-  viewer.img.style.transform = `translate(${viewer.x}px, ${viewer.y}px) scale(${viewer.scale})`;
-  if (viewer.label) viewer.label.textContent = `${Math.round(viewer.scale * 100)}%`;
-}
-
-/**
- * Zooms the viewer by `factor`, keeping the point under (cx, cy) fixed.
- * Falls back to the viewport centre when no cursor position is given, which is
- * what the +/- buttons and the keyboard shortcut want.
- */
-function zoomBy(factor, cx = null, cy = null) {
-  const next = clampScale(viewer.scale, factor);
-  if (next === viewer.scale) return;
-  const rect = viewer.imgwrap?.getBoundingClientRect();
-  const ox = rect ? rect.left + rect.width / 2 : window.innerWidth / 2;
-  const oy = rect ? rect.top + rect.height / 2 : window.innerHeight / 2;
-  const nextPos = anchorZoom(
-    (cx ?? ox) - ox,
-    (cy ?? oy) - oy,
-    viewer.x,
-    viewer.y,
-    next,
-    viewer.scale
-  );
-  viewer.x = nextPos.x;
-  viewer.y = nextPos.y;
-  viewer.scale = next;
-  applyView();
-}
-
-function resetZoom() {
-  viewer.scale = 1;
-  viewer.x = 0;
-  viewer.y = 0;
-  applyView();
-}
-
-function renderStaged() {
-  el.view.replaceChildren(h("div", { class: "empty" }, h("span", { class: "busy" })));
-  api("staged_list").then((rows) => {
-    if (!rows.length) {
-      el.view.replaceChildren(h("div", { class: "empty" },
-        h("h2", { text: "No files to delete" }),
-        h("p", { text: "Swipe left on cards to collect them here." }),
-        h("button", { class: "btn primary", onclick: backToMonths }, "Back to months")));
-      return;
-    }
-    const total = rows.reduce((n, r) => n + r.size, 0);
-    el.view.replaceChildren(
-      h("div", { class: "panel", style: "padding:14px;margin-bottom:12px" },
-        h("div", { style: "font-weight:620" , text: `${rows.length} files · ${formatBytes(total)}` }),
-        h("div", { class: "hint", style: "margin-top:2px", text: "These files are still on disk. Nothing is deleted until you confirm." })
-      ),
-      h("div", { class: "staged-list" }, rows.map(stagedRow)),
-      h("div", { style: "display:flex;gap:8px;margin-top:14px" },
-        h("button", { class: "btn danger", onclick: commit }, "Move to Recycle Bin"),
-        h("button", { class: "btn", onclick: backToMonths }, "Back to months")
-      )
-    );
-  }).catch((e) => toast(`Error: ${e}`));
-}
-
-function stagedRow(shot) {
-  return h("div", { class: "staged-row" },
-    h("span", { class: "n", text: shot.name }),
-    h("span", { class: "s", text: formatDateTime(shot.taken_ms) }),
-    h("span", { class: "s", text: formatBytes(shot.size) }),
-    h("button", { class: "btn sm", onclick: () => unstageOne(shot.id) }, "Undo")
-  );
-}
-
-// ------------------------------------------------------------------- actions
-
-async function decide(action) {
-  if (state.view !== "review" || !state.card || state.busy || state.animating) return;
-  const shot = state.card;
-  const id = shot.id;
-
-  // Move on immediately; the card animates out while the write happens. The
-  // snapshot lets a failed write put the card back instead of silently dropping
-  // the decision.
-  const before = state.queue.snapshot();
-  if (action === ACTION.SKIP) state.queue.deferCurrent();
-  else state.queue.advance();
-  state.card = null;
-
-  // No immediate render. A swipe is mid-exit-animation and a re-render now
-  // would cut it short and flash the "queue done" finale; a keyboard/button
-  // decision fades the card out instead. `advanceDeck()` promotes the card
-  // already under this one once the write lands, so nothing is rebuilt.
-  if (!state.animating) {
-    const cardEl = document.getElementById("card");
-    if (cardEl) {
-      cardEl.style.transition = "opacity .16s ease, transform .16s ease";
-      cardEl.style.opacity = "0";
-      cardEl.style.transform = "translate(-50%, -50%) scale(.88)";
-    }
-  }
-
-  let updated;
-  try {
-    updated = await api("decide", { id, kind: action });
-  } catch (e) {
-    // Only the write is rolled back. A later refresh failure must not undo a
-    // decision that actually persisted.
-    log.error("decide", `${action} ${shot.name} could not be saved`, e);
-    state.queue.restore(before);
-    state.card = shot;
-    render();
-    toast(`Couldn't save decision: ${e}`);
-    return;
-  }
-
-  state.cache.set(id, updated);
-  log.info("decide", `${action} -> ${updated.name} (${updated.status})`);
-
-  if (action === ACTION.DELETE) {
-    try {
-      await refreshCounts();
-    } catch (e) {
-      // The decision saved; only the counter refresh failed.
-      log.warn("decide", `couldn't refresh counts: ${e}`);
-    }
-    toast(`${updated.name} waiting to delete`, {
-      action: "Undo",
-      onAction: () => undo(),
-    });
-  }
-
-  // A failed write must undo the promotion too. `advanceDeck()` only runs on the
-  // success path, so a failure here has to fall back to a full re-render: the
-  // deck on screen belongs to the *next* shot, not the one being restored.
-  if (state.queue.atEnd()) {
-    state.view = "months";
-    await loadMonths();
-    render();
-  } else {
-    // The card that replaces this one is already on screen, parked under the
-    // outgoing one and slid forward by the drag, so it is promoted in place
-    // instead of being rebuilt and faded in. That is what makes advancing read
-    // as continuous rather than as a flicker-and-snap.
-    await advanceDeck();
-  }
-}
-
-async function undo() {
-  try {
-    const shot = await api("undo_last");
-    if (!shot) {
-      toast("Nothing to undo");
-      return;
-    }
-    state.cache.set(shot.id, shot);
-    if (state.view !== "review") {
-      await loadMonths();
-    } else {
-      // Seek by id, not by stepping the cursor back: a skip was deferred to the
-      // back of the queue, so a plain decrement would show the wrong file.
-      const focused = state.queue.focusId(shot.id);
-      if (focused === null) {
-        // The undone decision belongs to another queue (the undo stack is
-        // session-wide), so it has no place in this one. Drop back to the
-        // month list rather than showing an out-of-scope card.
-        log.info("undo", `${shot.name} not in this queue, back to months`);
-        state.view = "months";
-        await loadMonths();
-        render();
-      } else {
-        state.scope = { ...state.scope };
-        await showCurrent();
-      }
-    }
-    await refreshCounts();
-    log.info("undo", shot.name);
-    toast(`Undone: ${shot.name}`);
-  } catch (e) {
-    log.error("undo", "couldn't undo", e);
-    toast(`Couldn't undo: ${e}`);
-  }
-}
-
-async function unstageOne(id) {
-  try {
-    const shot = await api("unstage", { id });
-    state.cache.set(id, shot);
-    await refreshCounts();
-    renderStaged();
-    toast(`${shot.name} removed from delete list`);
-  } catch (e) {
-    toast(`Error: ${e}`);
-  }
-}
-
-/** How many staged files get a thumbnail in the confirm grid. */
-const DELETE_GRID_LIMIT = 60;
-
-/**
- * The final look before deletion: a scrollable grid of small previews of
- * everything staged, with a count and total size. This is the last chance to
- * spot a file that should not be there.
- */
-function deletePreviewGrid(rows, total) {
-  const shown = rows.slice(0, DELETE_GRID_LIMIT);
-  const grid = h("div", { class: "del-grid" }, shown.map(shot =>
-    h("figure", { class: "del-cell", title: `${shot.name} · ${formatBytes(shot.size)}` },
-      h("div", { class: "del-thumb" },
-        shot.viewable
-          ? h("img", { src: convertFileSrc(shot.path), alt: shot.name, loading: "lazy" })
-          : h("span", { class: "del-noimg", text: shot.ext.toUpperCase() })),
-      h("figcaption", { text: shot.name })
-    )));
-  if (rows.length > shown.length) {
-    grid.append(h("div", { class: "del-more", text: `+${rows.length - shown.length} more` }));
-  }
-  return [
-    h("div", { class: "del-summary" },
-      h("div", { class: "del-count", text: `${rows.length} file${rows.length === 1 ? "" : "s"} · ${formatBytes(total)}` }),
-      h("div", { class: "hint", text: "These go to the Recycle Bin, not permanent deletion. You can restore them from there." })),
-    grid,
-  ];
-}
-
-async function commit() {
-  const n = state.summary?.staged_all || 0;
-  if (!n) return;
-
-  // Fetch the actual list so the confirm dialog can show previews, not just a
-  // count. If this fails, fall back to the plain count confirmation rather than
-  // blocking deletion on a read error.
-  let rows = null;
-  try {
-    rows = await api("staged_list");
-  } catch (e) {
-    log.warn("commit", `couldn't load staged list for preview: ${e}`);
-  }
-
-  const ok = rows?.length
-    ? await confirmDialog({
-        title: "Move to Recycle Bin",
-        body: deletePreviewGrid(rows, rows.reduce((sum, r) => sum + r.size, 0)),
-        message: `${n} files will be moved to the Recycle Bin.`,
-        confirmLabel: `Move ${n} files`,
-        variant: "danger",
-        wide: true,
-      })
-    : await confirmDialog({
-        title: "Move to Recycle Bin",
-        message: `${n} files will be moved to the Recycle Bin. They are not permanently deleted; you can restore them from the Recycle Bin at any time.`,
-        confirmLabel: `Move ${n} files`,
-        variant: "danger",
-      });
-  if (!ok) return;
-
-  state.busy = true;
-  el.commit.disabled = true;
-  el.commit.textContent = "Moving...";
-  log.info("commit", `moving ${n} files to Recycle Bin`);
-  try {
-    const report = await api("commit_deletes");
-    for (const f of report.failed) {
-      if (!f.gone) {
-        log.warn("commit", `${f.name}: ${f.error}`);
-        toast(`${f.name}: ${f.error}`, { ms: 7000 });
-      }
-    }
-    if (report.deleted) {
-      log.info("commit", `${report.deleted} deleted, ${report.still_staged} waiting`);
-      toast(`${report.deleted} files moved to Recycle Bin`);
-    }
-    if (report.still_staged) {
-      toast(`${report.still_staged} files still waiting`, { ms: 6000 });
-    }
-    await loadMonths();
-    if (state.view === "staged") {
-      state.view = "months";
-      render();
-    }
-  } catch (e) {
-    log.error("commit", "couldn't move", e);
-    toast(`Couldn't move: ${e}`);
-  } finally {
-    state.busy = false;
-    el.commit.disabled = false;
-    el.commit.textContent = "Move to Recycle Bin";
-    await refreshCounts();
-  }
-}
-
-async function addFolder() {
-  try {
-    const picked = await api("pick_folder");
-    if (!picked) return;
-    log.info("folder", `picked: ${picked}`);
-    state.busy = true;
-    render();
-    // Scanning is what adds the root to the database, so it has to happen
-    // before the root can be found and selected. Picking alone only returns a
-    // path; without this the folder silently did nothing.
-    const report = await api("scan_root", { path: picked });
-    el.scannedNote.textContent = `${report.found} files · ${report.elapsed_ms} ms`;
-    await loadRoots();
-    const root = state.roots.find((r) => r.path === picked);
-    if (!root) {
-      log.warn("folder", `root not found after scan: ${picked}`);
-      toast(`Couldn't add folder: ${picked}`);
-      return;
-    }
-    state.rootId = root.id;
-    state.view = "months";
-    await loadMonths();
-    render();
-    const bits = [`${report.added} new`, `${report.refreshed} refreshed`];
-    if (report.unviewable) bits.push(`${report.unviewable} no preview`);
-    if (report.missing) bits.push(`${report.missing} missing on disk`);
-    toast(`Scan: ${bits.join(" · ")}`);
-  } catch (e) {
-    log.error("folder", "couldn't add folder", e);
-    toast(`Couldn't add folder: ${e}`);
-  } finally {
-    state.busy = false;
-    render();
-  }
-}
-
-async function rescan() {
-  const root = state.roots.find((r) => r.id === state.rootId) || state.roots[0];
-  if (!root) return addFolder();
-  state.busy = true;
-  render();
-  try {
-    const report = await api("scan_root", { path: root.path });
-    el.scannedNote.textContent = `${report.found} files · ${report.elapsed_ms} ms`;
-    await loadRoots();
-    await loadMonths();
-    if (state.view === "loading" || state.view === "setup") state.view = "months";
-    render();
-    const bits = [`${report.added} new`, `${report.refreshed} refreshed`];
-    if (report.unviewable) bits.push(`${report.unviewable} no preview`);
-    if (report.missing) bits.push(`${report.missing} missing on disk`);
-    log.info("scan", `${root.path}: ${bits.join(", ")} (${report.elapsed_ms} ms)`);
-    toast(`Scan: ${bits.join(" · ")}`);
-  } catch (e) {
-    log.error("scan", `${root.path} scan failed`, e);
-    toast(`Scan failed: ${e}`);
-  } finally {
-    state.busy = false;
-    render();
-  }
-}
-
-async function selectRoot(root) {
-  state.rootId = root.id;
-  state.view = "months";
-  render();
-  if (root.total === 0) return rescan();
-  await loadMonths();
-  render();
-}
-
-function backToMonths() {
-  // Leaving a pass mid-review is fine; staged files stay on disk.
-  state.view = "months";
-  loadMonths().then(render);
-}
-
-// ------------------------------------------------------------------ gestures
+// -------------------------------------------------------------------- gestures
 
 /**
  * Pointer capture is only an optimisation: it lets a drag continue past the
@@ -1354,221 +982,722 @@ function capture(node, pointerId) {
   }
 }
 
-// RGB triples for the three drag outcomes, used for the card tint, the info
-// bar and the stamp fills.
-const DRAG_RGB = {
-  [ACTION.DELETE]: "220,38,38",
-  [ACTION.KEEP]: "21,128,61",
-  [ACTION.SKIP]: "180,83,9",
-};
-
-// How far a card shrinks at full drag, and over what distance. The shrink is
-// driven by the raw pointer distance rather than the clamped gesture progress so
-// that dragging further keeps shrinking, instead of stopping dead at the
-// threshold the way a progress-driven scale did.
-const SHRINK_MAX = 0.3;
-const SHRINK_REACH = GESTURE_THRESHOLD * 2.6;
-
-// Stacked deck offsets, matching the `--deck-dy` / `--deck-scale` CSS values.
-const DECK_DY = [0, 22, 44];
-const DECK_SCALE = [1, 0.95, 0.9];
-
 /**
- * Glides the deck back behind the current card. Used when a gesture is
- * cancelled, and when a decision fails so the card stays on screen.
+ * Gesture handlers are delegated from the stage and resolve the top card when
+ * each event arrives. They used to be bound per render with the top card
+ * captured in a closure, so after the first promotion every drag moved a
+ * detached node: the visible card sat still and the decision landed blind.
  */
-function resetStack() {
-  const deck = document.querySelector(".deck");
-  if (!deck) return;
-  deck.classList.remove("stacking");
-  for (const n of deck.querySelectorAll(".deck-1, .deck-2")) n.style.transform = "";
+function wireStage(stage) {
+  stage.addEventListener("pointerdown", onPointerDown);
+  stage.addEventListener("pointermove", onPointerMove);
+  stage.addEventListener("pointerup", onPointerUp);
+  stage.addEventListener("pointercancel", onPointerCancel);
+  stage.addEventListener("wheel", onWheel, { passive: false });
+  stage.addEventListener("dblclick", onDoubleClick);
+  stage.addEventListener("click", onCardClick);
+  stage.addEventListener("dragstart", (e) => e.preventDefault());
 }
 
-function attachGestures() {
-  const stage = document.getElementById("stage");
-  const cardEl = document.getElementById("card");
-  if (!stage || !cardEl) return;
+function onPointerDown(e) {
+  if (e.button !== 0 || state.busy || state.deciding || !state.card) return;
+  const card = topCard();
+  if (!card || !card.contains(e.target)) return;
+  state.dragged = false;
+  // An entry animation overrides inline styles, so it would freeze the drag.
+  card.classList.remove(...ENTER_CLASSES);
 
-  const tint = cardEl.querySelector(".tint");
-  const foot = cardEl.querySelector(".foot");
-  const deckCards = [null, document.querySelector(".deck .deck-1"), document.querySelector(".deck .deck-2")];
-  const stamps = {
-    [ACTION.DELETE]: cardEl.querySelector(".stamp.left"),
-    [ACTION.KEEP]: cardEl.querySelector(".stamp.right"),
-    [ACTION.SKIP]: cardEl.querySelector(".stamp.up"),
+  const zoom = zoomOf(card);
+  if (zoom?.panning()) {
+    state.pan = { id: e.pointerId, px: e.clientX, py: e.clientY, ox: zoom.zoom.x, oy: zoom.zoom.y, zoom };
+    capture(card, e.pointerId);
+    return;
+  }
+  const r = card.getBoundingClientRect();
+  state.drag = {
+    id: e.pointerId,
+    x: e.clientX,
+    y: e.clientY,
+    dx: 0,
+    dy: 0,
+    card,
+    low: e.clientY > r.top + r.height / 2,
+    behind: [...document.querySelectorAll("#stage .deck .deck-card:not(.leaving)")],
   };
+  // The deck tracks the pointer directly, so its transition is suppressed
+  // until the gesture ends and it can glide instead.
+  deckEl()?.classList.add("stacking");
+  capture(card, e.pointerId);
+}
 
-  /** Clears every drag visual so a released card never keeps a stale tint. */
-  const clearDragVisuals = () => {
-    cardEl.classList.remove("dragging");
-    cardEl.classList.remove("tinted");
-    for (const s of Object.values(stamps)) {
-      if (!s) continue;
-      s.style.opacity = "0";
-      s.style.background = "transparent";
-    }
-    if (tint) tint.style.opacity = "0";
-    // Back to the resting scrim; the drag tint is an inline override.
-    if (foot) foot.style.background = "";
-  };
+function onPointerMove(e) {
+  const p = state.pan;
+  if (p && p.id === e.pointerId) {
+    p.zoom.zoom.x = p.ox + (e.clientX - p.px);
+    p.zoom.zoom.y = p.oy + (e.clientY - p.py);
+    // Clamped on every move, or the photo could be dragged clean off the card.
+    p.zoom.clampPan();
+    if (Math.abs(e.clientX - p.px) > 4 || Math.abs(e.clientY - p.py) > 4) state.dragged = true;
+    p.zoom.apply();
+    return;
+  }
 
-  const onDown = (e) => {
-    if (state.busy || !state.card || e.button !== 0) return;
+  const d = state.drag;
+  if (!d || d.id !== e.pointerId) return;
+  // The card can stop being the top card under the pointer (an undo or a
+  // jump re-rendered the deck); then there is nothing left to move.
+  if (d.card !== topCard()) return;
+  d.dx = e.clientX - d.x;
+  d.dy = e.clientY - d.y;
+  if (Math.abs(d.dx) > 6 || Math.abs(d.dy) > 6) state.dragged = true;
 
-    // A zoomed card pans with the drag instead of swiping, so the user cannot
-    // accidentally decide a photo they were inspecting closely.
-    if (state.cardZoom?.panning()) {
-      const z = state.cardZoom.zoom;
-      state.pan = { id: e.pointerId, px: e.clientX, py: e.clientY, ox: z.x, oy: z.y };
-      state.dragged = false;
-      capture(cardEl, e.pointerId);
-      return;
-    }
+  const v = gestureVisual(d.dx, d.dy, GESTURE_THRESHOLD);
+  const dist = Math.hypot(d.dx, d.dy);
+  const shrink = 1 - Math.min(SHRINK_MAX, (dist / SHRINK_REACH) * SHRINK_MAX);
+  const card = d.card;
+  card.classList.add("dragging");
+  card.style.translate = `${d.dx}px ${d.dy}px`;
+  card.style.rotate = `${dragTilt(d.dx, d.low)}deg`;
+  card.style.scale = String(shrink);
+  // Paint while a decision is implied, and once more to clear it on the way back.
+  if (v.action || card.dataset.armed) paintIntent(card, v.action, v.progress);
 
-    state.dragged = false;
-    state.pan = null;
-    state.drag = {
-      id: e.pointerId,
-      x: e.clientX,
-      y: e.clientY,
-      dx: 0,
-      dy: 0,
-      action: null,
-      active: false,
-    };
-    // The deck tracks the pointer directly, so its transition is suppressed
-    // until the gesture ends and it can glide instead.
-    document.querySelector(".deck")?.classList.add("stacking");
-    capture(cardEl, e.pointerId);
-  };
-
-  const onMove = (e) => {
-    const p = state.pan;
-    if (p && p.id === e.pointerId) {
-      const z = state.cardZoom.zoom;
-      z.x = p.ox + (e.clientX - p.px);
-      z.y = p.oy + (e.clientY - p.py);
-      // Clamped on every move, not just after a zoom: without it the photo
-      // could be dragged clean off the card and the clamp would only bite on
-      // the next wheel tick.
-      state.cardZoom.clampPan();
-      if (Math.abs(e.clientX - p.px) > 4 || Math.abs(e.clientY - p.py) > 4) state.dragged = true;
-      state.cardZoom.apply();
-      return;
-    }
-
-    const d = state.drag;
-    if (!d || d.id !== e.pointerId) return;
-    d.dx = e.clientX - d.x;
-    d.dy = e.clientY - d.y;
-    d.active = true;
-    if (Math.abs(d.dx) > 6 || Math.abs(d.dy) > 6) state.dragged = true;
-
-    const v = gestureVisual(d.dx, d.dy, GESTURE_THRESHOLD);
-    d.action = v.action;
-
-    // The card shrinks as it is dragged away, so it reads as receding rather
-    // than just sliding. Driven by distance, so it keeps shrinking the further
-    // you go, up to SHRINK_MAX.
-    const dist = Math.hypot(d.dx, d.dy);
-    const shrink = 1 - Math.min(SHRINK_MAX, (dist / SHRINK_REACH) * SHRINK_MAX);
-    const angle = (v.vertical ? d.dy : d.dx) * 0.035;
-    cardEl.style.transform =
-      `translate(-50%, -50%) translate(${d.dx}px, ${d.dy}px) rotate(${angle}deg) scale(${shrink})`;
-    cardEl.classList.add("dragging");
-
-    // Tint the card surface (a dedicated layer under the image) and keep the
-    // photo itself mostly untinted, per the requested look.
-    const col = DRAG_RGB[v.action];
-    if (tint) {
-      if (col) {
-        cardEl.classList.add("tinted");
-        tint.style.background = `rgba(${col},1)`;
-        tint.style.opacity = String(v.progress * 0.3);
-      } else {
-        cardEl.classList.remove("tinted");
-        tint.style.opacity = "0";
-      }
-    }
-
-    // The info bar carries the action colour too, in the same fading-scrim
-    // shape as its resting state so it does not read as a separate slab.
-    if (foot) {
-      foot.style.background = col
-        ? `linear-gradient(to top, rgba(${col},${0.2 + v.progress * 0.45}) 0%, rgba(${col},${v.progress * 0.18}) 58%, rgba(${col},0) 100%)`
-        : "";
-    }
-
-    // The deck glides forward as the top card recedes, so the card that will
-    // replace it is already in place instead of snapping into position.
-    for (let i = 1; i < deckCards.length; i++) {
-      const node = deckCards[i];
-      if (!node) continue;
-      const t = 1 - v.progress;
-      node.style.transform =
-        `translate(-50%, -50%) translateY(${DECK_DY[i] * t}px) scale(${1 + (DECK_SCALE[i] - 1) * t})`;
-    }
-
-    // The stamps stay on top of the tint and fill with their colour.
-    const fill = col ? Math.round(v.progress * 34) : 0;
-    for (const [action, node] of Object.entries(stamps)) {
-      if (!node) continue;
-      const on = action === v.action;
-      node.style.opacity = on ? String(0.45 + v.progress * 0.55) : "0";
-      node.style.background = on ? `rgba(${col},${fill / 100})` : "transparent";
-    }
-  };
-
-  const finish = (e) => {
-    if (state.pan && state.pan.id === e.pointerId) {
-      state.pan = null;
-      return;
-    }
-    const d = state.drag;
-    if (!d || d.id !== e.pointerId) return;
-    state.drag = null;
-    clearDragVisuals();
-
-    const action = classifyGesture(d.dx, d.dy, GESTURE_THRESHOLD);
-    if (!action) {
-      cardEl.classList.add("settling");
-      cardEl.style.transform = "";
-      setTimeout(() => cardEl.classList.remove("settling"), 240);
-      // Cancelled: glide the deck back behind the card that stayed.
-      resetStack();
-      return;
-    }
-    const v = exitVector(action, Math.max(900, window.innerWidth));
-    cardEl.style.transition = "transform .3s cubic-bezier(.2,.7,.3,1), opacity .3s";
-    // Shrink further as it exits, so the card dissolves away rather than
-    // flying off at full size.
-    cardEl.style.transform =
-      `translate(-50%, -50%) translate(${v.x}px, ${v.y}px) rotate(${v.x * 0.02}deg) scale(.72)`;
-    cardEl.style.opacity = "0";
-    // Hold the decision until the exit animation finishes, so the card
-    // animates away instead of vanishing. `animating` blocks a second
-    // decision from landing mid-animation.
-    state.animating = true;
-    state.entering = false;
-    setTimeout(() => {
-      state.animating = false;
-      decide(action);
-    }, 300);
-  };
-
-  stage.addEventListener("pointerdown", onDown);
-  stage.addEventListener("pointermove", onMove);
-  stage.addEventListener("pointerup", finish);
-  stage.addEventListener("pointercancel", (e) => {
-    const d = state.drag;
-    state.drag = null;
-    state.pan = null;
-    clearDragVisuals();
-    cardEl.style.transform = "";
-    resetStack();
-    if (d) state.dragged = false;
+  // The deck glides forward as the top card recedes, so the card that will
+  // replace it is already in place instead of snapping there.
+  const t = 1 - v.progress;
+  d.behind.forEach((node) => {
+    const slot = node.classList.contains("deck-1") ? 1 : 2;
+    node.style.setProperty("--deck-dy", `${DECK_SLOTS[slot].dy * t}px`);
+    node.style.setProperty("--deck-scale", String(1 + (DECK_SLOTS[slot].scale - 1) * t));
   });
-  stage.addEventListener("dragstart", (e) => e.preventDefault());
+}
+
+function onPointerUp(e) {
+  if (state.pan && state.pan.id === e.pointerId) {
+    state.pan = null;
+    return;
+  }
+  const d = state.drag;
+  if (!d || d.id !== e.pointerId) return;
+  state.drag = null;
+  // Only the card the drag started on may be decided by it. If it was decided
+  // or replaced meanwhile, releasing must not decide whatever card is on top
+  // now.
+  if (d.card !== topCard()) {
+    resetStack();
+    return;
+  }
+  const action = classifyGesture(d.dx, d.dy, GESTURE_THRESHOLD);
+  if (!action) {
+    settle(d.card);
+    resetStack();
+    return;
+  }
+  decide(action, { via: "swipe", from: { dx: d.dx, dy: d.dy } }).then((done) => {
+    // Refused (a scan or a commit started): put the card back instead of
+    // leaving it hanging where the drag let go.
+    if (!done && d.card.isConnected && !d.card.classList.contains("leaving")) {
+      settle(d.card);
+      resetStack();
+    }
+  });
+}
+
+function onPointerCancel() {
+  const d = state.drag;
+  state.drag = null;
+  state.pan = null;
+  if (d) {
+    settle(d.card);
+    state.dragged = false;
+  }
+  resetStack();
+}
+
+function onWheel(e) {
+  const card = topCard();
+  if (!card || !card.querySelector(".imgwrap")?.contains(e.target)) return;
+  const zoom = zoomOf(card);
+  if (!zoom) return;
+  e.preventDefault();
+  zoom.zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY);
+}
+
+function onDoubleClick(e) {
+  const card = topCard();
+  if (!card || !card.querySelector(".imgwrap")?.contains(e.target)) return;
+  const zoom = zoomOf(card);
+  if (!zoom) return;
+  e.preventDefault();
+  if (zoom.zoom.scale > 1) zoom.reset();
+  else zoom.zoomBy(2, e.clientX, e.clientY);
+}
+
+function onCardClick(e) {
+  const card = topCard();
+  if (!card || !card.contains(e.target) || state.dragged) return;
+  // A double-click is two clicks; the first must not open the viewer before
+  // the second can zoom. Wait out the double-click interval.
+  clearTimeout(onCardClick.timer);
+  if (e.detail > 1) return;
+  onCardClick.timer = setTimeout(() => {
+    if (topCard() === card && !state.dragged) openShotViewer(state.card, card);
+  }, 230);
+}
+
+// --------------------------------------------------------------------- decide
+
+/**
+ * Records a decision for the current card.
+ *
+ * The card leaves at once and the write runs underneath it. The deck is only
+ * promoted once the write lands, so a failed write can put everything back: the
+ * queue and the pass tally are restored and the card is rendered again.
+ */
+async function decide(action, { via = "key", from = null } = {}) {
+  if (state.view !== "review" || !state.card || state.deciding || state.busy) return false;
+  const shot = state.card;
+  const card = topCard();
+  const before = state.queue.snapshot();
+  const prevInPass = state.pass.record(shot.id, action, shot.size);
+  if (action === ACTION.SKIP) state.queue.deferCurrent();
+  else state.queue.advance();
+
+  state.deciding = true;
+  if (via !== "swipe") flashAction(action);
+  if (card) flyOut(card, action, from);
+
+  let updated;
+  try {
+    updated = await api("decide", { id: shot.id, kind: action });
+  } catch (e) {
+    state.deciding = false;
+    state.queue.restore(before);
+    state.pass.revert(shot.id, prevInPass);
+    log.error("decide", `${action} ${shot.name} could not be saved`, e);
+    toast(`Couldn't save that decision: ${e}`, { tone: "error" });
+    state.card = shot;
+    state.enter = "fade";
+    render();
+    return false;
+  }
+  state.cache.set(updated.id, updated);
+  state.history.push({ id: shot.id, action, prevInPass, pass: state.pass });
+  if (state.history.length > 500) state.history.shift();
+  log.info("decide", `${action} -> ${updated.name} (${updated.status})`);
+
+  if (action === ACTION.DELETE) {
+    flyToPile(card);
+    // The decision is saved; a failed counter refresh must not undo it.
+    refreshCounts().catch((e) => log.warn("decide", `couldn't refresh counts: ${e}`));
+  }
+
+  if (state.queue.atEnd()) {
+    // Nothing is left to decide. Clear the card now and stay `deciding` while
+    // the last card finishes leaving: a key pressed during the exit used to
+    // land on the card that was just decided and decide it a second time.
+    state.card = null;
+    announce(`${SPOKEN[action]}: ${shot.name}. That was the last one.`);
+    await wait(EXIT_MS);
+    state.deciding = false;
+    await finishPass();
+  } else {
+    state.deciding = false;
+    promoteDeck(action);
+    if (state.card) announce(`${SPOKEN[action]}: ${shot.name}. Next, ${state.queue.position()} of ${state.queue.length}: ${state.card.name}`);
+  }
+  return true;
+}
+
+async function finishPass() {
+  try {
+    await loadMonths();
+  } catch (e) {
+    log.warn("review", `couldn't refresh months after the pass: ${e}`);
+  }
+  // An undo while the months were loading brought a card back; leave it.
+  if (state.view === "review" && state.queue.atEnd()) {
+    state.card = null;
+    render();
+  }
+}
+
+/** Where an undone card comes back from: the side it left through. */
+const RETURN_FROM = {
+  [ACTION.DELETE]: "from-left",
+  [ACTION.KEEP]: "from-right",
+  [ACTION.SKIP]: "from-top",
+};
+
+function takeHistory(id) {
+  for (let i = state.history.length - 1; i >= 0; i--) {
+    if (state.history[i].id === id) return state.history.splice(i, 1)[0];
+  }
+  return null;
+}
+
+async function undo() {
+  if (state.deciding || state.busy) return;
+  let shot;
+  try {
+    shot = await api("undo_last");
+  } catch (e) {
+    log.error("undo", "couldn't undo", e);
+    toast(`Couldn't undo: ${e}`, { tone: "error" });
+    return;
+  }
+  if (!shot) {
+    toast("Nothing to undo");
+    return;
+  }
+  state.cache.set(shot.id, shot);
+  const entry = takeHistory(shot.id);
+  if (entry && entry.pass === state.pass && entry.action !== "unstage") state.pass.revert(shot.id, entry.prevInPass);
+  log.info("undo", shot.name);
+
+  try {
+    if (state.view === "review") {
+      // Seek by id, not by stepping the cursor back: a skip was deferred to the
+      // back of the queue. An id from another queue (the undo stack is
+      // session-wide) is not injected into this one.
+      if (state.queue.focusId(shot.id) !== null) {
+        await showCurrent({ enter: RETURN_FROM[entry?.action] || "fade" });
+      } else {
+        log.info("undo", `${shot.name} is not in this queue`);
+        toast(`Undid ${shot.name} (not in this queue)`);
+      }
+    } else if (state.view === "staged") {
+      renderStaged();
+      toast(`Undid: ${shot.name}`);
+    } else {
+      await loadMonths();
+      render();
+      toast(`Undid: ${shot.name}`);
+    }
+    await refreshCounts();
+  } catch (e) {
+    log.warn("undo", `couldn't refresh after undo: ${e}`);
+  }
+}
+
+// --------------------------------------------------------------------- finale
+
+/** "You went through 3 screenshots: kept 2 and marked 1 for deletion (189 KB)." */
+function passSentence(total, c) {
+  if (!total) return "Nothing was decided in this pass.";
+  const parts = [];
+  if (c.keep) parts.push(`kept ${formatCount(c.keep)}`);
+  if (c.delete) parts.push(`marked ${formatCount(c.delete)} for deletion${c.deleteBytes ? ` (${formatBytes(c.deleteBytes)})` : ""}`);
+  if (c.skip) parts.push(`skipped ${formatCount(c.skip)}`);
+  const list = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0];
+  return `You went through ${countOf(total, "screenshot")}: ${list}.`;
+}
+
+function renderFinale() {
+  const c = state.pass.counts();
+  const scope = state.scope || {};
+  const month = scope.scope === "month" ? state.months.find((m) => m.month === scope.month) : null;
+  const next = scope.scope === "month" ? nextMonthWithWork(state.months, scope.month) : null;
+  const staged = state.summary?.staged_all || 0;
+  const reviewedPile = scope.scope === "staged";
+
+  const title = month && progressOf(month).done
+    ? `${scope.label} is sorted`
+    : reviewedPile
+      ? "Checked the deletion pile"
+      : "That's the end of this pass";
+  const actions = [];
+  if (next) {
+    actions.push(h("button", { class: "btn primary lg", id: "fin-next", onclick: () => openQueue("month", next, monthLabel(next)) },
+      `Next: ${monthLabel(next)}`, icon("chevron-right", { size: 16 })));
+  }
+  if (staged && !reviewedPile) {
+    actions.push(h("button", { class: `btn ${next ? "" : "primary lg"}`.trim(), onclick: openStaged },
+      icon("trash", { size: 16 }), `Review ${countOf(staged, "file")} to delete`));
+  }
+  actions.push(h("button", { class: `btn${actions.length ? "" : " primary lg"}`, id: "fin-back", onclick: reviewedPile ? openStaged : backToMonths },
+    reviewedPile ? "Back to the pile" : "Back to the library"));
+
+  el.view.replaceChildren(h("div", { class: "page narrow" },
+    h("section", { class: "finale" },
+      h("div", { class: "fin-badge" }, icon("check", { size: 26 })),
+      h("h1", { text: title }),
+      h("p", { class: "fin-lead", text: passSentence(state.pass.size, c) }),
+      state.pass.size
+        ? h("div", { class: "fin-bar" },
+            segbar({ total: state.pass.size, kept: c.keep, staged: c.delete, skipped: c.skip }, "lg"),
+            legend({ kept: c.keep, staged: c.delete, skipped: c.skip }, ["kept", "staged", "skipped"]))
+        : null,
+      h("div", { class: "fin-actions" }, actions))));
+  // The primary action takes focus, so Enter or Space continues.
+  el.view.querySelector(".fin-actions .btn")?.focus();
+}
+
+// ------------------------------------------------------------------ to delete
+
+async function renderStaged() {
+  const token = ++state.stagedToken;
+  el.view.replaceChildren(h("div", { class: "empty" }, h("span", { class: "busy" })));
+  let rows;
+  try {
+    rows = await api("staged_list");
+  } catch (e) {
+    if (state.view === "staged" && token === state.stagedToken) {
+      el.view.replaceChildren(h("div", { class: "empty" },
+        h("h2", { text: "Couldn't load the deletion pile" }),
+        h("p", { text: String(e) })));
+    }
+    return;
+  }
+  // The user may have left while the list was loading.
+  if (state.view !== "staged" || token !== state.stagedToken) return;
+
+  if (!rows.length) {
+    el.view.replaceChildren(h("div", { class: "page narrow" }, h("div", { class: "empty" },
+      h("div", { class: "empty-glyph ok" }, icon("check", { size: 26 })),
+      h("h2", { text: "Nothing marked for deletion" }),
+      h("p", { text: "Swipe a card left, or press ←, to put it here. Files stay on disk until you move them to the Recycle Bin from this page." }),
+      h("button", { class: "btn primary", onclick: backToMonths }, "Back to the library"))));
+    return;
+  }
+
+  const total = rows.reduce((n, r) => n + (Number(r.size) || 0), 0);
+  el.view.replaceChildren(h("div", { class: "page" },
+    h("section", { class: "pile-head" },
+      h("div", {},
+        h("h1", { text: "Marked for deletion" }),
+        h("p", { class: "pile-sub", text: `${countOf(rows.length, "screenshot")} · ${formatBytes(total)} · still on disk until you move them` })),
+      h("div", { class: "pile-actions" },
+        h("button", { class: "btn", title: "Look at each one as a card before deleting", onclick: () => openQueue("staged", null, "Marked for deletion") },
+          icon("play", { size: 16 }), "Check one by one"),
+        h("button", { class: "btn danger solid", id: "btn-pile-commit", onclick: commit },
+          icon("trash", { size: 16 }), "Move to Recycle Bin"))),
+    h("div", { class: "pile-grid", role: "list" }, rows.map(pileTile))));
+}
+
+function thumb(shot) {
+  if (shot.viewable && !shot.missing) {
+    return h("img", { src: convertFileSrc(shot.path), alt: shot.name, loading: "lazy", decoding: "async", draggable: "false" });
+  }
+  return h("span", { class: "thumb-ext", text: shot.missing ? "MISSING" : shot.ext.toUpperCase() });
+}
+
+function pileTile(shot) {
+  return h("figure", { class: "tile", role: "listitem", dataset: { id: String(shot.id) } },
+    h("button", { class: "tile-photo", title: `Open ${shot.name}`, onclick: () => openShotViewer(shot) }, thumb(shot)),
+    h("figcaption", {},
+      h("span", { class: "tile-name", text: shot.name, title: shot.name }),
+      h("span", { class: "tile-meta", text: `${formatBytes(shot.size)} · ${formatDateTime(shot.taken_ms).slice(0, 10)}` })),
+    h("button", { class: "btn sm tile-putback", title: "Unmark it and return it to the unsorted pile", onclick: (e) => unstageOne(shot.id, e.currentTarget.closest(".tile")) },
+      icon("undo", { size: 14 }), "Put back"));
+}
+
+async function unstageOne(id, tile = null) {
+  if (state.busy) return;
+  try {
+    const shot = await api("unstage", { id });
+    state.cache.set(id, shot);
+    state.history.push({ id, action: "unstage", prevInPass: undefined, pass: null });
+    if (tile && !reducedMotion()) {
+      tile.classList.add("leaving");
+      await wait(220);
+    }
+    await refreshCounts();
+    if (state.view === "staged") renderStaged();
+    toast(`${shot.name} is back in the unsorted pile`, { action: "Undo", onAction: () => undo() });
+  } catch (e) {
+    toast(`Couldn't put it back: ${e}`, { tone: "error" });
+  }
+}
+
+// --------------------------------------------------------------------- commit
+
+/** Previews in the confirm dialog; the grid scrolls and loads lazily. */
+const DELETE_GRID_LIMIT = 300;
+
+function deletePreviewGrid(rows) {
+  const shown = rows.slice(0, DELETE_GRID_LIMIT);
+  const grid = h("div", { class: "del-grid" }, shown.map((shot) =>
+    h("figure", { class: "del-cell", title: `${shot.name} · ${formatBytes(shot.size)}` },
+      h("div", { class: "del-thumb" }, thumb(shot)),
+      h("figcaption", { text: shot.name }))));
+  if (rows.length > shown.length) {
+    grid.append(h("div", { class: "del-more", text: `+${formatCount(rows.length - shown.length)} more` }));
+  }
+  return grid;
+}
+
+async function commit() {
+  if (state.busy) return;
+  const n = state.summary?.staged_all || 0;
+  if (!n) return;
+
+  // Fetch the actual list so the dialog can show previews, not just a count. If
+  // that fails, fall back to the plain confirmation rather than blocking.
+  let rows = null;
+  try {
+    rows = await api("staged_list");
+  } catch (e) {
+    log.warn("commit", `couldn't load staged list for preview: ${e}`);
+  }
+  const count = rows?.length || n;
+  const bytes = rows ? rows.reduce((sum, r) => sum + (Number(r.size) || 0), 0) : state.summary?.bytes_staged_all || 0;
+
+  const ok = await confirmDialog({
+    title: "Move to the Recycle Bin?",
+    message: `${countOf(count, "screenshot")}${bytes ? ` (${formatBytes(bytes)})` : ""} will go to the Recycle Bin. Nothing is deleted permanently: you can restore files from there.`,
+    body: rows?.length ? deletePreviewGrid(rows) : null,
+    confirmLabel: `Move ${countOf(count, "file")}`,
+    confirmIcon: "trash",
+    variant: "danger solid",
+    wide: !!rows?.length,
+  });
+  if (!ok) return;
+
+  state.busy = true;
+  el.commit.disabled = true;
+  el.commit.textContent = "Moving…";
+  document.getElementById("btn-pile-commit")?.setAttribute("disabled", "");
+  log.info("commit", `moving ${count} files to the Recycle Bin`);
+  try {
+    const report = await api("commit_deletes");
+    reportCommit(report);
+    // The files are moved by now; a failed reload must not report otherwise.
+    try {
+      await loadMonths();
+    } catch (e) {
+      log.warn("commit", `couldn't reload the library: ${e}`);
+    }
+    state.busy = false;
+    render();
+  } catch (e) {
+    log.error("commit", "couldn't move files", e);
+    toast(`Couldn't move the files: ${e}`, { tone: "error" });
+  } finally {
+    state.busy = false;
+    el.commit.disabled = false;
+    el.commit.textContent = "Move to Recycle Bin";
+    renderHeader();
+    try {
+      await refreshCounts();
+    } catch (e) {
+      log.warn("commit", `couldn't refresh counts: ${e}`);
+    }
+  }
+}
+
+/**
+ * One toast for the whole commit. There is only one toast on screen, so a
+ * toast per failed file was overwritten by the next one and never seen.
+ */
+function reportCommit(report) {
+  const moved = report?.deleted || 0;
+  const failed = (report?.failed || []).filter((f) => !f.gone);
+  const gone = (report?.failed || []).filter((f) => f.gone).length;
+  for (const f of failed) log.warn("commit", `${f.name}: ${f.error}`);
+  const parts = [];
+  if (moved) parts.push(`Moved ${countOf(moved, "screenshot")} to the Recycle Bin${report.bytes_freed ? `, ${formatBytes(report.bytes_freed)} freed` : ""}`);
+  if (gone) parts.push(`${countOf(gone, "file")} already gone`);
+  if (failed.length) parts.push(`${countOf(failed.length, "file")} couldn't be moved`);
+  log.info("commit", `${moved} moved, ${gone} gone, ${failed.length} failed, ${report?.still_staged || 0} still staged`);
+  if (failed.length) {
+    toast(parts.join(" · "), { tone: "error", ms: 9000, action: "Details", onAction: () => showFailures(failed) });
+  } else {
+    toast(parts.join(" · ") || "Nothing was moved", { tone: moved ? "ok" : "" });
+  }
+}
+
+function showFailures(failed) {
+  modal({
+    title: "Some files couldn't be moved",
+    body: [
+      h("p", { class: "modal-lead", text: "They are still marked for deletion, so you can try again or put them back." }),
+      h("ul", { class: "fail-list" }, failed.map((f) => h("li", {}, h("b", { text: f.name }), h("span", { text: f.error })))),
+    ],
+    actions: [{ label: "Close" }],
+  });
+}
+
+// --------------------------------------------------------------------- folders
+
+async function folderMenu() {
+  if (menuOpen()) {
+    closeMenu();
+    return;
+  }
+  // The per-folder counts change with every decision, so read them fresh.
+  try {
+    await loadRoots();
+  } catch (e) {
+    log.warn("folder", `couldn't refresh folders: ${e}`);
+  }
+  const items = state.roots.map((r) => ({
+    label: basename(r.path) || r.path,
+    sub: r.path,
+    meta: r.total ? `${formatCount(r.pending)} left` : "not scanned",
+    title: `${r.path}\nScanned ${timeAgo(r.last_scan_ms)}`,
+    checked: r.id === state.rootId,
+    icon: r.id === state.rootId ? "check" : "folder",
+    onClick: () => selectRoot(r),
+  }));
+  items.push({ separator: true }, { label: "Add a folder…", icon: "folder-plus", onClick: addFolder });
+  const cur = currentRoot();
+  if (cur) items.push({ label: `Forget “${basename(cur.path) || cur.path}”…`, icon: "close", danger: true, onClick: () => forgetRoot(cur) });
+  openMenu(el.folderBtn, items);
+}
+
+async function addFolder() {
+  if (state.busy || state.scanning) return;
+  let picked;
+  try {
+    picked = await api("pick_folder");
+  } catch (e) {
+    toast(`Couldn't open the folder picker: ${e}`, { tone: "error" });
+    return;
+  }
+  if (!picked) return;
+  log.info("folder", `picked: ${picked}`);
+  await scanFolder(picked);
+}
+
+async function rescan() {
+  const root = currentRoot() || state.roots[0];
+  if (!root) return addFolder();
+  return scanFolder(root.path);
+}
+
+/**
+ * Scans `path` and lands on its library. Scanning is what adds a folder to the
+ * database, so it has to happen before the folder can be selected.
+ */
+async function scanFolder(path) {
+  if (state.busy || state.scanning) return;
+  const known = state.roots.some((r) => r.path === path);
+  const prevView = state.view;
+  state.scanning = path;
+  // A first scan has nothing to show yet; a rescan keeps the library on screen.
+  if (!known || prevView === "setup") state.view = "scanning";
+  render();
+  try {
+    const report = await api("scan_root", { path });
+    await loadRoots();
+    const root = state.roots.find((r) => r.path === path);
+    if (!root) {
+      log.warn("folder", `root not found after scan: ${path}`);
+      toast(`Couldn't add ${path}`, { tone: "error" });
+      state.view = prevView === "scanning" ? "setup" : prevView;
+      return;
+    }
+    state.rootId = root.id;
+    // A rescan keeps the library usable, so the user may have opened a month
+    // meanwhile: refresh the data, but do not pull them out of a review.
+    if (state.view !== "review" && state.view !== "staged") state.view = "months";
+    await loadMonths();
+    log.info("scan", `${path}: ${scanSummary(report)} (${report.elapsed_ms} ms)`);
+    toast(`${basename(path)}: ${scanSummary(report)}`);
+  } catch (e) {
+    log.error("scan", `${path} scan failed`, e);
+    toast(`Scan failed: ${e}`, { tone: "error" });
+    if (state.view === "scanning") state.view = state.roots.length ? "months" : "setup";
+  } finally {
+    state.scanning = null;
+    // A full render would rebuild a review's deck under the user's hands.
+    if (state.view === "review") renderHeader();
+    else render();
+  }
+}
+
+async function selectRoot(root) {
+  if (state.busy || state.scanning) return;
+  state.rootId = root.id;
+  if (!root.total) return scanFolder(root.path);
+  state.view = "months";
+  render();
+  try {
+    await loadMonths();
+  } catch (e) {
+    toast(`Couldn't load ${root.path}: ${e}`, { tone: "error" });
+  }
+  render();
+}
+
+async function forgetRoot(root) {
+  const name = basename(root.path) || root.path;
+  const ok = await confirmDialog({
+    title: `Forget “${name}”?`,
+    message: `Screenshot Sifter stops tracking ${root.path} and forgets what you decided for its ${countOf(root.total, "screenshot")}.${root.staged ? ` ${root.staged === 1 ? "The one marked for deletion is" : `The ${formatCount(root.staged)} marked for deletion are`} unmarked.` : ""} No files are touched, and you can add the folder again at any time.`,
+    confirmLabel: "Forget folder",
+  });
+  if (!ok) return;
+  try {
+    await api("forget_root", { rootId: root.id });
+    log.info("folder", `forgot ${root.path}`);
+    await loadRoots();
+    const nextRoot = state.roots.find((r) => r.total > 0) || state.roots[0] || null;
+    state.rootId = nextRoot?.id ?? null;
+    if (nextRoot) {
+      state.view = "months";
+      await loadMonths();
+    } else {
+      state.view = "setup";
+      state.summary = null;
+      state.months = [];
+    }
+    render();
+    toast(`Forgot ${name}`);
+  } catch (e) {
+    toast(`Couldn't forget that folder: ${e}`, { tone: "error" });
+  }
+}
+
+// ------------------------------------------------------------------- dialogs
+
+/** Opens the file log in a modal, for diagnosing without DevTools. */
+async function showLog() {
+  log.info("log", "opening log");
+  let text;
+  try {
+    text = await api("log_read", { maxLines: 500 });
+  } catch (e) {
+    text = `Couldn't read the log: ${e}`;
+  }
+  const where = state.info?.log_path ? h("p", { class: "modal-lead", text: state.info.log_path }) : null;
+  modal({
+    title: "Log",
+    wide: true,
+    body: [where, h("pre", { class: "logview", text: text || "(the log is empty)" })],
+    actions: [{ label: "Close" }],
+  });
+  const pre = document.querySelector(".logview");
+  if (pre) pre.scrollTop = pre.scrollHeight;
+}
+
+function showShortcuts() {
+  const row = (keys, what) => h("div", { class: "keys-row" },
+    h("span", { class: "keys" }, keys.map((k) => kbd(k))),
+    h("span", { text: what }));
+  const group = (title, ...rows) => h("div", { class: "keys-group" }, h("h3", { text: title }), rows);
+  modal({
+    title: "Keyboard shortcuts",
+    cls: "keys-sheet",
+    body: [
+      group("Sorting",
+        row(["←"], "Mark for deletion"),
+        row(["→"], "Keep"),
+        row(["↑"], "Skip for now (comes back once, at the end)"),
+        row(["Z"], "Undo the last decision"),
+        row(["Ctrl", "Z"], "Undo, from any page")),
+      group("Looking closer",
+        row(["Space"], "Open full screen"),
+        row(["+", "−"], "Zoom the card"),
+        row(["0"], "Back to 100%"),
+        row(["Esc"], "Close full screen")),
+      group("Troubleshooting",
+        row(["F12"], "Developer tools"),
+        row(["Ctrl", "Shift", "L"], "Show the log")),
+    ],
+    actions: [{ label: "Close" }],
+  });
 }
 
 // ------------------------------------------------------------------ keyboard
@@ -1588,73 +1717,95 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
-  // While the photo viewer is open it owns the keyboard: Esc closes, arrows pan.
-  if (viewer.el) {
-    const pan = 60;
-    switch (e.key) {
-      case "Escape": e.preventDefault(); closeViewer(); break;
-      case "ArrowLeft": e.preventDefault(); viewer.x += pan; applyView(); break;
-      case "ArrowRight": e.preventDefault(); viewer.x -= pan; applyView(); break;
-      case "ArrowUp": e.preventDefault(); viewer.y += pan; applyView(); break;
-      case "ArrowDown": e.preventDefault(); viewer.y -= pan; applyView(); break;
-      case "+": case "=": e.preventDefault(); zoomBy(1.25); break;
-      case "-": case "_": e.preventDefault(); zoomBy(1 / 1.25); break;
-      default: break;
-    }
+  // While the viewer is open it owns the keyboard.
+  if (viewerOpen()) {
+    viewerKeydown(e);
     return;
   }
+  if (menuOpen() || modalOpen()) return;
+  const t = e.target;
+  if (t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName || ""))) return;
 
-  if (!el.modal.hidden) return;
-  const tag = (e.target.tagName || "").toLowerCase();
-  if (tag === "input" || tag === "textarea") return;
-
+  if (e.key === "?") {
+    e.preventDefault();
+    showShortcuts();
+    return;
+  }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
     e.preventDefault();
-    return undo();
-  }
-  if (e.key === "z" || e.key === "Z" || e.key === "Backspace") {
-    if (state.view === "review") {
-      e.preventDefault();
-      return undo();
-    }
+    if (!e.repeat) undo();
     return;
   }
   if (state.view !== "review") return;
+  if (e.key === "z" || e.key === "Z" || e.key === "Backspace") {
+    e.preventDefault();
+    if (!e.repeat) undo();
+    return;
+  }
+  // On the end-of-pass summary the focused button handles Enter and Space.
+  if (!state.card) return;
 
-  // While the current card is zoomed in, the arrows pan the image instead of
-  // deciding the photo. Back to swiping the moment zoom resets.
-  if (state.cardZoom?.panning()) {
+  const zoom = zoomOf(topCard());
+  // While the card is zoomed in, the arrows pan the image instead of deciding.
+  if (zoom?.panning()) {
     const pan = 60;
-    const z = state.cardZoom.zoom;
+    const z = zoom.zoom;
     switch (e.key) {
-      case "ArrowLeft": e.preventDefault(); z.x += pan; state.cardZoom.apply(); break;
-      case "ArrowRight": e.preventDefault(); z.x -= pan; state.cardZoom.apply(); break;
-      case "ArrowUp": e.preventDefault(); z.y += pan; state.cardZoom.apply(); break;
-      case "ArrowDown": e.preventDefault(); z.y -= pan; state.cardZoom.apply(); break;
-      case "0": e.preventDefault(); z.scale = 1; z.x = 0; z.y = 0; state.cardZoom.apply(); break;
+      case "ArrowLeft": z.x += pan; break;
+      case "ArrowRight": z.x -= pan; break;
+      case "ArrowUp": z.y += pan; break;
+      case "ArrowDown": z.y -= pan; break;
+      case "0": zoom.reset(); e.preventDefault(); return;
+      case "+": case "=": zoom.zoomBy(1.25); e.preventDefault(); return;
+      case "-": case "_": zoom.zoomBy(1 / 1.25); e.preventDefault(); return;
+      case " ": e.preventDefault(); openShotViewer(state.card, topCard()); return;
       default: return;
     }
+    e.preventDefault();
+    zoom.clampPan();
+    zoom.apply();
     return;
   }
 
+  // Holding a key down must not machine-gun through the queue: one press, one
+  // decision.
+  const decisionKey = { ArrowLeft: ACTION.DELETE, ArrowRight: ACTION.KEEP, ArrowUp: ACTION.SKIP }[e.key];
+  if (decisionKey) {
+    e.preventDefault();
+    // A key during a drag would decide the card under the pointer, and the
+    // release would then decide the next one with the drag's direction.
+    if (!e.repeat && !state.drag) decide(decisionKey, { via: "key" });
+    return;
+  }
   switch (e.key) {
-    case "ArrowLeft": e.preventDefault(); decide(ACTION.DELETE); break;
-    case "ArrowRight": e.preventDefault(); decide(ACTION.KEEP); break;
-    case "ArrowUp": e.preventDefault(); decide(ACTION.SKIP); break;
     case " ":
-      if (state.queue.atEnd()) { e.preventDefault(); backToMonths(); }
+      e.preventDefault();
+      openShotViewer(state.card, topCard());
       break;
-    default: break;
+    case "+": case "=":
+      e.preventDefault();
+      zoom?.zoomBy(1.25);
+      break;
+    case "-": case "_":
+      e.preventDefault();
+      zoom?.zoomBy(1 / 1.25);
+      break;
+    case "0":
+      zoom?.reset();
+      break;
+    default:
+      break;
   }
 });
 
-// Test hook for the GUI harness, so the folder-pick flow can be driven without
-// a native dialog. Not used in production.
+// Test hooks for the GUI harness, so flows can be driven without a native
+// dialog. Not used in production.
 window.__sifterTest = {
   addFolder,
-  openViewer: () => openViewer(state.card),
+  openViewer: () => openShotViewer(state.card, topCard()),
   closeViewer,
-  resetCardZoom,
+  resetCardZoom: () => zoomOf(topCard())?.reset(),
+  snapshot: () => ({ view: state.view, deciding: state.deciding, cursor: state.queue.cursor, ids: state.queue.ids.slice() }),
   resetToSetup() {
     state.roots = [];
     state.rootId = null;
@@ -1665,48 +1816,45 @@ window.__sifterTest = {
   },
 };
 
-// Warn before closing with staged deletes still waiting.
-window.addEventListener("beforeunload", (e) => {
-  if ((state.summary?.staged_all || 0) > 0 && !state.cleanupDone) {
-    e.preventDefault();
-    e.returnValue = "";
-  }
-});
-
 // --------------------------------------------------------------------- wiring
 
+initModal();
 el.back.addEventListener("click", backToMonths);
-el.folder.addEventListener("click", addFolder);
+el.folderBtn.addEventListener("click", folderMenu);
 el.scan.addEventListener("click", rescan);
 el.commit.addEventListener("click", commit);
-el.undo.addEventListener("click", undo);
-el.stagedBtn.addEventListener("click", () => {
-  state.view = "staged";
-  render();
-});
+el.undo.addEventListener("click", () => undo());
+el.stagedBtn.addEventListener("click", openStaged);
+el.help.addEventListener("click", showShortcuts);
 
 (async function boot() {
-  log.info("boot", `screenshot sifter ${state.info?.app_version ?? ""} starting`);
+  log.info("boot", "starting");
   try {
     state.info = await api("app_info");
-    log.info("app_info", `db ${state.info.db_path} (schema ${state.info.schema_version})`);
+    log.info("app_info", `v${state.info.app_version}, db ${state.info.db_path} (schema ${state.info.schema_version})`);
   } catch (e) {
     log.error("boot", "couldn't open backend", e);
     el.view.replaceChildren(h("div", { class: "empty" },
-      h("h2", { text: "Couldn't open the app backend" }),
-      h("p", { text: String(e) })));
+      h("h2", { text: "Couldn't start the app backend" }),
+      h("p", { text: String(e) }),
+      h("p", { class: "muted", text: "Press Ctrl+Shift+L for the log, or F12 for developer tools." })));
     return;
   }
-  await loadRoots();
-  const active = state.roots.find((r) => r.total > 0) || state.roots[0] || null;
-  if (!active) {
-    log.info("boot", "no saved folders, setup screen");
-    state.view = "setup";
-    render();
-    return;
+  try {
+    await loadRoots();
+    const active = state.roots.find((r) => r.total > 0) || state.roots[0] || null;
+    if (!active) {
+      log.info("boot", "no saved folders, setup screen");
+      state.view = "setup";
+      render();
+      return;
+    }
+    state.rootId = active.id;
+    state.view = "months";
+    await loadMonths();
+  } catch (e) {
+    log.error("boot", "couldn't load the library", e);
+    toast(`Couldn't load the library: ${e}`, { tone: "error" });
   }
-  state.rootId = active.id;
-  state.view = "months";
-  await loadMonths();
   render();
 })();
