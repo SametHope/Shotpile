@@ -1,0 +1,127 @@
+name: Release
+
+# Builds the Windows installer and a portable exe and publishes them as a
+# GitHub release, in either of two ways:
+#
+# - Push a version tag: git tag v1.2.0 && git push origin v1.2.0
+# - Run it by hand from the Actions tab: pick the branch, enter a new tag
+#   (v1.2.0). The branch's head is built, and the release creates the tag on
+#   it.
+#
+# The tag must match the version in src-tauri/tauri.conf.json, so a release can
+# never ship a binary that reports a different version.
+#
+# A branch push that changes this file is a dry run: it builds everything and
+# keeps the files as a run artifact, but publishes nothing, so a broken release
+# pipeline shows up before someone tags a release.
+on:
+  push:
+    tags: ["v*"]
+    branches: ["**"]
+    paths: [".github/workflows/release.yml"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Version tag to create on the chosen branch's head, e.g. v1.2.0
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      DRY_RUN: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
+    steps:
+      # The pushed tag, or the head of the branch the run was started on.
+      - uses: actions/checkout@v4
+
+      - name: Check the tag
+        shell: bash
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          if [ "$DRY_RUN" = true ]; then
+            echo "Dry run on $GITHUB_REF_NAME: builds $version, publishes nothing"
+            exit 0
+          fi
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::$TAG does not match version $version in src-tauri/tauri.conf.json"
+            exit 1
+          fi
+          # A hand-started run creates the tag. If it exists already it must
+          # be this very commit, or the release would pair the tag with
+          # binaries built from something else.
+          existing=$(git ls-remote --tags origin "$TAG" | awk -v t="refs/tags/$TAG" '$2 == t "^{}" { p = $1 } $2 == t { l = $1 } END { print (p ? p : l) }')
+          if [ -n "$existing" ] && [ "$existing" != "$GITHUB_SHA" ]; then
+            echo "::error::$TAG already exists at $existing, not at $GITHUB_SHA; bump the version for a new release"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+
+      # tauri build: the release exe, then the NSIS installer around it.
+      - run: npm run build
+
+      - name: Collect the release files
+        shell: bash
+        run: |
+          # The Cargo package name, unless the CLI named it after the product.
+          exe=src-tauri/target/release/screenshot-sifter.exe
+          [ -f "$exe" ] || exe="src-tauri/target/release/Screenshot Sifter.exe"
+          setup=(src-tauri/target/release/bundle/nsis/*-setup.exe)
+          if [ ! -f "$exe" ] || [ ${#setup[@]} -ne 1 ] || [ ! -f "${setup[0]}" ]; then
+            echo "::error::missing build output; release dir has: $(ls src-tauri/target/release src-tauri/target/release/bundle/nsis)"
+            exit 1
+          fi
+          mkdir release
+          cp "${setup[0]}" "release/Screenshot-Sifter_${VERSION}_x64-setup.exe"
+          cp "$exe" "release/Screenshot-Sifter_${VERSION}_x64-portable.exe"
+          cd release
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Keep the files of a dry run
+        if: env.DRY_RUN == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Screenshot-Sifter-${{ env.VERSION }}-dry-run
+          path: release/
+
+      - name: Publish the release
+        if: env.DRY_RUN != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes=$(cat <<EOF
+          For Windows 10 or 11, 64-bit.
+
+          - **Screenshot-Sifter_${VERSION}_x64-setup.exe** installs the app for your user, with a Start menu entry and an uninstaller.
+          - **Screenshot-Sifter_${VERSION}_x64-portable.exe** runs without installing.
+
+          The files are not code-signed yet, so Windows SmartScreen may say *Windows protected your PC*: choose **More info**, then **Run anyway**. The app needs Microsoft Edge WebView2, which current Windows already has; the installer fetches it if it is missing. \`SHA256SUMS.txt\` has the checksums.
+          EOF
+          )
+          # A rerun replaces the files of a release that already exists.
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" release/* --clobber
+          else
+            # --target creates the tag on this commit when it does not exist.
+            gh release create "$TAG" release/* --target "$GITHUB_SHA" --title "Screenshot Sifter $VERSION" --notes "$notes" --generate-notes
+          fi

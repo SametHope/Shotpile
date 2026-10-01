@@ -1,18 +1,19 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Serialize;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
-use crate::db::{MonthStat, Root, Shot, Summary, STATUS_DELETED, STATUS_PENDING, STATUS_STAGED};
-use crate::scan;
+use crate::db::{
+    Db, MonthStat, Root, Shot, StagedRow, Summary, STATUS_DELETED, STATUS_KEPT, STATUS_PENDING,
+    STATUS_SKIPPED, STATUS_STAGED,
+};
+use crate::scan::{self, CollectStats, ScannedFile};
+use crate::undo::{UndoEntry, UndoStack};
 use crate::{lock, AppState};
 
-#[derive(Debug, Clone)]
-pub struct UndoEntry {
-    pub id: i64,
-    pub prev: String,
-    pub prev_decided_ms: Option<i64>,
-}
+/// A frontend log scope is a short tag such as `decide`. A longer one is a bug
+/// upstream, but it still must not break the one-entry-per-line log.
+const MAX_UI_SCOPE_CHARS: usize = 64;
 
 #[derive(Debug, Serialize)]
 pub struct AppInfo {
@@ -23,6 +24,9 @@ pub struct AppInfo {
     pub app_version: String,
     pub image_exts: Vec<String>,
     pub unviewable_exts: Vec<String>,
+    pub tauri_version: String,
+    pub webview_version: String,
+    pub sqlite_version: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -51,9 +55,32 @@ pub struct FailedItem {
 #[derive(Debug, Serialize)]
 pub struct CommitReport {
     pub deleted: usize,
+    /// Total size of the files moved to the Recycle Bin. A file that was
+    /// already gone freed nothing here, so it is not counted.
+    pub bytes_freed: i64,
     pub failed: Vec<FailedItem>,
     pub still_staged: usize,
 }
+
+/// What the Recycle Bin pass did, before any of it is written back.
+#[derive(Debug, Default)]
+pub struct TrashOutcome {
+    /// Rows whose file is now in the Recycle Bin.
+    pub moved: Vec<StagedRow>,
+    /// Rows whose file could not be moved.
+    pub failed: Vec<FailedItem>,
+}
+
+/// Payload of the `scan-progress` event: images found so far in `path`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScanProgress {
+    pub path: String,
+    pub found: usize,
+}
+
+/// How often `scan_root` reports progress. The walk finds thousands of files a
+/// second on a fast disk; the UI only needs to look alive.
+const PROGRESS_EVERY: std::time::Duration = std::time::Duration::from_millis(120);
 
 #[derive(Debug, Serialize)]
 pub struct MonthThumbs {
@@ -68,23 +95,44 @@ fn tz_offset_min(tz: Option<i64>) -> i64 {
 fn validate_scope(scope: &str) -> Result<&str, String> {
     match scope {
         "month" | "random" | "unreviewed" | "skipped" | "staged" => Ok(scope),
-        other => Err(format!("geçersiz kuyruk: {other}")),
+        other => Err(format!("invalid queue: {other}")),
     }
+}
+
+/// Walks a folder and times it. This is the slow, IO-bound half of a scan and
+/// touches no database state, so `scan_root` can run it on a worker without
+/// holding the lock.
+fn walk(path: &str) -> Result<(Vec<ScannedFile>, CollectStats, u128), String> {
+    walk_with(path, |_| {})
+}
+
+/// `walk`, passing the running count of images found to `progress`.
+fn walk_with(
+    path: &str,
+    progress: impl FnMut(usize),
+) -> Result<(Vec<ScannedFile>, CollectStats, u128), String> {
+    let root = Path::new(path);
+    if !root.is_dir() {
+        return Err(format!("folder not found: {path}"));
+    }
+    let started = std::time::Instant::now();
+    let (files, stats) = scan::collect(root, progress);
+    Ok((files, stats, started.elapsed().as_millis()))
 }
 
 /// Writes a finished directory walk into the database.
 pub fn store_scan(
-    db: &crate::db::Db,
+    db: &Db,
     path: &str,
-    files: Vec<scan::ScannedFile>,
-    stats: scan::CollectStats,
+    files: Vec<ScannedFile>,
+    stats: CollectStats,
     elapsed_ms: u128,
 ) -> Result<ScanReport, String> {
     let unviewable = files.iter().filter(|f| !scan::is_viewable(&f.ext)).count();
     crate::log::debug(
         "scan",
         &format!(
-            "{path}: {} dosya yazılıyor ({unviewable} önizlemesiz)",
+            "{path}: writing {} files ({unviewable} without preview)",
             files.len()
         ),
     );
@@ -109,15 +157,10 @@ pub fn store_scan(
     })
 }
 
-pub fn walk_and_store(db: &crate::db::Db, path: &str) -> Result<ScanReport, String> {
-    let root = PathBuf::from(path);
-    if !root.is_dir() {
-        return Err(format!("klasör bulunamadı: {path}"));
-    }
-    let started = std::time::Instant::now();
-    let (files, stats) = scan::collect(&root);
-    let elapsed = started.elapsed().as_millis();
-    store_scan(db, path, files, stats, elapsed)
+/// A whole scan on the calling thread: what `scan_root` does, minus the worker.
+pub fn walk_and_store(db: &Db, path: &str) -> Result<ScanReport, String> {
+    let (files, stats, elapsed_ms) = walk(path)?;
+    store_scan(db, path, files, stats, elapsed_ms)
 }
 
 #[tauri::command]
@@ -126,7 +169,7 @@ pub fn app_info(state: State<'_, AppState>) -> Result<AppInfo, String> {
     let path = db
         .path()
         .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|| "(bellek içi)".to_string());
+        .unwrap_or_else(|| "(in memory)".to_string());
     let dir = db
         .path()
         .and_then(|p| p.parent())
@@ -147,7 +190,104 @@ pub fn app_info(state: State<'_, AppState>) -> Result<AppInfo, String> {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         image_exts: scan::IMAGE_EXTS.iter().map(|e| e.to_string()).collect(),
         unviewable_exts: unviewable,
+        tauri_version: tauri::VERSION.to_string(),
+        webview_version: tauri::webview_version().unwrap_or_else(|_| "unknown".to_string()),
+        sqlite_version: rusqlite::version().to_string(),
     })
+}
+
+/// Shows a known place in the system file manager: the data folder, the logs
+/// folder, or one screenshot (selected in its folder). The frontend names the
+/// place, never a path, so this cannot be pointed anywhere else.
+#[tauri::command]
+pub fn reveal(state: State<'_, AppState>, target: String, id: Option<i64>) -> Result<(), String> {
+    let path = match target.as_str() {
+        "data" => lock(&state.db)
+            .path()
+            .and_then(|p| p.parent())
+            .map(Path::to_path_buf)
+            .ok_or("the database has no folder")?,
+        "logs" => crate::log::path()
+            .and_then(|p| p.parent().map(Path::to_path_buf))
+            .ok_or("the file log is not open")?,
+        "shot" => {
+            let id = id.ok_or("no screenshot given")?;
+            let shot = lock(&state.db)
+                .shot(id)?
+                .ok_or_else(|| format!("no such screenshot: {id}"))?;
+            std::path::PathBuf::from(shot.path)
+        }
+        other => return Err(format!("unknown place: {other}")),
+    };
+    open_in_file_manager(&path)?;
+    crate::log::info("reveal", &format!("{target}: {}", path.display()));
+    Ok(())
+}
+
+fn open_in_file_manager(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Err(format!("{} no longer exists", path.display()));
+    }
+    let spawned = if cfg!(windows) {
+        let mut cmd = std::process::Command::new("explorer");
+        if path.is_file() {
+            cmd.arg(format!("/select,{}", path.display()));
+        } else {
+            cmd.arg(path);
+        }
+        cmd.spawn()
+    } else {
+        let dir = if path.is_file() {
+            path.parent().unwrap_or(path)
+        } else {
+            path
+        };
+        std::process::Command::new(if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        })
+        .arg(dir)
+        .spawn()
+    };
+    spawned
+        .map(|_| ())
+        .map_err(|e| format!("couldn't open the file manager: {e}"))
+}
+
+/// Shows the main window. It starts hidden (`visible: false` in
+/// tauri.conf.json) so the WebView's blank white never shows; the frontend
+/// calls this once its first view is painted. lib.rs shows it anyway after a
+/// few seconds, in case the page never gets that far.
+#[tauri::command]
+pub fn app_ready(app: tauri::AppHandle) -> Result<(), String> {
+    show_main_window(&app)
+}
+
+pub fn show_main_window(app: &tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    if !window.is_visible().unwrap_or(false) {
+        window
+            .show()
+            .map_err(|e| format!("couldn't show the window: {e}"))?;
+        let _ = window.set_focus();
+    }
+    Ok(())
+}
+
+/// Sets the page zoom of the main window (1.0 is 100%). The frontend keeps the
+/// preference and applies it at start-up and from the zoom shortcuts.
+#[tauri::command]
+pub fn set_zoom(app: tauri::AppHandle, factor: f64) -> Result<(), String> {
+    let factor = factor.clamp(0.5, 2.0);
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    window
+        .set_zoom(factor)
+        .map_err(|e| format!("couldn't set the zoom: {e}"))
 }
 
 /// Returns the tail of the file log, for diagnosing a release build from inside
@@ -158,15 +298,27 @@ pub fn log_read(max_lines: Option<usize>) -> String {
     crate::log::read_tail(n)
 }
 
+/// Appends a frontend entry to the file log, so the UI side of a problem lands
+/// next to the backend side even when DevTools was never open. The `ui:` scope
+/// prefix tells the two apart. Unknown levels log at INFO.
+#[tauri::command]
+pub fn log_write(level: String, scope: String, msg: String) {
+    crate::log::log(
+        crate::log::Level::from_name(&level),
+        &format!("ui:{}", crate::log::one_line(&scope, MAX_UI_SCOPE_CHARS)),
+        &crate::log::one_line(&msg, crate::log::MAX_MSG_CHARS),
+    );
+}
+
 /// Opens the WebView DevTools. Bound to F12 / Ctrl+Shift+I in the frontend, so a
 /// release build can be inspected without a debug build.
 #[tauri::command]
 pub fn open_devtools(app: tauri::AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
-        .ok_or_else(|| "ana pencere bulunamadı".to_string())?;
+        .ok_or_else(|| "main window not found".to_string())?;
     window.open_devtools();
-    crate::log::info("devtools", "açıldı");
+    crate::log::info("devtools", "opened");
     Ok(())
 }
 
@@ -174,43 +326,55 @@ pub fn open_devtools(app: tauri::AppHandle) -> Result<(), String> {
 pub async fn pick_folder() -> Result<Option<String>, String> {
     let picked = tauri::async_runtime::spawn_blocking(|| {
         rfd::FileDialog::new()
-            .set_title("Ekran görüntüleri klasörü")
+            .set_title("Choose a screenshots folder")
             .pick_folder()
             .map(|p| p.to_string_lossy().to_string())
     })
     .await
     .map_err(|e| e.to_string())?;
     match &picked {
-        Some(p) => crate::log::info("pick_folder", &format!("seçildi: {p}")),
-        None => crate::log::info("pick_folder", "iptal edildi"),
+        Some(p) => crate::log::info("pick_folder", &format!("picked: {p}")),
+        None => crate::log::info("pick_folder", "cancelled"),
     }
     Ok(picked)
 }
+
 #[tauri::command]
-pub async fn scan_root(state: State<'_, AppState>, path: String) -> Result<ScanReport, String> {
+pub async fn scan_root(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<ScanReport, String> {
     // The walk is IO-bound, so it runs off the UI thread. The database is not
     // touched until that finishes, which keeps the mutex guard out of the
-    // closure and off the worker thread.
+    // closure and off the worker thread. Meanwhile a throttled `scan-progress`
+    // event tells the UI how far it got, so a big first scan does not look
+    // frozen.
     let walk_path = path.clone();
-    let collected = tauri::async_runtime::spawn_blocking(move || {
-        let root = PathBuf::from(&walk_path);
-        if !root.is_dir() {
-            return Err(format!("klasör bulunamadı: {walk_path}"));
-        }
-        let started = std::time::Instant::now();
-        let (files, stats) = scan::collect(&root);
-        Ok::<_, String>((files, stats, started.elapsed().as_millis()))
+    let (files, stats, elapsed_ms) = tauri::async_runtime::spawn_blocking(move || {
+        let mut last: Option<std::time::Instant> = None;
+        walk_with(&walk_path, |found| {
+            if last.is_some_and(|t| t.elapsed() < PROGRESS_EVERY) {
+                return;
+            }
+            last = Some(std::time::Instant::now());
+            let progress = ScanProgress {
+                path: walk_path.clone(),
+                found,
+            };
+            // Progress is cosmetic: a failed emit must not fail the scan.
+            let _ = app.emit("scan-progress", progress);
+        })
     })
     .await
     .map_err(|e| e.to_string())??;
 
-    let (files, stats, elapsed_ms) = collected;
     let db = lock(&state.db);
     let report = store_scan(&db, &path, files, stats, elapsed_ms)?;
     crate::log::info(
         "scan",
         &format!(
-            "{}: {} dosya ({} yeni, {} güncel, {} önizlemesiz, {} eksik) {} ms",
+            "{}: {} files ({} new, {} refreshed, {} without preview, {} missing) {} ms",
             path,
             report.found,
             report.added,
@@ -226,6 +390,26 @@ pub async fn scan_root(state: State<'_, AppState>, path: String) -> Result<ScanR
 #[tauri::command]
 pub fn list_roots(state: State<'_, AppState>) -> Result<Vec<Root>, String> {
     lock(&state.db).list_roots()
+}
+
+/// The body of `forget_root`, minus the state plumbing.
+pub fn apply_forget_root(db: &Db, undo: &mut UndoStack, root_id: i64) -> Result<(), String> {
+    let ids = db.forget_root(root_id)?;
+    undo.purge(&ids);
+    crate::log::info(
+        "forget_root",
+        &format!("root {root_id}: {} rows forgotten", ids.len()),
+    );
+    Ok(())
+}
+
+/// Removes a saved folder from the app: its rows, decisions and staged entries
+/// leave the database. Nothing on disk is touched, so the folder and every
+/// file in it stay exactly where they are, and scanning it again starts over.
+#[tauri::command]
+pub fn forget_root(state: State<'_, AppState>, root_id: i64) -> Result<(), String> {
+    let db = lock(&state.db);
+    apply_forget_root(&db, &mut lock(&state.undo), root_id)
 }
 
 #[tauri::command]
@@ -281,70 +465,128 @@ pub fn items(state: State<'_, AppState>, ids: Vec<i64>) -> Result<Vec<Shot>, Str
     lock(&state.db).items(&ids)
 }
 
-#[tauri::command]
-pub fn decide(state: State<'_, AppState>, id: i64, kind: String) -> Result<Shot, String> {
-    let status = match kind.as_str() {
-        "keep" => crate::db::STATUS_KEPT,
-        "skip" => crate::db::STATUS_SKIPPED,
+/// The body of `decide`, minus the state plumbing.
+pub fn apply_decision(db: &Db, undo: &mut UndoStack, id: i64, kind: &str) -> Result<Shot, String> {
+    let status = match kind {
+        "keep" => STATUS_KEPT,
+        "skip" => STATUS_SKIPPED,
         "delete" => STATUS_STAGED,
-        other => return Err(format!("geçersiz karar: {other}")),
+        other => return Err(format!("invalid decision: {other}")),
     };
 
-    let db = lock(&state.db);
-    let prev = db
-        .status_of(id)?
-        .ok_or_else(|| format!("kayıt bulunamadı: {id}"))?;
+    let before = db
+        .shot(id)?
+        .ok_or_else(|| format!("no such screenshot: {id}"))?;
+    if before.status == STATUS_DELETED {
+        // Its file is already in the Recycle Bin. A stale card must not turn
+        // the row back into a live one.
+        return Err(format!("{} is already in the Recycle Bin", before.name));
+    }
     db.set_status(id, status, Some(scan::now_ms()))?;
     let shot = db
         .shot(id)?
-        .ok_or_else(|| format!("kayıt bulunamadı: {id}"))?;
-    drop(db);
-
-    let mut undo = lock(&state.undo);
+        .ok_or_else(|| format!("no such screenshot: {id}"))?;
     undo.push(UndoEntry {
         id,
-        prev: prev.0,
-        prev_decided_ms: prev.1,
+        prev: before.status,
+        prev_decided_ms: before.decided_ms,
+        next: status.to_string(),
+        next_decided_ms: None,
     });
-    let limit = state.undo_limit;
-    if undo.len() > limit {
-        let excess = undo.len() - limit;
-        undo.drain(0..excess);
-    }
     crate::log::info("decide", &format!("{id} {} -> {status}", shot.name));
     Ok(shot)
 }
 
 #[tauri::command]
-pub fn undo_last(state: State<'_, AppState>) -> Result<Option<Shot>, String> {
-    let entry = lock(&state.undo).pop();
+pub fn decide(state: State<'_, AppState>, id: i64, kind: String) -> Result<Shot, String> {
+    let db = lock(&state.db);
+    apply_decision(&db, &mut lock(&state.undo), id, &kind)
+}
+
+/// The body of `undo_last`: walks back the most recent action that still
+/// applies. Entries whose row has moved on since (committed, decided again,
+/// forgotten) are dropped on the way, so undo can never bring back a row whose
+/// file is in the Recycle Bin.
+pub fn apply_undo(db: &Db, undo: &mut UndoStack) -> Result<Option<Shot>, String> {
+    let entry = undo.pop_valid(|id| db.status_of(id).map(|row| row.map(|(status, _)| status)))?;
     let Some(entry) = entry else {
         return Ok(None);
     };
-    let db = lock(&state.db);
-    if db.shot(entry.id)?.is_none() {
-        return Ok(None);
-    }
+    let next_decided_ms = db.status_of(entry.id)?.and_then(|(_, ms)| ms);
     db.set_status(entry.id, &entry.prev, entry.prev_decided_ms)?;
-    let shot = db.shot(entry.id)?;
-    crate::log::info("undo", &format!("{} -> {}", entry.id, entry.prev));
-    Ok(shot)
+    crate::log::info(
+        "undo",
+        &format!("{} {} -> {}", entry.id, entry.next, entry.prev),
+    );
+    let id = entry.id;
+    undo.push_redo(entry, next_decided_ms);
+    db.shot(id)
+}
+
+/// The body of `redo_last`: applies the most recently undone action again,
+/// while its row still shows the status the undo restored. A committed row is
+/// never touched.
+pub fn apply_redo(db: &Db, undo: &mut UndoStack) -> Result<Option<Shot>, String> {
+    let entry = undo.pop_redo(|id| db.status_of(id).map(|row| row.map(|(status, _)| status)))?;
+    let Some(entry) = entry else {
+        return Ok(None);
+    };
+    db.set_status(entry.id, &entry.next, entry.next_decided_ms)?;
+    crate::log::info(
+        "redo",
+        &format!("{} {} -> {}", entry.id, entry.prev, entry.next),
+    );
+    let id = entry.id;
+    undo.push_redone(entry);
+    db.shot(id)
+}
+
+#[tauri::command]
+pub fn redo_last(state: State<'_, AppState>) -> Result<Option<Shot>, String> {
+    let db = lock(&state.db);
+    apply_redo(&db, &mut lock(&state.undo))
+}
+
+#[tauri::command]
+pub fn undo_last(state: State<'_, AppState>) -> Result<Option<Shot>, String> {
+    let db = lock(&state.db);
+    apply_undo(&db, &mut lock(&state.undo))
+}
+
+/// The body of `unstage`. Only a staged row changes: a committed one is refused
+/// (its file is in the Recycle Bin), and any other is returned as it is, so a
+/// repeated click is harmless.
+pub fn apply_unstage(db: &Db, undo: &mut UndoStack, id: i64) -> Result<Shot, String> {
+    let before = db
+        .shot(id)?
+        .ok_or_else(|| format!("no such screenshot: {id}"))?;
+    match before.status.as_str() {
+        STATUS_STAGED => {}
+        STATUS_DELETED => {
+            return Err(format!("{} is already in the Recycle Bin", before.name));
+        }
+        _ => return Ok(before),
+    }
+    db.set_status(id, STATUS_PENDING, None)?;
+    undo.push(UndoEntry {
+        id,
+        prev: before.status,
+        prev_decided_ms: before.decided_ms,
+        next: STATUS_PENDING.to_string(),
+        next_decided_ms: None,
+    });
+    crate::log::info(
+        "unstage",
+        &format!("{id} {} -> {STATUS_PENDING}", before.name),
+    );
+    db.shot(id)?
+        .ok_or_else(|| format!("no such screenshot: {id}"))
 }
 
 #[tauri::command]
 pub fn unstage(state: State<'_, AppState>, id: i64) -> Result<Shot, String> {
     let db = lock(&state.db);
-    if db.shot(id)?.is_none() {
-        return Err(format!("kayıt bulunamadı: {id}"));
-    }
-    db.set_status(id, STATUS_PENDING, None)?;
-    let mut undo = lock(&state.undo);
-    undo.push(UndoEntry {
-        id,
-        prev: STATUS_STAGED.to_string(),
-        prev_decided_ms: None,
-    });
-    Ok(db.shot(id)?.expect("checked above"))
+    apply_unstage(&db, &mut lock(&state.undo), id)
 }
 
 #[tauri::command]
@@ -354,73 +596,320 @@ pub fn staged_list(state: State<'_, AppState>) -> Result<Vec<Shot>, String> {
     db.items(&ids)
 }
 
-/// Sends every staged file to the Windows Recycle Bin.
+/// Sends each staged file to the Windows Recycle Bin, one at a time so a single
+/// locked file does not hold back the rest.
 ///
 /// This is the only place files ever leave the disk, and it is never implicit:
-/// a swipe left only marks a row as `staged`.
-#[tauri::command]
-pub async fn commit_deletes(state: State<'_, AppState>) -> Result<CommitReport, String> {
-    // Reading the staged list is a fast query, so it stays on this thread and
-    // only the Recycle Bin calls (which shell out and can block) move to a
-    // worker.
-    let rows = lock(&state.db).staged_rows()?;
-    if rows.is_empty() {
-        return Ok(CommitReport {
-            deleted: 0,
-            failed: Vec::new(),
-            still_staged: 0,
-        });
-    }
-    let outcome = tauri::async_runtime::spawn_blocking(move || {
-        let mut ok_ids: Vec<i64> = Vec::new();
-        let mut failed = Vec::new();
-        for (id, path, name) in rows {
-            match trash::delete(&path) {
-                Ok(()) => ok_ids.push(id),
-                Err(e) => {
-                    crate::log::warn("commit", &format!("{name}: {e}"));
-                    failed.push((id, name, path, e.to_string()));
-                }
+/// a swipe left only marks a row as `staged`. It touches no database state,
+/// which is what lets `commit_deletes` run it on a worker without the lock.
+pub fn trash_staged(rows: Vec<StagedRow>) -> TrashOutcome {
+    let mut outcome = TrashOutcome::default();
+    for row in rows {
+        match trash::delete(&row.path) {
+            Ok(()) => outcome.moved.push(row),
+            Err(e) => {
+                crate::log::warn("commit", &format!("{}: {e}", row.name));
+                outcome.failed.push(FailedItem {
+                    id: row.id,
+                    gone: !Path::new(&row.path).exists(),
+                    name: row.name,
+                    error: e.to_string(),
+                });
             }
         }
-        (ok_ids, failed)
-    })
-    .await
-    .map_err(|e| e.to_string())?;
+    }
+    outcome
+}
 
-    let (ok_ids, raw_failed) = outcome;
-    let db = lock(&state.db);
-    let deleted = ok_ids.len();
-    for id in ok_ids {
-        db.set_status(id, STATUS_DELETED, Some(scan::now_ms()))?;
+/// Writes a Recycle Bin pass back to the database. Moved files become
+/// `deleted`, and so does a file that had already vanished, since there is
+/// nothing left to move. Anything else that failed stays staged so the user
+/// can retry or unstage it.
+pub fn apply_commit(
+    db: &Db,
+    undo: &mut UndoStack,
+    outcome: TrashOutcome,
+) -> Result<CommitReport, String> {
+    let TrashOutcome { moved, failed } = outcome;
+    let gone: Vec<i64> = failed.iter().filter(|f| f.gone).map(|f| f.id).collect();
+    let done: Vec<i64> = moved
+        .iter()
+        .map(|r| r.id)
+        .chain(gone.iter().copied())
+        .collect();
+    // These files are off the disk whether or not the writes below succeed, so
+    // their undo entries go first.
+    undo.purge(&done);
+    let now = scan::now_ms();
+    for &id in &done {
+        db.set_status(id, STATUS_DELETED, Some(now))?;
     }
-    let mut failed = Vec::with_capacity(raw_failed.len());
-    for (id, name, path, error) in raw_failed {
-        // A file that has already vanished counts as done; anything else stays
-        // staged so the user can retry or unstage it.
-        let gone = !Path::new(&path).exists();
-        if gone {
-            db.set_status(id, STATUS_DELETED, Some(scan::now_ms()))?;
-        }
-        failed.push(FailedItem {
-            id,
-            name,
-            error,
-            gone,
-        });
-    }
-    let still_staged = db.staged_rows()?.len();
+
+    let (still_staged, _) = db.staged_totals()?;
+    let report = CommitReport {
+        deleted: moved.len(),
+        bytes_freed: moved.iter().map(|r| r.size).sum(),
+        still_staged: still_staged as usize,
+        failed,
+    };
     crate::log::info(
         "commit",
         &format!(
-            "{deleted} silindi, {} bekliyor, {} başarısız",
-            still_staged,
-            failed.len()
+            "{} moved to the Recycle Bin ({} bytes), {} already gone, {} failed, {} still staged",
+            report.deleted,
+            report.bytes_freed,
+            gone.len(),
+            report.failed.len() - gone.len(),
+            report.still_staged
         ),
     );
-    Ok(CommitReport {
-        deleted,
-        failed,
-        still_staged,
-    })
+    Ok(report)
+}
+
+/// Sends every staged file to the Recycle Bin.
+///
+/// Reading the staged list and writing the results back are fast queries done
+/// under the lock; the Recycle Bin calls in between (which shell out and can
+/// block) run on a worker without it.
+#[tauri::command]
+pub async fn commit_deletes(state: State<'_, AppState>) -> Result<CommitReport, String> {
+    let rows = lock(&state.db).staged_rows()?;
+    let outcome = tauri::async_runtime::spawn_blocking(move || trash_staged(rows))
+        .await
+        .map_err(|e| e.to_string())?;
+    let db = lock(&state.db);
+    apply_commit(&db, &mut lock(&state.undo), outcome)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Three pending shots in root 1, sized 100, 200 and 300 bytes.
+    fn setup() -> (Db, UndoStack) {
+        let db = Db::open_in_memory().expect("in-memory db");
+        let root = db.upsert_root("/photos").unwrap();
+        for i in 1..=3 {
+            db.upsert_shot(
+                root,
+                &format!("/photos/{i}.png"),
+                &format!("{i}.png"),
+                "png",
+                100 * i,
+                1_000 * i,
+                None,
+                None,
+                "filename",
+            )
+            .unwrap();
+        }
+        (db, UndoStack::new(200))
+    }
+
+    fn status(db: &Db, id: i64) -> (String, Option<i64>) {
+        db.status_of(id).unwrap().unwrap()
+    }
+
+    /// What `trash_staged` reports when every staged file moves.
+    fn all_moved(db: &Db) -> TrashOutcome {
+        TrashOutcome {
+            moved: db.staged_rows().unwrap(),
+            failed: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn undo_walks_decisions_back_with_their_times() {
+        let (db, mut undo) = setup();
+        apply_decision(&db, &mut undo, 1, "keep").unwrap();
+        let kept_at = status(&db, 1).1;
+        apply_decision(&db, &mut undo, 1, "skip").unwrap();
+
+        let shot = apply_undo(&db, &mut undo).unwrap().unwrap();
+        assert_eq!(
+            (shot.status.as_str(), shot.decided_ms),
+            (STATUS_KEPT, kept_at)
+        );
+        let shot = apply_undo(&db, &mut undo).unwrap().unwrap();
+        assert_eq!(
+            (shot.status.as_str(), shot.decided_ms),
+            (STATUS_PENDING, None)
+        );
+        assert!(apply_undo(&db, &mut undo).unwrap().is_none());
+    }
+
+    #[test]
+    fn redo_reapplies_an_undone_decision_with_its_time() {
+        let (db, mut undo) = setup();
+        apply_decision(&db, &mut undo, 1, "delete").unwrap();
+        let decided = status(&db, 1);
+        apply_undo(&db, &mut undo).unwrap().unwrap();
+        assert_eq!(status(&db, 1).0, STATUS_PENDING);
+        let shot = apply_redo(&db, &mut undo).unwrap().unwrap();
+        assert_eq!(shot.status, STATUS_STAGED);
+        assert_eq!(status(&db, 1), decided);
+        assert!(apply_redo(&db, &mut undo).unwrap().is_none());
+        // And it can be undone again.
+        apply_undo(&db, &mut undo).unwrap().unwrap();
+        assert_eq!(status(&db, 1).0, STATUS_PENDING);
+    }
+
+    #[test]
+    fn redo_never_touches_a_committed_row() {
+        let (db, mut undo) = setup();
+        apply_decision(&db, &mut undo, 1, "delete").unwrap();
+        apply_undo(&db, &mut undo).unwrap();
+        db.set_status(1, STATUS_DELETED, Some(1)).unwrap();
+        assert!(apply_redo(&db, &mut undo).unwrap().is_none());
+        assert_eq!(status(&db, 1).0, STATUS_DELETED);
+    }
+
+    #[test]
+    fn undoing_an_unstage_restores_the_original_stage_time() {
+        let (db, mut undo) = setup();
+        apply_decision(&db, &mut undo, 2, "delete").unwrap();
+        let staged_at = status(&db, 2).1;
+        assert!(staged_at.is_some());
+
+        let shot = apply_unstage(&db, &mut undo, 2).unwrap();
+        assert_eq!(shot.status, STATUS_PENDING);
+        assert!(db.staged_rows().unwrap().is_empty());
+
+        let shot = apply_undo(&db, &mut undo).unwrap().unwrap();
+        assert_eq!(
+            (shot.status.as_str(), shot.decided_ms),
+            (STATUS_STAGED, staged_at)
+        );
+        assert_eq!(
+            db.staged_rows().unwrap().len(),
+            1,
+            "back on the staged list"
+        );
+    }
+
+    #[test]
+    fn unstage_leaves_a_row_that_is_not_staged_alone() {
+        let (db, mut undo) = setup();
+        apply_decision(&db, &mut undo, 1, "keep").unwrap();
+        let shot = apply_unstage(&db, &mut undo, 1).unwrap();
+        assert_eq!(shot.status, STATUS_KEPT);
+        assert_eq!(undo.len(), 1, "nothing new to undo");
+        assert!(apply_unstage(&db, &mut undo, 999).is_err());
+    }
+
+    #[test]
+    fn undo_after_a_commit_does_not_resurrect_the_row() {
+        let (db, mut undo) = setup();
+        apply_decision(&db, &mut undo, 1, "keep").unwrap();
+        apply_decision(&db, &mut undo, 2, "delete").unwrap();
+        let report = apply_commit(&db, &mut undo, all_moved(&db)).unwrap();
+        assert_eq!(report.deleted, 1);
+        assert_eq!(report.bytes_freed, 200);
+        assert_eq!(report.still_staged, 0);
+
+        // The delete was the newest action, but it is committed: undo walks
+        // back the keep before it instead.
+        assert_eq!(apply_undo(&db, &mut undo).unwrap().unwrap().id, 1);
+        assert!(apply_undo(&db, &mut undo).unwrap().is_none());
+        assert_eq!(status(&db, 2).0, STATUS_DELETED);
+        assert!(db.staged_rows().unwrap().is_empty());
+    }
+
+    #[test]
+    fn undo_refuses_a_committed_row_even_if_its_entry_survived() {
+        // Belt and braces: without the commit's purge, the status check alone
+        // still keeps the row deleted.
+        let (db, mut undo) = setup();
+        apply_decision(&db, &mut undo, 2, "delete").unwrap();
+        db.set_status(2, STATUS_DELETED, Some(1)).unwrap();
+        assert!(apply_undo(&db, &mut undo).unwrap().is_none());
+        assert_eq!(status(&db, 2).0, STATUS_DELETED);
+    }
+
+    #[test]
+    fn a_committed_row_cannot_be_decided_or_unstaged_again() {
+        let (db, mut undo) = setup();
+        apply_decision(&db, &mut undo, 2, "delete").unwrap();
+        apply_commit(&db, &mut undo, all_moved(&db)).unwrap();
+        for kind in ["keep", "skip", "delete"] {
+            assert!(apply_decision(&db, &mut undo, 2, kind).is_err());
+        }
+        assert!(apply_unstage(&db, &mut undo, 2).is_err());
+        assert_eq!(status(&db, 2).0, STATUS_DELETED);
+        assert!(undo.is_empty());
+    }
+
+    #[test]
+    fn commit_settles_gone_files_and_keeps_real_failures_staged() {
+        let (db, mut undo) = setup();
+        for id in 1..=3 {
+            apply_decision(&db, &mut undo, id, "delete").unwrap();
+        }
+        let rows = db.staged_rows().unwrap();
+        let (moved, gone, stuck) = (&rows[0], &rows[1], &rows[2]);
+        let outcome = TrashOutcome {
+            moved: vec![moved.clone()],
+            failed: vec![
+                FailedItem {
+                    id: gone.id,
+                    name: gone.name.clone(),
+                    error: "not found".into(),
+                    gone: true,
+                },
+                FailedItem {
+                    id: stuck.id,
+                    name: stuck.name.clone(),
+                    error: "in use".into(),
+                    gone: false,
+                },
+            ],
+        };
+
+        let report = apply_commit(&db, &mut undo, outcome).unwrap();
+        assert_eq!(report.deleted, 1);
+        assert_eq!(report.bytes_freed, moved.size, "a gone file freed nothing");
+        assert_eq!(report.failed.len(), 2);
+        assert_eq!(report.still_staged, 1);
+        assert_eq!(status(&db, moved.id).0, STATUS_DELETED);
+        assert_eq!(status(&db, gone.id).0, STATUS_DELETED);
+        assert_eq!(status(&db, stuck.id).0, STATUS_STAGED);
+        // Only the file still on disk can be walked back.
+        assert_eq!(apply_undo(&db, &mut undo).unwrap().unwrap().id, stuck.id);
+        assert!(apply_undo(&db, &mut undo).unwrap().is_none());
+    }
+
+    #[test]
+    fn forgetting_a_root_purges_its_undo_entries() {
+        let (db, mut undo) = setup();
+        let other = db.upsert_root("/elsewhere").unwrap();
+        db.upsert_shot(
+            other,
+            "/elsewhere/x.png",
+            "x.png",
+            "png",
+            1,
+            1,
+            None,
+            None,
+            "filename",
+        )
+        .unwrap();
+        let x = db.queue_ids("unreviewed", None, Some(other), 0).unwrap()[0];
+        apply_decision(&db, &mut undo, 1, "delete").unwrap();
+        apply_decision(&db, &mut undo, x, "keep").unwrap();
+
+        apply_forget_root(&db, &mut undo, 1).unwrap();
+        assert_eq!(undo.len(), 1, "only the other root's entry is left");
+        assert_eq!(apply_undo(&db, &mut undo).unwrap().unwrap().id, x);
+        assert!(
+            apply_forget_root(&db, &mut undo, 1).is_err(),
+            "already forgotten"
+        );
+    }
+
+    #[test]
+    fn walking_a_folder_that_does_not_exist_is_a_plain_error() {
+        let err = walk("/definitely/not/a/sifter/folder").unwrap_err();
+        assert!(err.starts_with("folder not found: "), "{err}");
+    }
 }

@@ -105,6 +105,11 @@ pub struct MonthStat {
     pub remaining: i64,
 }
 
+/// Header figures for one root (or every root). Every count and size except
+/// `missing` and the `*_staged_all` pair leaves out rows flagged missing, the
+/// same rows `months` groups, so the header and the month list always agree.
+/// Committed rows are never flagged missing (see `flag_root_missing`), so the
+/// deleted figures keep their history across rescans.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Summary {
     pub total: i64,
@@ -112,14 +117,29 @@ pub struct Summary {
     pub staged: i64,
     /// Staged across every root, because `staged_list` and `commit_deletes`
     /// are global. `staged` is root-filtered and only used for month rows.
+    /// Missing files count here too: the commit still has to settle them.
     pub staged_all: i64,
+    /// Size of everything in `staged_all`.
+    pub bytes_staged_all: i64,
     pub kept: i64,
     pub deleted: i64,
     pub skipped: i64,
+    /// Rows whose file was not found by the last scan of their folder.
     pub missing: i64,
     pub bytes_pending: i64,
     pub bytes_total: i64,
+    /// Size of the files committed to the Recycle Bin: the space already freed.
+    pub bytes_deleted: i64,
     pub months: i64,
+}
+
+/// A staged file, as the commit needs it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StagedRow {
+    pub id: i64,
+    pub path: String,
+    pub name: String,
+    pub size: i64,
 }
 
 const SHOT_COLUMNS: &str = "id, path, root_id, name, ext, size, taken_ms, created_ms, \
@@ -226,7 +246,8 @@ impl Db {
                 .map_err(|e| e.to_string())?;
         } else if current > SCHEMA_VERSION {
             return Err(format!(
-                "bu veritabanı daha yeni bir sürüm ({current}) ile açıldı; uygulamayı güncelleyin"
+                "this database was written by a newer version of the app (schema {current}); \
+                 update the app to open it"
             ));
         } else if current < SCHEMA_VERSION {
             self.conn
@@ -313,12 +334,53 @@ impl Db {
             .map_err(|e| e.to_string())
     }
 
+    /// Forgets a saved folder. Only the root row is deleted; ON DELETE CASCADE
+    /// takes its screenshot rows and their staged entries with it. Database
+    /// only: nothing on disk is touched, and scanning the folder again starts
+    /// it fresh.
+    ///
+    /// Returns the ids of the screenshot rows that went, so the caller can drop
+    /// them from the undo stack.
+    pub fn forget_root(&self, root_id: i64) -> Result<Vec<i64>, String> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| format!("transaction: {e}"))?;
+        let ids = {
+            let mut stmt = tx
+                .prepare("SELECT id FROM screenshots WHERE root_id = ?1")
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![root_id], |r| r.get::<_, i64>(0))
+                .map_err(|e| e.to_string())?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| e.to_string())?
+        };
+        let removed = tx
+            .execute("DELETE FROM roots WHERE id = ?1", params![root_id])
+            .map_err(|e| e.to_string())?;
+        if removed == 0 {
+            return Err(format!("no saved folder with id {root_id}"));
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(ids)
+    }
+
     // ---- scan ----
 
+    /// Flags every row of a root as missing ahead of a rescan, which un-flags
+    /// the files it finds again.
+    ///
+    /// Committed rows are left out. Their file is in the Recycle Bin because
+    /// this app put it there, which is not "missing": flagging them dropped
+    /// them from the deleted counts and the freed-space figure after every
+    /// rescan, and reported the app's own deletes as files missing on disk.
+    /// The same statement clears the flag on committed rows an older version
+    /// set, so existing databases heal on their next scan.
     pub fn flag_root_missing(&self, root_id: i64) -> Result<(), String> {
         self.conn
             .execute(
-                "UPDATE screenshots SET missing = 1 WHERE root_id = ?1 AND missing = 0",
+                "UPDATE screenshots SET missing = (status != 'deleted') WHERE root_id = ?1",
                 params![root_id],
             )
             .map_err(|e| e.to_string())?;
@@ -511,45 +573,46 @@ impl Db {
 
     pub fn summary(&self, root_id: Option<i64>, tz_offset_min: i64) -> Result<Summary, String> {
         let (filter, args) = root_filter(root_id);
+        // `missing = 0` everywhere except the `missing` column itself, and the
+        // month count is the number of groups `months` would return, without
+        // running it.
         let sql = format!(
-            "SELECT COUNT(*),
-                    COALESCE(SUM(status = 'pending'), 0),
-                    COALESCE(SUM(status = 'staged'), 0),
-                    COALESCE(SUM(status = 'kept'), 0),
-                    COALESCE(SUM(status = 'deleted'), 0),
-                    COALESCE(SUM(status = 'skipped'), 0),
+            "SELECT COALESCE(SUM(missing = 0), 0),
+                    COALESCE(SUM(missing = 0 AND status = 'pending'), 0),
+                    COALESCE(SUM(missing = 0 AND status = 'staged'), 0),
+                    COALESCE(SUM(missing = 0 AND status = 'kept'), 0),
+                    COALESCE(SUM(missing = 0 AND status = 'deleted'), 0),
+                    COALESCE(SUM(missing = 0 AND status = 'skipped'), 0),
                     COALESCE(SUM(missing = 1), 0),
-                    COALESCE(SUM(CASE WHEN status = 'pending' THEN size ELSE 0 END), 0),
-                    COALESCE(SUM(size), 0)
+                    COALESCE(SUM(CASE WHEN missing = 0 AND status = 'pending' THEN size ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN missing = 0 THEN size ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN missing = 0 AND status = 'deleted' THEN size ELSE 0 END), 0),
+                    COUNT(DISTINCT CASE WHEN missing = 0 THEN {month} END)
              FROM screenshots
              WHERE 1 = 1{filter}",
+            month = month_expr(tz_offset_min),
         );
+        let (staged_all, bytes_staged_all) = self.staged_totals()?;
         let mut stmt = self.conn.prepare(&sql).map_err(|e| e.to_string())?;
         let refs = to_sql_refs(&args);
-        let s = stmt
-            .query_row(refs.as_slice(), |row| {
-                Ok(Summary {
-                    total: row.get(0)?,
-                    pending: row.get(1)?,
-                    staged: row.get(2)?,
-                    staged_all: 0,
-                    kept: row.get(3)?,
-                    deleted: row.get(4)?,
-                    skipped: row.get(5)?,
-                    missing: row.get(6)?,
-                    bytes_pending: row.get(7)?,
-                    bytes_total: row.get(8)?,
-                    months: 0,
-                })
+        stmt.query_row(refs.as_slice(), |row| {
+            Ok(Summary {
+                total: row.get(0)?,
+                pending: row.get(1)?,
+                staged: row.get(2)?,
+                staged_all,
+                bytes_staged_all,
+                kept: row.get(3)?,
+                deleted: row.get(4)?,
+                skipped: row.get(5)?,
+                missing: row.get(6)?,
+                bytes_pending: row.get(7)?,
+                bytes_total: row.get(8)?,
+                bytes_deleted: row.get(9)?,
+                months: row.get(10)?,
             })
-            .map_err(|e| e.to_string())?;
-        let months = self.months(root_id, tz_offset_min)?.len() as i64;
-        let staged_all = self.staged_rows()?.len() as i64;
-        Ok(Summary {
-            months,
-            staged_all,
-            ..s
         })
+        .map_err(|e| e.to_string())
     }
 
     /// Ids for a review queue, in display order.
@@ -571,6 +634,15 @@ impl Db {
             "staged" => (" AND status = 'staged'", "taken_ms ASC, id ASC"),
             _ => ("", "taken_ms DESC, id DESC"),
         };
+        // A file that vanished from disk has nothing to review, and `months`
+        // already leaves it out. The staged queue keeps it: the commit is what
+        // settles a gone file (it marks it deleted), so it stays visible there
+        // until then.
+        let missing_clause = if scope == "staged" {
+            ""
+        } else {
+            " AND missing = 0"
+        };
         let month_param: Option<&str> = if scope == "month" { month } else { None };
         let month_clause = match month_param {
             Some(_) => format!(" AND {} = ?", month_expr(tz_offset_min)),
@@ -582,7 +654,7 @@ impl Db {
         }
         let sql = format!(
             "SELECT id FROM screenshots
-             WHERE 1 = 1{filter}{month_clause}{status_clause}
+             WHERE 1 = 1{filter}{month_clause}{status_clause}{missing_clause}
              ORDER BY {order}"
         );
         let mut stmt = self.conn.prepare(&sql).map_err(|e| e.to_string())?;
@@ -629,7 +701,7 @@ impl Db {
 
     pub fn set_status(&self, id: i64, status: &str, decided_ms: Option<i64>) -> Result<(), String> {
         if !ALL_STATUSES.contains(&status) {
-            return Err(format!("geçersiz durum: {status}"));
+            return Err(format!("invalid status: {status}"));
         }
         self.conn
             .execute(
@@ -666,21 +738,31 @@ impl Db {
 
     /// Sample image paths per month, newest first, for the month-list preview
     /// strip. `limit` caps how many thumbnails each month contributes.
+    ///
+    /// Only files on disk qualify. A missing row has nothing to show, and a
+    /// committed one is in the Recycle Bin; committed rows are never flagged
+    /// missing, so the status check is what keeps their paths out.
     pub fn month_thumbs(
         &self,
         root_id: Option<i64>,
         tz_offset_min: i64,
         limit: usize,
     ) -> Result<Vec<(String, Vec<String>)>, String> {
-        let (filter, args) = root_filter(root_id);
-        let month_expr = format!(
-            "strftime('%Y-%m', (taken_ms + {}) / 1000, 'unixepoch')",
-            tz_offset_min * 60_000
-        );
+        let (filter, mut args) = root_filter(root_id);
+        args.push(Value::Integer(i64::try_from(limit).unwrap_or(i64::MAX)));
+        // Ranking inside SQL means only `limit` paths per month leave the
+        // database, instead of every path in the root.
         let sql = format!(
-            "SELECT {month_expr} AS m, path FROM screenshots
-             WHERE missing = 0{filter}
-             ORDER BY taken_ms DESC"
+            "SELECT m, path FROM (
+                 SELECT m, path,
+                        ROW_NUMBER() OVER (PARTITION BY m ORDER BY taken_ms DESC, id DESC) AS rn
+                 FROM (SELECT {month} AS m, path, taken_ms, id
+                       FROM screenshots
+                       WHERE missing = 0 AND status != 'deleted'{filter})
+             )
+             WHERE rn <= ?
+             ORDER BY m DESC, rn",
+            month = month_expr(tz_offset_min),
         );
         let mut stmt = self.conn.prepare(&sql).map_err(|e| e.to_string())?;
         let refs = to_sql_refs(&args);
@@ -689,41 +771,54 @@ impl Db {
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
             })
             .map_err(|e| e.to_string())?;
-        let mut order: Vec<String> = Vec::new();
-        let mut map: HashMap<String, Vec<String>> = HashMap::new();
+        // Rows arrive grouped by month, so each one either extends the last
+        // group or starts the next.
+        let mut out: Vec<(String, Vec<String>)> = Vec::new();
         for row in rows {
             let (m, path) = row.map_err(|e| e.to_string())?;
-            if !map.contains_key(&m) {
-                order.push(m.clone());
-            }
-            let entry = map.entry(m).or_default();
-            if entry.len() < limit {
-                entry.push(path);
+            match out.last_mut() {
+                Some((last, paths)) if *last == m => paths.push(path),
+                _ => out.push((m, vec![path])),
             }
         }
-        Ok(order
-            .into_iter()
-            .map(|m| {
-                let paths = map.remove(&m).unwrap_or_default();
-                (m, paths)
-            })
-            .collect())
+        Ok(out)
     }
 
     /// Staged rows joined with their screenshot paths, oldest first.
-    pub fn staged_rows(&self) -> Result<Vec<(i64, String, String)>, String> {
+    pub fn staged_rows(&self) -> Result<Vec<StagedRow>, String> {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT s.id, s.path, s.name FROM staged g
+                "SELECT s.id, s.path, s.name, s.size FROM staged g
                  JOIN screenshots s ON s.id = g.screenshot_id
                  ORDER BY g.staged_ms ASC, s.taken_ms ASC",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_map([], |r| {
+                Ok(StagedRow {
+                    id: r.get(0)?,
+                    path: r.get(1)?,
+                    name: r.get(2)?,
+                    size: r.get(3)?,
+                })
+            })
             .map_err(|e| e.to_string())?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())
+    }
+
+    /// `(count, bytes)` of everything staged, across every root. One aggregate
+    /// over the same join `staged_rows` reads, so the badge counts exactly what
+    /// a commit would process.
+    pub fn staged_totals(&self) -> Result<(i64, i64), String> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(s.size), 0) FROM staged g
+                 JOIN screenshots s ON s.id = g.screenshot_id",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .map_err(|e| e.to_string())
     }
 }
@@ -818,6 +913,34 @@ mod tests {
         let b = db.shot(2).unwrap().unwrap();
         assert!(!a.missing);
         assert!(b.missing);
+    }
+
+    #[test]
+    fn a_rescan_never_flags_committed_files_missing() {
+        let db = db();
+        seed(&db, "/photos/a.png", 1_000);
+        seed(&db, "/photos/b.png", 2_000);
+        seed(&db, "/photos/c.png", 3_000);
+        db.set_status(1, STATUS_DELETED, Some(1)).unwrap();
+        db.set_status(2, STATUS_DELETED, Some(1)).unwrap();
+        // An older version flagged committed rows missing; this one must heal.
+        db.conn
+            .execute("UPDATE screenshots SET missing = 1 WHERE id = 2", [])
+            .unwrap();
+
+        // A rescan that finds only c.png: a and b are in the Recycle Bin.
+        db.flag_root_missing(1).unwrap();
+        seed(&db, "/photos/c.png", 3_000);
+
+        assert!(
+            !db.shot(1).unwrap().unwrap().missing,
+            "committed, not missing"
+        );
+        assert!(!db.shot(2).unwrap().unwrap().missing, "healed");
+        assert_eq!(db.count_missing_in_root(1).unwrap(), 0);
+        let s = db.summary(None, 0).unwrap();
+        assert_eq!(s.deleted, 2, "the freed-space history survives the rescan");
+        assert_eq!(s.bytes_deleted, 200);
     }
 
     #[test]
@@ -1083,6 +1206,216 @@ mod tests {
         assert_eq!(db.summary(Some(a), 0).unwrap().staged_all, 2);
         assert_eq!(db.summary(Some(b), 0).unwrap().staged_all, 2);
         assert_eq!(db.summary(None, 0).unwrap().staged_all, 2);
+        assert_eq!(db.summary(Some(a), 0).unwrap().bytes_staged_all, 200);
+    }
+
+    /// Seeds a row in root 1 with an explicit size and returns its id.
+    fn seed_sized(db: &Db, path: &str, taken_ms: i64, size: i64) -> i64 {
+        db.upsert_shot(
+            1, path, "a.png", "png", size, taken_ms, None, None, "filename",
+        )
+        .unwrap();
+        db.conn
+            .query_row(
+                "SELECT id FROM screenshots WHERE path = ?1",
+                params![path],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    /// What a rescan does to a row whose file it no longer finds.
+    fn mark_missing(db: &Db, id: i64) {
+        db.conn
+            .execute(
+                "UPDATE screenshots SET missing = 1 WHERE id = ?1",
+                params![id],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn queues_leave_out_missing_files_except_the_staged_queue() {
+        let db = db();
+        let jan = 1_768_476_000_000i64;
+        let at = |hour: i64| jan + hour * 3_600_000;
+        let pending_here = seed_sized(&db, "/photos/1.png", at(0), 1);
+        let pending_gone = seed_sized(&db, "/photos/2.png", at(1), 1);
+        let skipped_here = seed_sized(&db, "/photos/3.png", at(2), 1);
+        let skipped_gone = seed_sized(&db, "/photos/4.png", at(3), 1);
+        let staged_here = seed_sized(&db, "/photos/5.png", at(4), 1);
+        let staged_gone = seed_sized(&db, "/photos/6.png", at(5), 1);
+        for id in [skipped_here, skipped_gone] {
+            db.set_status(id, STATUS_SKIPPED, Some(1)).unwrap();
+        }
+        for id in [staged_here, staged_gone] {
+            db.set_status(id, STATUS_STAGED, Some(1)).unwrap();
+        }
+        for id in [pending_gone, skipped_gone, staged_gone] {
+            mark_missing(&db, id);
+        }
+
+        let q = |scope: &str, month: Option<&str>| db.queue_ids(scope, month, None, 0).unwrap();
+        assert_eq!(q("month", Some("2026-01")), vec![pending_here]);
+        assert_eq!(q("unreviewed", None), vec![pending_here]);
+        assert_eq!(q("random", None), vec![pending_here]);
+        assert_eq!(q("skipped", None), vec![skipped_here]);
+        // The commit is what settles a gone file, so it stays listed until then.
+        assert_eq!(q("staged", None), vec![staged_here, staged_gone]);
+        // The month queue now agrees with the month row's own count.
+        let month = &db.months(None, 0).unwrap()[0];
+        assert_eq!(month.remaining, q("month", Some("2026-01")).len() as i64);
+    }
+
+    #[test]
+    fn summary_leaves_missing_files_out_of_everything_but_missing() {
+        let db = db();
+        let jan = 1_768_476_000_000i64;
+        let mar = jan + 60 * 86_400_000;
+        seed_sized(&db, "/photos/1.png", jan, 100); // pending, on disk
+        let pending_gone = seed_sized(&db, "/photos/2.png", jan, 200);
+        let deleted_here = seed_sized(&db, "/photos/3.png", jan, 400);
+        let deleted_gone = seed_sized(&db, "/photos/4.png", jan, 800);
+        let staged_here = seed_sized(&db, "/photos/5.png", jan, 1_600);
+        // March holds only a missing file, so it is not a month the list shows.
+        let staged_gone = seed_sized(&db, "/photos/6.png", mar, 3_200);
+        for id in [deleted_here, deleted_gone] {
+            db.set_status(id, STATUS_DELETED, Some(1)).unwrap();
+        }
+        for id in [staged_here, staged_gone] {
+            db.set_status(id, STATUS_STAGED, Some(1)).unwrap();
+        }
+        for id in [pending_gone, deleted_gone, staged_gone] {
+            mark_missing(&db, id);
+        }
+        // Another root's freed space must not leak into root 1's figures.
+        let other = db.upsert_root("/other").unwrap();
+        db.upsert_shot(
+            other,
+            "/other/x.png",
+            "x.png",
+            "png",
+            10_000,
+            jan,
+            None,
+            None,
+            "filename",
+        )
+        .unwrap();
+        let x = db.queue_ids("unreviewed", None, Some(other), 0).unwrap()[0];
+        db.set_status(x, STATUS_DELETED, Some(1)).unwrap();
+
+        let s = db.summary(Some(1), 0).unwrap();
+        assert_eq!(
+            (s.total, s.pending, s.staged, s.deleted, s.kept, s.skipped),
+            (3, 1, 1, 1, 0, 0)
+        );
+        assert_eq!(s.missing, 3, "missing still counts the missing rows");
+        assert_eq!(s.bytes_total, 100 + 400 + 1_600);
+        assert_eq!(s.bytes_pending, 100);
+        assert_eq!(s.bytes_deleted, 400);
+        // The staged pair is the commit's scope, gone file included.
+        assert_eq!((s.staged_all, s.bytes_staged_all), (2, 1_600 + 3_200));
+        assert_eq!(db.summary(None, 0).unwrap().bytes_deleted, 400 + 10_000);
+
+        // The header and the month list count the same rows.
+        let months = db.months(Some(1), 0).unwrap();
+        assert_eq!(s.months, 1);
+        assert_eq!(s.months, months.len() as i64);
+        assert_eq!(s.total, months.iter().map(|m| m.total).sum::<i64>());
+        assert_eq!(s.pending, months.iter().map(|m| m.remaining).sum::<i64>());
+        assert_eq!(s.staged, months.iter().map(|m| m.staged).sum::<i64>());
+        assert_eq!(s.deleted, months.iter().map(|m| m.deleted).sum::<i64>());
+    }
+
+    #[test]
+    fn month_thumbs_cap_each_month_and_show_only_files_on_disk() {
+        let db = db();
+        let jan = 1_768_476_000_000i64;
+        let mar = jan + 60 * 86_400_000;
+        let at = |hour: i64| jan + hour * 3_600_000;
+        seed(&db, "/photos/old.png", at(0));
+        seed(&db, "/photos/tie-a.png", at(1));
+        seed(&db, "/photos/tie-b.png", at(1)); // same instant, higher id
+        let gone = seed_sized(&db, "/photos/gone.png", at(2), 1);
+        let binned = seed_sized(&db, "/photos/binned.png", at(3), 1);
+        let march = seed_sized(&db, "/photos/march.png", mar, 1);
+        mark_missing(&db, gone);
+        mark_missing(&db, march);
+        // Committed but not rescanned yet: still `missing = 0`, file in the bin.
+        db.set_status(binned, STATUS_DELETED, Some(1)).unwrap();
+
+        let thumbs = db.month_thumbs(None, 0, 2).unwrap();
+        assert_eq!(
+            thumbs,
+            vec![(
+                "2026-01".to_string(),
+                vec![
+                    "/photos/tie-b.png".to_string(),
+                    "/photos/tie-a.png".to_string()
+                ]
+            )],
+            "newest first, ties by id, capped, and no month made only of a missing file"
+        );
+        let uncapped = db.month_thumbs(None, 0, 12).unwrap();
+        assert_eq!(uncapped[0].1.len(), 3);
+        assert!(db.month_thumbs(Some(99), 0, 5).unwrap().is_empty());
+    }
+
+    #[test]
+    fn forget_root_removes_its_rows_and_staged_entries_only() {
+        let db = Db::open_in_memory().expect("in-memory db");
+        let a = db.upsert_root("/a").unwrap();
+        let b = db.upsert_root("/b").unwrap();
+        let fill = |root: i64| -> Vec<i64> {
+            for i in 0..2 {
+                db.upsert_shot(
+                    root,
+                    &format!("/{root}/{i}.png"),
+                    &format!("{i}.png"),
+                    "png",
+                    1,
+                    1_000 + i,
+                    None,
+                    None,
+                    "filename",
+                )
+                .unwrap();
+            }
+            let mut ids = db.queue_ids("unreviewed", None, Some(root), 0).unwrap();
+            db.set_status(ids[0], STATUS_STAGED, Some(1)).unwrap();
+            ids.sort_unstable();
+            ids
+        };
+        let a_ids = fill(a);
+        let b_ids = fill(b);
+
+        let mut gone = db.forget_root(a).unwrap();
+        gone.sort_unstable();
+        assert_eq!(gone, a_ids, "reports exactly the rows that went");
+
+        // /a's rows and its staged entry are gone, with no orphans left...
+        assert!(db.items(&a_ids).unwrap().is_empty());
+        assert_eq!(db.staged_rows().unwrap().len(), 1);
+        assert!(b_ids.contains(&db.staged_rows().unwrap()[0].id));
+        let orphans: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM staged
+                 WHERE screenshot_id NOT IN (SELECT id FROM screenshots)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(orphans, 0);
+        // ...and /b is untouched.
+        let roots = db.list_roots().unwrap();
+        assert_eq!(roots.len(), 1);
+        assert_eq!((roots[0].id, roots[0].total, roots[0].staged), (b, 2, 1));
+        assert_eq!(db.items(&b_ids).unwrap().len(), 2);
+        assert_eq!(db.summary(None, 0).unwrap().staged_all, 1);
+
+        assert!(db.forget_root(a).is_err(), "an unknown root is an error");
     }
 
     #[test]

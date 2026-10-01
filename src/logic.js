@@ -34,15 +34,38 @@ const SHORT_MONTH_NAMES = [
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-/** "2026-09" -> "Eylül 2026". Returns the input unchanged if it is malformed. */
-export function monthLabel(month, { short = false } = {}) {
+/**
+ * "2026-09" -> "September 2026". With `year: false` only the month name is
+ * returned, for lists that already group by year. Malformed input comes back
+ * unchanged.
+ */
+export function monthLabel(month, { short = false, year = true } = {}) {
   const m = /^(\d{4})-(\d{2})$/.exec(String(month ?? ""));
   if (!m) return String(month ?? "");
-  const year = Number(m[1]);
   const index = Number(m[2]) - 1;
   if (index < 0 || index > 11) return String(month);
   const name = (short ? SHORT_MONTH_NAMES : MONTH_NAMES)[index];
-  return `${name} ${year}`;
+  return year ? `${name} ${Number(m[1])}` : name;
+}
+
+/** Pinned to en-US: the UI is English-only, so grouping must not follow the OS. */
+const COUNT_FORMAT = new Intl.NumberFormat("en-US");
+
+/** 1284 -> "1,284". */
+export function formatCount(n) {
+  return COUNT_FORMAT.format(Number(n) || 0);
+}
+
+/**
+ * A number with its noun: `countOf(1, "file")` -> "1 file",
+ * `countOf(1284, "screenshot")` -> "1,284 screenshots".
+ *
+ * Exists because "1 files" kept slipping into the UI wherever a count was
+ * glued to a fixed plural.
+ */
+export function countOf(n, singular, plural = `${singular}s`) {
+  const value = Number(n) || 0;
+  return `${formatCount(value)} ${value === 1 ? singular : plural}`;
 }
 
 /**
@@ -70,9 +93,22 @@ export function gestureVisual(dx, dy, threshold = GESTURE_THRESHOLD) {
   return {
     action,
     progress: Math.min(1, distance / threshold),
-    /** 0 for horizontal, 1 for vertical; drives the rotation angle. */
+    /** 0 for horizontal, 1 for vertical. */
     vertical: Math.abs(dy) > Math.abs(dx) ? 1 : 0,
   };
+}
+
+/**
+ * Tilt of a dragged card, in degrees.
+ *
+ * Only the horizontal offset tilts the card: a skip is a straight lift, and
+ * tilting it by the vertical distance made an upward drag read as a throw to
+ * the side. Grabbing the lower half pivots the other way, the way a physical
+ * card held near its bottom edge would. Clamped so a long drag never spins it.
+ */
+export function dragTilt(dx, grabbedLowerHalf = false, max = 14) {
+  const raw = dx * 0.045 * (grabbedLowerHalf ? -1 : 1);
+  return Math.max(-max, Math.min(max, raw));
 }
 
 /**
@@ -86,10 +122,6 @@ export function gestureVisual(dx, dy, threshold = GESTURE_THRESHOLD) {
  * The point under the cursor has to stay under the cursor, so the offset from
  * the image centre must grow by exactly `k`. Solving for the translate that
  * does that gives `x' = dx - (dx - x) * k`.
- *
- * This is the bug this replaces: the old formula used the raw cursor
- * coordinate as if it were an offset from centre, which pinned every zoom to
- * the bottom-right of the viewport.
  */
 export function anchorZoom(dx, dy, x, y, nextScale, scale) {
   if (scale === nextScale) return { x, y };
@@ -102,9 +134,39 @@ export function clampScale(scale, factor, min = 1, max = MAX_ZOOM) {
   return Math.min(max, Math.max(min, scale * factor));
 }
 
+/**
+ * The size of a photo inside a frame under `object-fit: contain`.
+ *
+ * The image element fills its frame and the photo is letterboxed inside it, so
+ * the element box is not the photo. Pan bounds have to be measured on this.
+ */
+export function containedSize(naturalW, naturalH, frameW, frameH) {
+  if (!naturalW || !naturalH || !frameW || !frameH) return { w: frameW, h: frameH };
+  const k = Math.min(frameW / naturalW, frameH / naturalH);
+  return { w: naturalW * k, h: naturalH * k };
+}
+
+/**
+ * How far a zoomed photo may be panned along one axis.
+ *
+ * Two bounds, and the larger wins:
+ *   - half the content's growth, the most translate a cursor-anchored zoom can
+ *     ever need. Without it the clamp zeroes the anchor on a letterboxed photo,
+ *     where "scaled content minus frame" goes negative.
+ *   - half the leftover frame, so a photo smaller than its frame can still be
+ *     slid around without leaving it.
+ */
+export function panLimit(content, frame, scale) {
+  return Math.max(0, (content * scale - content) / 2, (frame - content * scale) / 2);
+}
+
+/**
+ * "1.5 MB". The space is non-breaking, so a size never wraps between the
+ * number and its unit.
+ */
 export function formatBytes(bytes) {
   const n = Number(bytes) || 0;
-  if (n < 1024) return `${n} B`;
+  if (n < 1024) return `${n}\u00a0B`;
   const units = ["KB", "MB", "GB", "TB"];
   let value = n / 1024;
   let i = 0;
@@ -112,7 +174,7 @@ export function formatBytes(bytes) {
     value /= 1024;
     i += 1;
   }
-  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`;
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)}\u00a0${units[i]}`;
 }
 
 export function formatDateTime(ms) {
@@ -121,6 +183,20 @@ export function formatDateTime(ms) {
   if (Number.isNaN(d.getTime())) return "-";
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** "just now", "5 min ago", "3 hours ago", "2 days ago", then a plain date. */
+export function timeAgo(ms, now = Date.now()) {
+  if (!ms) return "never";
+  const diff = Math.max(0, now - Number(ms));
+  const min = Math.floor(diff / 60_000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min} min ago`;
+  const hours = Math.floor(min / 60);
+  if (hours < 24) return `${countOf(hours, "hour")} ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 14) return `${countOf(days, "day")} ago`;
+  return formatDateTime(ms).slice(0, 10);
 }
 
 export const DATE_SOURCE_LABELS = {
@@ -136,18 +212,88 @@ export function tzOffsetMinutes() {
 }
 
 /**
+ * The folder's own name, for compact labels: "C:\\Users\\me\\Pictures\\" ->
+ * "Pictures". Handles both separators and trailing ones; a bare drive or root
+ * comes back as given.
+ */
+export function basename(path) {
+  const s = String(path ?? "");
+  const parts = s.split(/[\\/]+/).filter(Boolean);
+  if (!parts.length) return s;
+  return parts[parts.length - 1];
+}
+
+/** One-line description of a scan report for a toast. */
+export function scanSummary(report) {
+  if (!report) return "";
+  const bits = [];
+  if (report.added) bits.push(`${formatCount(report.added)} new`);
+  if (report.refreshed) bits.push(`${formatCount(report.refreshed)} already known`);
+  if (!report.added && !report.refreshed) bits.push("no screenshots found");
+  if (report.unviewable) bits.push(`${formatCount(report.unviewable)} without preview`);
+  if (report.missing) bits.push(`${formatCount(report.missing)} missing on disk`);
+  return bits.join(" · ");
+}
+
+/**
+ * Status segments for a stacked progress bar, in a fixed order so bars line up
+ * across rows. Pending is the unfilled remainder and is not a segment.
+ */
+export const SEGMENT_ORDER = ["kept", "staged", "deleted", "skipped"];
+
+export function statusSegments(stat) {
+  const total = Number(stat?.total) || 0;
+  if (!total) return [];
+  return SEGMENT_ORDER
+    .map((key) => ({ key, n: Number(stat?.[key]) || 0 }))
+    .filter((s) => s.n > 0)
+    .map((s) => ({ ...s, ratio: Math.min(1, s.n / total) }));
+}
+
+/** Months as `[{ year, months }]`, preserving the incoming (newest-first) order. */
+export function groupByYear(months) {
+  const out = [];
+  for (const m of months || []) {
+    const year = String(m?.month ?? "").slice(0, 4) || "Undated";
+    let group = out[out.length - 1];
+    if (!group || group.year !== year) {
+      group = { year, months: [] };
+      out.push(group);
+    }
+    group.months.push(m);
+  }
+  return out;
+}
+
+/**
+ * The month to offer after finishing `current`: the next older one that still
+ * has work, else the newest one that does, else null.
+ */
+export function nextMonthWithWork(months, current) {
+  const list = months || [];
+  const at = list.findIndex((m) => m.month === current);
+  const hasWork = (m) => m.month !== current && (Number(m.remaining) || 0) > 0;
+  for (let i = at + 1; i < list.length; i++) if (hasWork(list[i])) return list[i].month;
+  const any = list.find(hasWork);
+  return any ? any.month : null;
+}
+
+/**
  * The review queue: an ordered list of ids with a cursor, plus session-level
  * deferral for skipped items.
  *
  * A skip does not remove the item from view, it moves it to the back of the
  * queue so the same pass can come back to it, while the persisted status
  * ("skipped") keeps it out of the month totals as reviewed.
+ *
+ * Each item is deferred at most once per pass. Skipping an item that already
+ * came back, or skipping the very last item, simply moves on: deferring those
+ * would put the same card straight back on screen, so the Skip button looked
+ * broken and a pass of nothing but skips never ended.
  */
 export class ReviewQueue {
   constructor(ids = []) {
-    this.ids = ids.slice();
-    this.cursor = 0;
-    this.deferred = 0;
+    this.reset(ids);
   }
 
   get length() {
@@ -164,7 +310,7 @@ export class ReviewQueue {
     return this.ids[this.cursor];
   }
 
-  /** Position among all items, 1-based, for "23 / 140" style progress. */
+  /** Position among all items, 1-based, for "23 of 140" style progress. */
   position() {
     if (this.ids.length === 0) return 0;
     return Math.min(this.cursor + 1, this.ids.length);
@@ -175,12 +321,21 @@ export class ReviewQueue {
     return this.current();
   }
 
-  /** Keeps the current item but moves it to the back of the queue. */
+  /**
+   * Moves the current item to the back of the queue, once per pass. Returns
+   * the id that was skipped, or null on an exhausted queue.
+   */
   deferCurrent() {
     const id = this.current();
     if (id === null) return null;
+    const last = this.cursor === this.ids.length - 1;
+    if (last || this.deferredIds.has(id)) {
+      this.advance();
+      return id;
+    }
     this.ids.splice(this.cursor, 1);
     this.ids.push(id);
+    this.deferredIds.add(id);
     this.deferred += 1;
     return id;
   }
@@ -189,23 +344,37 @@ export class ReviewQueue {
    * Points the cursor back at `id`, but only when it is still queued.
    *
    * Undo cannot simply step the cursor back by one: a skipped item was deferred
-   * to the back of the list, so a plain decrement would show the wrong file.
-   * Seeking by id handles that. An id that is not in this queue at all is left
-   * alone rather than injected: the undo stack is session-wide, so it may belong
-   * to another root or month, and re-inserting it would surface a card the user
-   * never asked to see.
+   * to the back of the list. Seeking to it there would also be wrong, because
+   * deciding it would then end the pass and silently jump over every item that
+   * was still waiting in between. So undoing a skip moves the item back to the
+   * cursor, which restores the exact pre-skip order.
+   *
+   * An id that is not in this queue at all is left alone rather than injected:
+   * the undo stack is session-wide, so it may belong to another root or month.
    */
   focusId(id) {
     if (id === null || id === undefined) return null;
     const index = this.ids.indexOf(id);
     if (index === -1) return null;
-    this.cursor = index;
+    if (index >= this.cursor && this.deferredIds.has(id)) {
+      this.ids.splice(index, 1);
+      this.ids.splice(this.cursor, 0, id);
+      this.deferredIds.delete(id);
+      this.deferred = Math.max(0, this.deferred - 1);
+    } else {
+      this.cursor = index;
+    }
     return id;
   }
 
   /** Copy of the queue state, so a failed write can be rolled back. */
   snapshot() {
-    return { ids: this.ids.slice(), cursor: this.cursor, deferred: this.deferred };
+    return {
+      ids: this.ids.slice(),
+      cursor: this.cursor,
+      deferred: this.deferred,
+      deferredIds: [...this.deferredIds],
+    };
   }
 
   /** Restores a `snapshot()`, e.g. when persisting a decision fails. */
@@ -214,6 +383,7 @@ export class ReviewQueue {
     this.ids = snap.ids.slice();
     this.cursor = snap.cursor;
     this.deferred = snap.deferred;
+    this.deferredIds = new Set(snap.deferredIds || []);
   }
 
   atEnd() {
@@ -226,9 +396,55 @@ export class ReviewQueue {
   }
 
   reset(ids) {
-    this.ids = ids.slice();
+    this.ids = (ids || []).slice();
     this.cursor = 0;
     this.deferred = 0;
+    this.deferredIds = new Set();
+  }
+}
+
+/**
+ * Decisions made during one pass through a queue, keyed by id so re-deciding
+ * a file (after jumping back to it) replaces its entry instead of counting it
+ * twice. Feeds the live tally and the end-of-pass summary.
+ */
+export class PassTally {
+  constructor() {
+    this.byId = new Map();
+  }
+
+  /** Records `action` for `id` and returns what it replaced, for undo. */
+  record(id, action, bytes = 0) {
+    const prev = this.byId.get(id);
+    this.byId.set(id, { action, bytes: Number(bytes) || 0 });
+    return prev;
+  }
+
+  /** Puts back what `record()` returned. */
+  revert(id, prev) {
+    if (prev) this.byId.set(id, prev);
+    else this.byId.delete(id);
+  }
+
+  get size() {
+    return this.byId.size;
+  }
+
+  counts() {
+    const out = { keep: 0, delete: 0, skip: 0, deleteBytes: 0 };
+    for (const { action, bytes } of this.byId.values()) {
+      if (action in out) out[action] += 1;
+      if (action === ACTION.DELETE) out.deleteBytes += bytes;
+    }
+    return out;
+  }
+
+  snapshot() {
+    return new Map(this.byId);
+  }
+
+  restore(snap) {
+    this.byId = new Map(snap || []);
   }
 }
 

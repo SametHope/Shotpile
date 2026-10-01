@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!--
+    Screenshot Sifter app icon: a sieve, three narrowing bars with the kept
+    "grains" falling through. The glyph is the in-app brand mark from
+    src/icons.js (`sieve`, a 24-unit grid) scaled 34x around its centre, so the
+    window chrome and the taskbar icon are the same drawing.
+
+    Regenerate every platform size with:
+      npx tauri icon tools/app-icon.svg
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#1d4ed8"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".16"/>
+      <stop offset=".5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <g id="glyph" stroke-linecap="round">
+      <path d="M4.2 6.2h15.6M6.8 10.5h10.4M9.4 14.8h5.2" fill="none" stroke-width="2.2"/>
+      <circle cx="9.3" cy="19.2" r="1.15" stroke="none"/>
+      <circle cx="12" cy="19.2" r="1.15" stroke="none"/>
+      <circle cx="14.7" cy="19.2" r="1.15" stroke="none"/>
+    </g>
+  </defs>
+
+  <rect width="1024" height="1024" rx="232" fill="url(#bg)"/>
+  <rect width="1024" height="1024" rx="232" fill="url(#sheen)"/>
+
+  <!-- A soft drop under the glyph, so it sits on the tile instead of in it. -->
+  <g transform="translate(512 528) scale(34) translate(-12 -12.7)" fill="#0b2a7a" stroke="#0b2a7a" opacity=".28">
+    <use href="#glyph"/>
+  </g>
+  <g transform="translate(512 512) scale(34) translate(-12 -12.7)" fill="#ffffff" stroke="#ffffff">
+    <use href="#glyph"/>
+  </g>
+</svg>

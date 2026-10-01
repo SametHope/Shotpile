@@ -2,18 +2,25 @@ mod commands;
 mod db;
 mod log;
 mod scan;
+mod undo;
 
 use std::sync::{Mutex, MutexGuard};
 
 use db::Db;
 use tauri::Manager;
+use undo::UndoStack;
+
+/// How many actions Ctrl+Z can walk back in one session.
+const UNDO_LIMIT: usize = 200;
 
 pub struct AppState {
     pub db: Mutex<Db>,
     /// Session-only undo stack. Decisions themselves are persisted; only the
     /// ability to walk them back is per-session, which is all Ctrl+Z promises.
-    pub undo: Mutex<Vec<commands::UndoEntry>>,
-    pub undo_limit: usize,
+    ///
+    /// Lock order: `db` first, then `undo`, in every command that holds both,
+    /// so two commands can never deadlock each other.
+    pub undo: Mutex<UndoStack>,
 }
 
 /// Locks without poisoning the app: a panic in one command should not make every
@@ -30,49 +37,46 @@ pub fn open_db_for_tests(path: &std::path::Path) -> Result<Db, String> {
     Db::open(path)
 }
 
+/// An undo stack with the app's limit, standing in for `AppState::undo`.
+#[doc(hidden)]
+pub fn undo_stack_for_tests() -> UndoStack {
+    UndoStack::new(UNDO_LIMIT)
+}
+
 #[doc(hidden)]
 pub fn scan_root_for_tests(db: &Db, path: &str) -> Result<commands::ScanReport, String> {
     commands::walk_and_store(db, path)
 }
 
-/// Mirror of the body of `commands::commit_deletes`, minus the async hop.
 #[doc(hidden)]
-pub fn commit_deletes_for_tests(db: &Db) -> Result<commands::CommitReport, String> {
+pub fn decide_for_tests(
+    db: &Db,
+    undo: &mut UndoStack,
+    id: i64,
+    kind: &str,
+) -> Result<db::Shot, String> {
+    commands::apply_decision(db, undo, id, kind)
+}
+
+#[doc(hidden)]
+pub fn undo_last_for_tests(db: &Db, undo: &mut UndoStack) -> Result<Option<db::Shot>, String> {
+    commands::apply_undo(db, undo)
+}
+
+#[doc(hidden)]
+pub fn forget_root_for_tests(db: &Db, undo: &mut UndoStack, root_id: i64) -> Result<(), String> {
+    commands::apply_forget_root(db, undo, root_id)
+}
+
+/// The same three steps as `commands::commit_deletes`, minus the worker hop.
+#[doc(hidden)]
+pub fn commit_deletes_for_tests(
+    db: &Db,
+    undo: &mut UndoStack,
+) -> Result<commands::CommitReport, String> {
     let rows = db.staged_rows()?;
-    if rows.is_empty() {
-        return Ok(commands::CommitReport {
-            deleted: 0,
-            failed: Vec::new(),
-            still_staged: 0,
-        });
-    }
-    let mut ok_ids: Vec<i64> = Vec::new();
-    let mut failed = Vec::new();
-    for (id, path, name) in rows {
-        match trash::delete(&path) {
-            Ok(()) => ok_ids.push(id),
-            Err(e) => failed.push(commands::FailedItem {
-                id,
-                name,
-                error: e.to_string(),
-                gone: !std::path::Path::new(&path).exists(),
-            }),
-        }
-    }
-    let deleted = ok_ids.len();
-    for id in ok_ids {
-        db.set_status(id, db::STATUS_DELETED, Some(scan::now_ms()))?;
-    }
-    for f in &failed {
-        if f.gone {
-            db.set_status(f.id, db::STATUS_DELETED, Some(scan::now_ms()))?;
-        }
-    }
-    Ok(commands::CommitReport {
-        deleted,
-        still_staged: db.staged_rows()?.len(),
-        failed,
-    })
+    let outcome = commands::trash_staged(rows);
+    commands::apply_commit(db, undo, outcome)
 }
 
 pub fn run() {
@@ -85,6 +89,7 @@ pub fn run() {
                 let _ = std::fs::create_dir_all(parent);
             }
             log::init(&log_path);
+            log::install_panic_hook();
             log::info(
                 "boot",
                 &format!("screenshot sifter {}", env!("CARGO_PKG_VERSION")),
@@ -92,18 +97,24 @@ pub fn run() {
             let db = match Db::open(&dir.join("sifter.db")) {
                 Ok(db) => db,
                 Err(e) => {
-                    log::error("boot", &format!("db açılamadı: {e}"));
+                    log::error("boot", &format!("couldn't open the database: {e}"));
                     return Err(e.into());
                 }
             };
             log::info(
                 "boot",
-                &format!("db açıldı: {}", dir.join("sifter.db").display()),
+                &format!("database opened: {}", dir.join("sifter.db").display()),
             );
+            // The window starts hidden and the page shows it once painted; if
+            // the page never does (a script error, say), show it anyway.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(4));
+                let _ = commands::show_main_window(&handle);
+            });
             app.manage(AppState {
                 db: Mutex::new(db),
-                undo: Mutex::new(Vec::new()),
-                undo_limit: 200,
+                undo: Mutex::new(UndoStack::new(UNDO_LIMIT)),
             });
             Ok(())
         })
@@ -112,6 +123,7 @@ pub fn run() {
             commands::pick_folder,
             commands::scan_root,
             commands::list_roots,
+            commands::forget_root,
             commands::months,
             commands::month_thumbs,
             commands::summary,
@@ -119,12 +131,17 @@ pub fn run() {
             commands::items,
             commands::decide,
             commands::undo_last,
+            commands::redo_last,
             commands::unstage,
             commands::staged_list,
             commands::commit_deletes,
             commands::log_read,
+            commands::log_write,
             commands::open_devtools,
+            commands::reveal,
+            commands::set_zoom,
+            commands::app_ready,
         ])
         .run(tauri::generate_context!())
-        .expect("Screenshot Sifter başlatılamadı");
+        .expect("Screenshot Sifter failed to start");
 }

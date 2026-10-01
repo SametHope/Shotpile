@@ -214,11 +214,14 @@ pub struct CollectStats {
     pub dirs: usize,
 }
 
-/// Walks `root` and returns every image file it can stat.
+/// Walks `root` and returns every image file it can stat, reporting the running
+/// count of images found after each one so a caller can show progress on a big
+/// tree (the callback runs on the walking thread; throttling is the caller's
+/// business).
 ///
 /// Symlinks are not followed, dot-directories are skipped, and a failing stat is
 /// counted rather than aborting the whole scan.
-pub fn collect(root: &Path) -> (Vec<ScannedFile>, CollectStats) {
+pub fn collect(root: &Path, mut progress: impl FnMut(usize)) -> (Vec<ScannedFile>, CollectStats) {
     let mut out = Vec::new();
     let mut stats = CollectStats::default();
 
@@ -279,6 +282,7 @@ pub fn collect(root: &Path) -> (Vec<ScannedFile>, CollectStats) {
             date_source: source.to_string(),
         });
         stats.found += 1;
+        progress(stats.found);
     }
 
     (out, stats)
@@ -410,6 +414,24 @@ mod tests {
     }
 
     #[test]
+    fn collect_reports_a_running_count_of_images() {
+        let dir = std::env::temp_dir().join(format!("sifter-progress-{}", now_ms()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        for name in ["a.png", "b.jpg", "sub/c.webp"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        std::fs::write(dir.join("notes.txt"), b"x").unwrap();
+
+        let mut seen = Vec::new();
+        let (files, stats) = collect(&dir, |n| seen.push(n));
+        assert_eq!(seen, vec![1, 2, 3], "one call per image, counting up");
+        assert_eq!(files.len(), 3);
+        assert_eq!(stats.found, 3);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn collect_finds_images_recursively_and_ignores_others() {
         let dir = std::env::temp_dir().join(format!("sifter-scan-{}", now_ms()));
         let sub = dir.join("2026");
@@ -420,7 +442,7 @@ mod tests {
         std::fs::create_dir_all(dir.join(".git")).unwrap();
         std::fs::write(dir.join(".git").join("hidden.png"), b"x").unwrap();
 
-        let (files, stats) = collect(&dir);
+        let (files, stats) = collect(&dir, |_| {});
         assert_eq!(stats.found, 2);
         assert_eq!(stats.skipped_other, 1);
         let mut names: Vec<&str> = files.iter().map(|f| f.name.as_str()).collect();

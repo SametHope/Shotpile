@@ -3,9 +3,6 @@ node_modules/
 src-tauri/target/
 src-tauri/gen/schemas/
 
-# Generated icon source (regenerate with tools/make-icon.ps1)
-src-tauri/app-icon.png
-
 # Editor / OS
 .vscode/
 .idea/
