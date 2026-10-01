@@ -51,3 +51,10 @@ Nothing is known broken. In rough priority order:
    chronologically. Look at where the summary picks the next month in
    `src/app.js` and add the selection as a pure function in `logic.js` with
    tests (including the library hiding done months).
+8. **Large piles freeze the app.** Committing a big deletion pile gives no
+   feedback and the UI stalls. Plan: a blocking modal with progress (done of
+   total, current file) fed by the commit, which probably means running the
+   trash calls in chunks or emitting progress events from `commit_deletes` and
+   keeping the `apply_*` logic testable. Related: render the month and pile
+   grids in batches (e.g. per animation frame or on scroll) instead of
+   building every tile at once.
