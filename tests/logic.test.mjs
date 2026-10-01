@@ -28,6 +28,7 @@ import {
   formatCount,
   gestureVisual,
   groupByYear,
+  matchesFilename,
   monthLabel,
   nextMonthWithWork,
   panLimit,
@@ -505,4 +506,30 @@ test("resetKeyBindings removes custom bindings from prefs", () => {
   };
   resetKeyBindings(mockPrefs);
   assert.equal(savedPrefs.keyBindings, null, "keyBindings set to null for deletion");
+});
+
+test("matchesFilename filters by substring match, case-insensitive", () => {
+  assert.equal(matchesFilename("screenshot.png", "screenshot"), true);
+  assert.equal(matchesFilename("screenshot.png", "Screenshot"), true);
+  assert.equal(matchesFilename("screenshot.png", "SCREEN"), true);
+  assert.equal(matchesFilename("screenshot.png", "png"), true);
+  assert.equal(matchesFilename("screenshot.png", ".png"), true);
+});
+
+test("matchesFilename returns true for empty filter", () => {
+  assert.equal(matchesFilename("screenshot.png", ""), true);
+  assert.equal(matchesFilename("screenshot.png", null), true);
+  assert.equal(matchesFilename("screenshot.png", "   "), true);
+  assert.equal(matchesFilename("screenshot.png", undefined), true);
+});
+
+test("matchesFilename returns false for non-matching filter", () => {
+  assert.equal(matchesFilename("screenshot.png", "video"), false);
+  assert.equal(matchesFilename("screenshot.png", "xyz"), false);
+  assert.equal(matchesFilename("screenshot.png", "jpg"), false);
+});
+
+test("matchesFilename handles null filename", () => {
+  assert.equal(matchesFilename(null, "test"), false);
+  assert.equal(matchesFilename(null, ""), true);
 });

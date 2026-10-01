@@ -33,6 +33,7 @@ import {
   getKeysForAction,
   gestureVisual,
   groupByYear,
+  matchesFilename,
   monthLabel,
   nextMonthWithWork,
   panLimit,
@@ -114,6 +115,7 @@ const state = {
   stagedToken: 0, // guards the async staged view against a stale paint
   libraryScroll: 0, // where the library was scrolled to, restored on return
   showToken: 0, // the latest showCurrent(); an older one must not paint over it
+  filter: "", // filename filter in review view, narrows the queue display
 };
 
 // ---------------------------------------------------------------- tauri glue
@@ -179,6 +181,46 @@ function paintCounts() {
   el.footbar.classList.toggle("on", staged > 0 && state.view !== "review" && state.view !== "staged");
 }
 
+// --------------------------------------------------------------- batched rendering
+
+/**
+ * Render items in batches over animation frames to avoid freezing the UI.
+ * Takes a container element, an array of items, and a function to render each item.
+ * Items are rendered in chunks of batchSize per frame.
+ */
+function batchRender(container, items, renderItem, batchSize = 100) {
+  if (!items.length) {
+    container.replaceChildren();
+    return;
+  }
+
+  const fragments = [];
+  let i = 0;
+
+  function renderBatch() {
+    const end = Math.min(i + batchSize, items.length);
+    const batch = items.slice(i, end);
+    const frag = new DocumentFragment();
+    for (const item of batch) {
+      frag.appendChild(renderItem(item));
+    }
+    fragments.push(frag);
+    i = end;
+
+    if (i < items.length) {
+      requestAnimationFrame(renderBatch);
+    } else {
+      // All items rendered, add to container
+      container.replaceChildren();
+      for (const frag of fragments) {
+        container.appendChild(frag);
+      }
+    }
+  }
+
+  renderBatch();
+}
+
 // ----------------------------------------------------------------- data load
 
 async function loadRoots() {
@@ -237,8 +279,13 @@ async function openQueue(scope, month = null, label = "") {
   state.cache.clear();
   state.queue = new ReviewQueue(ids);
   state.pass = new PassTally();
+  state.filter = "";
   state.scope = { scope, month, label };
   state.view = "review";
+  state.reviewStartMs = Date.now();
+  await api("incr_counter", { name: "interaction:review_opened", amount: 1 }).catch((e) =>
+    log.warn("review", `couldn't track view: ${e}`)
+  );
   await showCurrent({ enter: "fade" });
 }
 
@@ -277,6 +324,16 @@ function preload() {
 function backToMonths() {
   // Leaving a pass mid-review is fine; decisions are already saved.
   closeViewer();
+  // Track review time in seconds
+  if (state.reviewStartMs !== undefined) {
+    const elapsedSeconds = Math.floor((Date.now() - state.reviewStartMs) / 1000);
+    if (elapsedSeconds > 0) {
+      api("incr_counter", { name: "review:time_seconds", amount: elapsedSeconds }).catch((e) =>
+        log.warn("review", `couldn't track time: ${e}`)
+      );
+    }
+    state.reviewStartMs = undefined;
+  }
   state.view = "months";
   state.card = null;
   render();
@@ -445,6 +502,9 @@ function renderLibrary() {
           : null,
         s.skipped
           ? h("button", { class: "btn", title: "Review the screenshots you skipped", onclick: () => openQueue("skipped", null, "Skipped") }, icon("skip", { size: 16 }), "Skipped", h("span", { class: "btn-count", text: formatCount(s.skipped) }))
+          : null,
+        s.total > 0
+          ? h("button", { class: "btn", title: "Find duplicate files to review and remove", onclick: showDuplicates }, icon("copy", { size: 16 }), "Find duplicates")
           : null)),
     segbar(s, "lg"),
     legend({ ...s, pending }, ["kept", "staged", "deleted", "skipped", "pending"]));
@@ -452,17 +512,49 @@ function renderLibrary() {
   const showDone = prefs.get().showDone;
   const shown = showDone ? state.months : state.months.filter((m) => !progressOf(m).done);
   const hidden = state.months.length - shown.length;
-  const years = groupByYear(shown).map((g) => h("section", { class: "year" },
-    h("h2", { class: "section-label", text: g.year }),
-    h("div", { class: "months" }, g.months.map(monthRow))));
   const hiddenNote = hidden
     ? h("p", { class: "filter-note" },
         `${countOf(hidden, "sorted month")} hidden. `,
         h("button", { class: "linklike", onclick: showFilters }, "Change filter"))
     : null;
 
-  el.view.replaceChildren(h("div", { class: "page" }, overview, years, hiddenNote));
-  el.view.scrollTop = state.libraryScroll;
+  const page = h("div", { class: "page" }, overview, hiddenNote);
+  el.view.replaceChildren(page);
+
+  // Batch render month rows grouped by year to avoid UI freeze on large libraries
+  const years = groupByYear(shown);
+  let monthIndex = 0;
+  const allMonths = shown;
+
+  function renderYearBatch() {
+    const batchSize = 100;
+    const endIndex = Math.min(monthIndex + batchSize, allMonths.length);
+    const batch = allMonths.slice(monthIndex, endIndex);
+
+    for (const m of batch) {
+      const year = String(m?.month ?? "").slice(0, 4) || "Undated";
+      let yearSection = page.querySelector(`.year:has(> h2[data-year="${year}"])`);
+      if (!yearSection) {
+        yearSection = h("section", { class: "year" },
+          h("h2", { class: "section-label", text: year, dataset: { year } }),
+          h("div", { class: "months" }));
+        page.appendChild(yearSection);
+      }
+      const monthsDiv = yearSection.querySelector(".months");
+      if (monthsDiv) {
+        monthsDiv.appendChild(monthRow(m));
+      }
+    }
+
+    monthIndex = endIndex;
+    if (monthIndex < allMonths.length) {
+      requestAnimationFrame(renderYearBatch);
+    } else {
+      el.view.scrollTop = state.libraryScroll;
+    }
+  }
+
+  renderYearBatch();
 }
 
 function monthRow(m) {
@@ -478,6 +570,7 @@ function monthRow(m) {
   return h("button", {
     class: `month${p.done ? " is-done" : ""}`,
     dataset: { month: m.month },
+    tabindex: 0,
     "aria-label": `${label}: ${countOf(p.total, "screenshot")}, ${p.done ? "sorted" : `${formatCount(p.remaining)} left`}`,
     onclick: () => (p.done ? openQueue("kept", m.month, `Kept from ${label}`) : openQueue("month", m.month, label)),
   },
@@ -585,6 +678,35 @@ function reviewHead() {
       chip(ACTION.KEEP, "check", c.keep, "Kept in this pass"),
       chip(ACTION.DELETE, "trash", c.delete, "Marked for deletion in this pass"),
       chip(ACTION.SKIP, "skip", c.skip, "Skipped in this pass")),
+    h("div", { class: "review-filter" },
+      h("input", {
+        id: "filter-input",
+        type: "text",
+        class: "filter-box",
+        placeholder: "Filter by filename",
+        value: state.filter,
+        onkeydown: (e) => {
+          if (e.key === "Escape") {
+            state.filter = "";
+            e.currentTarget.value = "";
+            renderReviewChrome();
+          }
+        },
+        oninput: (e) => {
+          state.filter = e.currentTarget.value;
+          renderReviewChrome();
+        },
+      }),
+      state.filter ? h("button", {
+        class: "btn sm",
+        title: "Clear filter",
+        onclick: () => {
+          state.filter = "";
+          const inp = document.getElementById("filter-input");
+          if (inp) inp.value = "";
+          renderReviewChrome();
+        },
+      }, icon("x", { size: 14 })) : null),
     h("div", { class: "review-bar", "aria-hidden": "true" }, h("i", { id: "review-bar" })));
 }
 
@@ -656,11 +778,14 @@ function paintFilmstrip() {
     if (!shot) missing.push(ids[i]);
     const status = shot?.status || "pending";
     const current = i === q.cursor;
+    const matches = matchesFilename(shot?.name, state.filter);
+    const hidden = state.filter && !matches && !current;
     items.push(h("button", {
-      class: `film-item${current ? " current" : ""}`,
+      class: `film-item${current ? " current" : ""}${hidden ? " hidden" : ""}`,
       dataset: { status, index: String(i), id: String(ids[i]) },
       title: shot ? `${shot.name}${status !== "pending" ? ` — ${STATUS_LABEL[status] || status}` : ""}` : `#${ids[i]}`,
       "aria-current": current ? "true" : null,
+      hidden: hidden ? true : undefined,
       onclick: () => jumpTo(i),
     },
       h("span", { class: "film-thumb" },
@@ -1032,6 +1157,9 @@ function zoomOf(card) {
 
 function openShotViewer(shot, card = null) {
   if (!shot?.viewable || shot.missing) return;
+  api("incr_counter", { name: "interaction:files_viewed", amount: 1 }).catch((e) =>
+    log.warn("viewer", `couldn't track view: ${e}`)
+  );
   openViewer(shot, { src: convertFileSrc(shot.path), inherit: zoomOf(card)?.share() || null });
 }
 
@@ -1303,7 +1431,12 @@ async function decide(action, { via = "key", from = null, saved = null } = {}) {
   let updated;
   try {
     // A redo has already written the decision; only the card has to move.
-    updated = saved || (await api("decide", { id: shot.id, kind: action }));
+    const params = { id: shot.id, kind: action };
+    if (from?.dx !== undefined && from?.dy !== undefined) {
+      params.swipe_dx = from.dx;
+      params.swipe_dy = from.dy;
+    }
+    updated = saved || (await api("decide", params));
   } catch (e) {
     state.deciding = false;
     state.queue.restore(before);
@@ -1540,7 +1673,7 @@ async function renderStaged() {
   }
 
   const total = rows.reduce((n, r) => n + (Number(r.size) || 0), 0);
-  el.view.replaceChildren(h("div", { class: "page" },
+  const page = h("div", { class: "page" },
     h("section", { class: "pile-head" },
       h("div", {},
         h("h1", { text: "Marked for deletion" }),
@@ -1548,9 +1681,34 @@ async function renderStaged() {
       h("div", { class: "pile-actions" },
         h("button", { class: "btn", title: "Look at each one as a card before deleting", onclick: () => openQueue("staged", null, "Marked for deletion") },
           icon("play", { size: 16 }), "Check one by one"),
+        h("button", { class: "btn", title: "Take all of them off the pile at once", onclick: () => restoreAll(rows) },
+          icon("undo", { size: 16 }), "Restore all"),
         h("button", { class: "btn danger solid", id: "btn-pile-commit", onclick: commit },
           icon("trash", { size: 16 }), `Move to ${binName()}`))),
-    h("div", { class: "pile-grid", role: "list" }, rows.map(pileTile))));
+    h("div", { class: "pile-grid", role: "list" }));
+  el.view.replaceChildren(page);
+
+  // Batch render pile tiles to avoid UI freeze on large piles
+  const grid = page.querySelector(".pile-grid");
+  let tileIndex = 0;
+  const batchSize = 100;
+
+  function renderTileBatch() {
+    const endIndex = Math.min(tileIndex + batchSize, rows.length);
+    const batch = rows.slice(tileIndex, endIndex);
+    const frag = new DocumentFragment();
+    for (const row of batch) {
+      frag.appendChild(pileTile(row));
+    }
+    grid.appendChild(frag);
+    tileIndex = endIndex;
+
+    if (tileIndex < rows.length && state.view === "staged" && token === state.stagedToken) {
+      requestAnimationFrame(renderTileBatch);
+    }
+  }
+
+  renderTileBatch();
 }
 
 function thumb(shot) {
@@ -1594,6 +1752,39 @@ async function unstageOne(id, tile = null) {
   }
   if (state.view === "staged") renderStaged();
   toast(`${shot.name} is back in the unsorted pile`, { action: "Undo", onAction: () => undo() });
+}
+
+async function restoreAll(rows) {
+  if (state.busy || !rows.length) return;
+  const n = rows.length;
+  const bytes = rows.reduce((s, r) => s + (Number(r.size) || 0), 0);
+  const ok = await confirmDialog({
+    title: "Restore everything from the pile?",
+    message: `${countOf(n, "screenshot")}${bytes ? ` (${formatBytes(bytes)})` : ""} will go back to the unsorted pile.`,
+    confirmLabel: `Restore ${countOf(n, "file")}`,
+    confirmIcon: "undo",
+  });
+  if (!ok) return;
+
+  state.busy = true;
+  log.info("restore_all", `restoring ${n} files from the pile`);
+  const ids = rows.map((r) => r.id);
+  try {
+    const count = await api("unstage_multiple", { ids });
+    try {
+      await refreshCounts();
+    } catch (e) {
+      log.warn("restore_all", `couldn't refresh counts: ${e}`);
+    }
+    if (state.view === "staged") renderStaged();
+    toast(`Restored ${countOf(count, "screenshot")} to the unsorted pile`, { action: "Undo", onAction: () => undo() });
+  } catch (e) {
+    log.error("restore_all", `couldn't restore files: ${e}`);
+    toast(`Couldn't restore the files: ${e}`, { tone: "error" });
+  } finally {
+    state.busy = false;
+    renderHeader();
+  }
 }
 
 // --------------------------------------------------------------------- commit
@@ -1941,6 +2132,67 @@ function showFilters() {
   });
 }
 
+async function showDuplicates() {
+  if (!state.rootId) {
+    toast("No folder selected", { tone: "error" });
+    return;
+  }
+  log.info("duplicates", "finding duplicates in folder");
+  try {
+    const groups = await api("find_duplicates", { rootId: state.rootId });
+    if (groups.length === 0) {
+      toast("No duplicate files found", { duration: 3000 });
+      return;
+    }
+    const totalDupes = groups.reduce((sum, g) => sum + g.ids.length, 0);
+    const stageOne = async (id) => {
+      try {
+        const shot = await api("decide", { id, kind: "delete" });
+        state.cache.set(id, shot);
+        log.info("duplicates", `staged ${shot.name}`);
+        toast(`${shot.name} staged for deletion`, { duration: 2000 });
+        refreshCounts().catch((e) => log.warn("duplicates", `couldn't refresh counts: ${e}`));
+      } catch (e) {
+        log.error("duplicates", `failed to stage: ${e}`);
+        toast(`Couldn't stage that file: ${e}`, { tone: "error" });
+      }
+    };
+    const groupsBody = groups.map((group) => {
+      const items = group.ids.map((id) => {
+        const shot = state.cache.get(id);
+        if (!shot) return null;
+        return h("div", { class: "dupe-item" },
+          shot.viewable
+            ? h("img", { class: "dupe-thumb", src: convertFileSrc(shot.path), alt: shot.name })
+            : h("div", { class: "dupe-thumb dupe-unviewable", title: "Unviewable file" }, icon("image-off", { size: 20 })),
+          h("div", { class: "dupe-info" },
+            h("div", { class: "dupe-name", title: shot.path, text: shot.name }),
+            h("div", { class: "dupe-size", text: formatBytes(shot.size) })),
+          h("button", {
+            class: "btn sm",
+            title: "Stage this file for deletion",
+            onclick: () => stageOne(id),
+          }, "Stage for deletion"));
+      }).filter(Boolean);
+      return h("div", { class: "dupe-group" },
+        h("div", { class: "dupe-group-header" }, `${group.ids.length} files (${formatBytes(group.size * group.ids.length)} total)`),
+        h("div", { class: "dupe-list" }, ...items));
+    });
+    modal({
+      title: "Duplicate Files",
+      cls: "duplicates-modal",
+      body: h("div", { class: "duplicates-body" },
+        h("p", { class: "dupe-summary", text: `Found ${totalDupes} files in ${groups.length} duplicate group${groups.length !== 1 ? "s" : ""}. Review each group and stage the copies you want to delete.` }),
+        h("div", { class: "dupe-groups" }, ...groupsBody)),
+      actions: [{ label: "Close" }],
+    });
+    log.info("duplicates", `found ${groups.length} groups with ${totalDupes} files`);
+  } catch (e) {
+    log.error("duplicates", `failed to find duplicates: ${e}`);
+    toast(`Couldn't find duplicates: ${e}`, { tone: "error" });
+  }
+}
+
 const THEME_LABEL = { system: "System", light: "Light", dark: "Dark" };
 
 function showOptions() {
@@ -1963,28 +2215,34 @@ function showOptions() {
     h("button", { class: "btn sm", onclick: () => reveal(target) }, icon("folder", { size: 15 }), "Open"));
   const fact = (k, v) => [h("dt", { text: k }), h("dd", { text: v || "unknown" })];
 
+  // Helper to refresh statistics section
+  const refreshStats = () => {
+    api("get_counters").then((groups) => {
+      const counterBody = document.getElementById("stats-body");
+      if (counterBody && groups) {
+        const sections = groups.map((group) =>
+          h("div", { class: "stats-group" },
+            h("div", { class: "stats-header" },
+              h("h4", { text: group.label }),
+              h("button", { class: "btn sm ghost", onclick: () => {
+                api("reset_counters", { group: group.name }).then(() => {
+                  log.info("stats", `Reset ${group.name}`);
+                  refreshStats();
+                }).catch((e) => log.error("stats", `Reset ${group.name} failed: ${e}`));
+              }, title: `Reset ${group.label.toLowerCase()} statistics` }, "Reset")),
+            h("dl", { class: "stats-list" },
+              ...group.counters.map(([name, value]) => {
+                const label = name.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+                const formatted = value > 1000000 ? (value / 1048576).toFixed(2) + " MB" : value > 1000 ? (value / 1024).toFixed(2) + " KB" : String(value);
+                return [h("dt", { text: label }), h("dd", { text: formatted })];
+              }))));
+        counterBody.replaceChildren(...sections);
+      }
+    }).catch((e) => log.warn("stats", `Failed to load counters: ${e}`));
+  };
+
   // Load statistics
-  const counterSections = [];
-  api("get_counters").then((groups) => {
-    const counterBody = document.getElementById("stats-body");
-    if (counterBody && groups) {
-      const sections = groups.map((group) =>
-        h("div", { class: "stats-group" },
-          h("div", { class: "stats-header" },
-            h("h4", { text: group.label }),
-            h("button", { class: "btn sm ghost", onclick: () => {
-              api("reset_counters", { group: group.name }).catch((e) => log.error("stats", `Reset ${group.name} failed: ${e}`));
-              document.location.reload();
-            }, title: `Reset ${group.label.toLowerCase()} statistics` }, "Reset")),
-          h("dl", { class: "stats-list" },
-            ...group.counters.map(([name, value]) => {
-              const label = name.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-              const formatted = value > 1000000 ? (value / 1048576).toFixed(2) + " MB" : value > 1000 ? (value / 1024).toFixed(2) + " KB" : String(value);
-              return [h("dt", { text: label }), h("dd", { text: formatted })];
-            }))));
-      counterBody.replaceChildren(...sections);
-    }
-  }).catch((e) => log.warn("stats", `Failed to load counters: ${e}`));
+  refreshStats();
   // Build shortcuts section by grouping actions
   const keyBindings = getKeyBindings(prefs);
   const shortcutsGroups = {};
@@ -2280,6 +2538,44 @@ document.addEventListener("keydown", (e) => {
     if (!e.repeat) undo();
     return;
   }
+
+  // Library keyboard navigation: arrow keys move focus, Enter opens the focused month
+  if (state.view === "months") {
+    const months = document.querySelectorAll(".month");
+    if (!months.length) return;
+    const focused = document.activeElement;
+    const focusedIndex = Array.from(months).indexOf(focused);
+    let nextIndex = -1;
+
+    if (e.key === "ArrowRight") {
+      e.preventDefault();
+      nextIndex = focusedIndex < 0 ? 0 : Math.min(focusedIndex + 1, months.length - 1);
+    } else if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      nextIndex = focusedIndex < 0 ? months.length - 1 : Math.max(focusedIndex - 1, 0);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      // Move to next month in the visual grid (typically row-wise)
+      nextIndex = focusedIndex < 0 ? 0 : Math.min(focusedIndex + 4, months.length - 1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      // Move to previous month in the visual grid
+      nextIndex = focusedIndex < 0 ? months.length - 1 : Math.max(focusedIndex - 4, 0);
+    } else if (e.key === "Enter" && focusedIndex >= 0) {
+      e.preventDefault();
+      const focusedMonth = months[focusedIndex];
+      focusedMonth.click();
+      return;
+    } else {
+      return;
+    }
+
+    if (nextIndex >= 0) {
+      months[nextIndex].focus();
+    }
+    return;
+  }
+
   if (state.view !== "review") return;
   if (e.key === "z" || e.key === "Z" || e.key === "Backspace") {
     e.preventDefault();
@@ -2435,6 +2731,12 @@ function revealApp() {
   try {
     state.info = await api("app_info");
     log.info("app_info", `v${state.info.app_version}, db ${state.info.db_path} (schema ${state.info.schema_version})`);
+    // Track app launches
+    try {
+      await api("incr_counter", { name: "session:launches", amount: 1 });
+    } catch (e) {
+      log.warn("boot", `couldn't record app launch: ${e}`);
+    }
   } catch (e) {
     log.error("boot", "couldn't open backend", e);
     el.view.replaceChildren(h("div", { class: "empty" },

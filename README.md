@@ -121,6 +121,7 @@ it, the first start moves its database over and your decisions carry on.
 | `+` `-` `0` | Zoom the card in, out, back to 100%. Arrows pan while zoomed. |
 | `Esc` | Close the viewer or a dialog |
 | `A` / `D` | Step to the previous / next photo in the review strip |
+| Arrows, `Enter` | Move around the library and open a month |
 | `?` | Keyboard shortcuts (every review key can be rebound in Options) |
 | `F12` / `Ctrl+Shift+I` | Developer tools |
 | `Ctrl+Shift+L` | Show the backend log |
@@ -301,19 +302,15 @@ Tracked but not previewable, shown as a placeholder you can still decide on:
 
 ## Planned
 
-Not built yet, roughly in this order:
+Not built yet:
 
-- Fill the library and pile grids in batches instead of all at once.
-- More local statistics: swipes by direction, app launches, time spent
-  reviewing, and possibly a small infographic window. Counters for decisions,
-  undos and deletions already exist and are viewable and resettable in
-  Options.
-- Check that the window background colour fully removes the white flash when
-  going fullscreen and on the first scroll (needs a Windows check).
-- "Show in file manager" selecting the file on Linux (it opens the folder).
-- Possible later: keyboard navigation in the library, a filename filter inside
-  a review, bulk restore from the pile, a clearer report when a commit cannot
-  delete some files, and duplicate detection.
+- A small infographic window for the local statistics (the counters
+  themselves, including swipes by direction, launches and review time, are
+  viewable and resettable in Options).
+- Check on Windows that the window background colour fully removes the white
+  flash when going fullscreen and on the first scroll.
+- Smarter duplicate detection (near-duplicates); today only byte-identical
+  files are found.
 
 ## License
 

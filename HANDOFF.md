@@ -97,3 +97,13 @@ Nothing is known broken. In rough priority order:
     for the counters, clipboard copy on Linux needs `xclip` (and macOS copy
     uses `pbcopy` with raw bytes, untested), and the stats Reset button
     reloads the page instead of refreshing the section.
+
+15. **1.4.0 follow-ups.** Shipped: batched library/pile grids, library keyboard
+    navigation, filename filter in a review, "Restore all" in the pile,
+    Linux file selection through the FileManager1 DBus call (xdg-open
+    fallback), exact duplicate detection (`dupes.rs`: size, hash, then a byte
+    compare; staging only), swipe-direction / launch / review-time / viewer
+    counters. Still open: the statistics infographic, a Windows check of the
+    white flash, GUI assertions for the filter, library navigation, "Restore all"
+    and the duplicates dialog (the new code has few), and a Rust test for the
+    swipe-direction counters.

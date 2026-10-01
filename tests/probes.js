@@ -44,6 +44,20 @@
       if (b) b.click();
       return !!b;
     },
+    clickFindDuplicates: () => {
+      const btn = $$(".overview-actions .btn").find((b) => b.textContent.includes("Find duplicates"));
+      if (btn) btn.click();
+      return !!btn;
+    },
+    dupeGroups: () => $$(".dupe-group").length,
+    dupeItems: () => $$(".dupe-item").length,
+    dupeGroupHeaders: () => $$(".dupe-group-header").map(text),
+    dupeItemNames: () => $$(".dupe-name").map(text),
+    clickDupeStage: (i) => {
+      const btns = $$(".dupe-item .btn");
+      if (btns[i]) btns[i].click();
+      return !!btns[i];
+    },
 
     // ---- review ----
     hasCard: () => !!top(),

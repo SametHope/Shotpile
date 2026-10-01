@@ -376,16 +376,56 @@ fn open_in_file_manager(path: &Path) -> Result<(), String> {
         cmd.arg(path);
         cmd.spawn()
     } else {
-        let dir = if path.is_file() {
-            path.parent().unwrap_or(path)
+        // On Linux, try the freedesktop FileManager1 DBus interface for file selection,
+        // falling back to xdg-open on the parent directory.
+        if path.is_file() {
+            if let Ok(uri) = path_to_file_uri(path) {
+                if try_show_items_dbus(&uri).is_ok() {
+                    return Ok(());
+                }
+            }
+            // Fallback: open the parent directory
+            let dir = path.parent().unwrap_or(path);
+            std::process::Command::new("xdg-open").arg(dir).spawn()
         } else {
-            path
-        };
-        std::process::Command::new("xdg-open").arg(dir).spawn()
+            std::process::Command::new("xdg-open").arg(path).spawn()
+        }
     };
     spawned
         .map(|_| ())
         .map_err(|e| format!("couldn't open the file manager: {e}"))
+}
+
+fn path_to_file_uri(path: &Path) -> Result<String, String> {
+    // Convert an absolute path to a file:// URI.
+    let abs =
+        std::fs::canonicalize(path).map_err(|e| format!("couldn't canonicalize path: {e}"))?;
+    let path_str = abs.to_string_lossy();
+    Ok(format!("file://{}", path_str.replace("\\", "/")))
+}
+
+fn try_show_items_dbus(uri: &str) -> Result<(), String> {
+    // Try to select the file using org.freedesktop.FileManager1.ShowItems via DBus.
+    // This uses gdbus call, which is usually available on freedesktop systems.
+    let output = std::process::Command::new("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--dest=org.freedesktop.FileManager1",
+            "--object-path=/org/freedesktop/FileManager1",
+            "--method=org.freedesktop.FileManager1.ShowItems",
+            &format!("['{}']", uri),
+            "''",
+        ])
+        .output()
+        .map_err(|e| format!("gdbus call failed: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("gdbus call failed: {}", stderr))
+    }
 }
 
 /// Shows the main window. It starts hidden (`visible: false` in
@@ -599,7 +639,14 @@ pub fn items(state: State<'_, AppState>, ids: Vec<i64>) -> Result<Vec<Shot>, Str
 }
 
 /// The body of `decide`, minus the state plumbing.
-pub fn apply_decision(db: &Db, undo: &mut UndoStack, id: i64, kind: &str) -> Result<Shot, String> {
+pub fn apply_decision(
+    db: &Db,
+    undo: &mut UndoStack,
+    id: i64,
+    kind: &str,
+    swipe_dx: Option<f64>,
+    swipe_dy: Option<f64>,
+) -> Result<Shot, String> {
     let status = match kind {
         "keep" => STATUS_KEPT,
         "skip" => STATUS_SKIPPED,
@@ -628,6 +675,27 @@ pub fn apply_decision(db: &Db, undo: &mut UndoStack, id: i64, kind: &str) -> Res
         let _ = db.incr_counter(counter_name, 1);
     }
 
+    // Track swipe direction if provided
+    if let (Some(dx), Some(dy)) = (swipe_dx, swipe_dy) {
+        let threshold = 80.0;
+        let abs_dx = dx.abs();
+        let abs_dy = dy.abs();
+
+        if abs_dx >= threshold || abs_dy >= threshold {
+            if abs_dx > abs_dy {
+                if dx > 0.0 {
+                    let _ = db.incr_counter("swipe:right", 1);
+                } else {
+                    let _ = db.incr_counter("swipe:left", 1);
+                }
+            } else if dy > 0.0 {
+                let _ = db.incr_counter("swipe:down", 1);
+            } else {
+                let _ = db.incr_counter("swipe:up", 1);
+            }
+        }
+    }
+
     let shot = db
         .shot(id)?
         .ok_or_else(|| format!("no such screenshot: {id}"))?;
@@ -643,9 +711,15 @@ pub fn apply_decision(db: &Db, undo: &mut UndoStack, id: i64, kind: &str) -> Res
 }
 
 #[tauri::command]
-pub fn decide(state: State<'_, AppState>, id: i64, kind: String) -> Result<Shot, String> {
+pub fn decide(
+    state: State<'_, AppState>,
+    id: i64,
+    kind: String,
+    swipe_dx: Option<f64>,
+    swipe_dy: Option<f64>,
+) -> Result<Shot, String> {
     let db = lock(&state.db);
-    apply_decision(&db, &mut lock(&state.undo), id, &kind)
+    apply_decision(&db, &mut lock(&state.undo), id, &kind, swipe_dx, swipe_dy)
 }
 
 /// The body of `undo_last`: walks back the most recent action that still
@@ -762,6 +836,27 @@ pub fn apply_unstage(db: &Db, undo: &mut UndoStack, id: i64) -> Result<Shot, Str
 pub fn unstage(state: State<'_, AppState>, id: i64) -> Result<Shot, String> {
     let db = lock(&state.db);
     apply_unstage(&db, &mut lock(&state.undo), id)
+}
+
+/// Unstages multiple screenshots at once, restoring them to pending status.
+/// This respects the per-folder pile rules: each folder's pile is processed
+/// independently. Returns the count of successfully unstaged items.
+#[tauri::command]
+#[allow(dead_code)]
+pub fn unstage_multiple(state: State<'_, AppState>, ids: Vec<i64>) -> Result<usize, String> {
+    let db = lock(&state.db);
+    let mut undo = lock(&state.undo);
+    let mut count = 0;
+    for id in ids {
+        if apply_unstage(&db, &mut undo, id).is_ok() {
+            count += 1;
+        }
+    }
+    crate::log::info(
+        "unstage_multiple",
+        &format!("{count} file(s) restored from the pile"),
+    );
+    Ok(count)
 }
 
 #[tauri::command]
@@ -898,6 +993,15 @@ pub async fn commit_deletes(
 }
 
 #[tauri::command]
+pub fn find_duplicates(
+    state: State<'_, AppState>,
+    root_id: i64,
+) -> Result<Vec<crate::dupes::DuplicateGroup>, String> {
+    let db = lock(&state.db);
+    crate::dupes::find_duplicates(&db, root_id)
+}
+
+#[tauri::command]
 pub fn get_counters(state: State<'_, AppState>) -> Result<Vec<CounterGroup>, String> {
     let db = lock(&state.db);
     let all = db.get_all_counters()?;
@@ -960,6 +1064,14 @@ pub fn reset_counters(state: State<'_, AppState>, group: Option<String>) -> Resu
     Ok(())
 }
 
+#[tauri::command]
+#[allow(dead_code)]
+pub fn incr_counter(state: State<'_, AppState>, name: String, amount: i64) -> Result<(), String> {
+    let db = lock(&state.db);
+    db.incr_counter(&name, amount)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1000,9 +1112,9 @@ mod tests {
     #[test]
     fn undo_walks_decisions_back_with_their_times() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 1, "keep").unwrap();
+        apply_decision(&db, &mut undo, 1, "keep", None, None).unwrap();
         let kept_at = status(&db, 1).1;
-        apply_decision(&db, &mut undo, 1, "skip").unwrap();
+        apply_decision(&db, &mut undo, 1, "skip", None, None).unwrap();
 
         let shot = apply_undo(&db, &mut undo).unwrap().unwrap();
         assert_eq!(
@@ -1020,7 +1132,7 @@ mod tests {
     #[test]
     fn redo_reapplies_an_undone_decision_with_its_time() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 1, "delete").unwrap();
+        apply_decision(&db, &mut undo, 1, "delete", None, None).unwrap();
         let decided = status(&db, 1);
         apply_undo(&db, &mut undo).unwrap().unwrap();
         assert_eq!(status(&db, 1).0, STATUS_PENDING);
@@ -1036,7 +1148,7 @@ mod tests {
     #[test]
     fn redo_never_touches_a_committed_row() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 1, "delete").unwrap();
+        apply_decision(&db, &mut undo, 1, "delete", None, None).unwrap();
         apply_undo(&db, &mut undo).unwrap();
         db.set_status(1, STATUS_DELETED, Some(1)).unwrap();
         assert!(apply_redo(&db, &mut undo).unwrap().is_none());
@@ -1046,7 +1158,7 @@ mod tests {
     #[test]
     fn undoing_an_unstage_restores_the_original_stage_time() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 2, "delete").unwrap();
+        apply_decision(&db, &mut undo, 2, "delete", None, None).unwrap();
         let staged_at = status(&db, 2).1;
         assert!(staged_at.is_some());
 
@@ -1069,7 +1181,7 @@ mod tests {
     #[test]
     fn unstage_leaves_a_row_that_is_not_staged_alone() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 1, "keep").unwrap();
+        apply_decision(&db, &mut undo, 1, "keep", None, None).unwrap();
         let shot = apply_unstage(&db, &mut undo, 1).unwrap();
         assert_eq!(shot.status, STATUS_KEPT);
         assert_eq!(undo.len(), 1, "nothing new to undo");
@@ -1079,8 +1191,8 @@ mod tests {
     #[test]
     fn undo_after_a_commit_does_not_resurrect_the_row() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 1, "keep").unwrap();
-        apply_decision(&db, &mut undo, 2, "delete").unwrap();
+        apply_decision(&db, &mut undo, 1, "keep", None, None).unwrap();
+        apply_decision(&db, &mut undo, 2, "delete", None, None).unwrap();
         let report = apply_commit(&db, &mut undo, None, all_moved(&db)).unwrap();
         assert_eq!(report.deleted, 1);
         assert_eq!(report.bytes_freed, 200);
@@ -1099,7 +1211,7 @@ mod tests {
         // Belt and braces: without the commit's purge, the status check alone
         // still keeps the row deleted.
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 2, "delete").unwrap();
+        apply_decision(&db, &mut undo, 2, "delete", None, None).unwrap();
         db.set_status(2, STATUS_DELETED, Some(1)).unwrap();
         assert!(apply_undo(&db, &mut undo).unwrap().is_none());
         assert_eq!(status(&db, 2).0, STATUS_DELETED);
@@ -1108,10 +1220,10 @@ mod tests {
     #[test]
     fn a_committed_row_cannot_be_decided_or_unstaged_again() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 2, "delete").unwrap();
+        apply_decision(&db, &mut undo, 2, "delete", None, None).unwrap();
         apply_commit(&db, &mut undo, None, all_moved(&db)).unwrap();
         for kind in ["keep", "skip", "delete"] {
-            assert!(apply_decision(&db, &mut undo, 2, kind).is_err());
+            assert!(apply_decision(&db, &mut undo, 2, kind, None, None).is_err());
         }
         assert!(apply_unstage(&db, &mut undo, 2).is_err());
         assert_eq!(status(&db, 2).0, STATUS_DELETED);
@@ -1122,7 +1234,7 @@ mod tests {
     fn commit_settles_gone_files_and_keeps_real_failures_staged() {
         let (db, mut undo) = setup();
         for id in 1..=3 {
-            apply_decision(&db, &mut undo, id, "delete").unwrap();
+            apply_decision(&db, &mut undo, id, "delete", None, None).unwrap();
         }
         let rows = db.staged_rows(None).unwrap();
         let (moved, gone, stuck) = (&rows[0], &rows[1], &rows[2]);
@@ -1174,8 +1286,8 @@ mod tests {
         )
         .unwrap();
         let x = db.queue_ids("unreviewed", None, Some(other), 0).unwrap()[0];
-        apply_decision(&db, &mut undo, 1, "delete").unwrap();
-        apply_decision(&db, &mut undo, x, "keep").unwrap();
+        apply_decision(&db, &mut undo, 1, "delete", None, None).unwrap();
+        apply_decision(&db, &mut undo, x, "keep", None, None).unwrap();
 
         apply_forget_root(&db, &mut undo, 1).unwrap();
         assert_eq!(undo.len(), 1, "only the other root's entry is left");

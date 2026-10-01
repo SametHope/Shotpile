@@ -860,6 +860,19 @@ impl Db {
             .map_err(|e| e.to_string())
     }
 
+    /// All shots in a specific root, for duplicate detection.
+    /// Includes all statuses and missing files (caller filters as needed).
+    pub fn root_shots(&self, root_id: i64) -> Result<Vec<Shot>, String> {
+        let sql =
+            format!("SELECT {SHOT_COLUMNS} FROM screenshots WHERE root_id = ? ORDER BY size, id");
+        let mut stmt = self.conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![root_id], shot_from_row)
+            .map_err(|e| e.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())
+    }
+
     /// Increments a counter by one. Creates it if it doesn't exist.
     pub fn incr_counter(&self, name: &str, amount: i64) -> Result<(), String> {
         self.conn
