@@ -288,6 +288,13 @@ const CTRL_SHIFT = CTRL | SHIFT;
     ok("the overlay is shallow", geo && geo.footShare <= 0.3, geo ? `foot is ${Math.round(geo.footShare * 100)}% of the card` : "no card");
     ok("the name does not wrap", geo && geo.fnameLines === 1, geo ? `name wraps to ${geo.fnameLines} lines` : "no card");
 
+    // ---- card right-click menu ----
+    await js(`const n = document.querySelector(".card[data-id]"); const r = n.getBoundingClientRect();
+      n.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 20 }));`);
+    const cardMenu = await probe("[...document.querySelectorAll('.menu .menu-label')].map((n) => n.textContent)");
+    ok("right-clicking a card offers copy image and copy file name", cardMenu?.includes("Copy image") && cardMenu?.includes("Copy file name"), JSON.stringify(cardMenu));
+    await press("Escape");
+
     // ---- photo viewer ----
     await js("p.openViewer();");
     await waitFor("p.viewerOpen()");
@@ -824,12 +831,6 @@ const CTRL_SHIFT = CTRL | SHIFT;
     ok("Escape closes the context menu", (await probe("document.querySelector('.menu')")) === null);
     const nativeKept = await js(`const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true }); document.querySelector("#view").dispatchEvent(ev); return ev.defaultPrevented;`);
     ok("the browser's own menu is replaced", nativeKept === true);
-    await press("Escape");
-
-    // Card context menu includes "Copy image" for viewable images
-    await rightClick(".card[data-id]");
-    const cardMenu = await probe("[...document.querySelectorAll('.menu .menu-label')].map((n) => n.textContent)");
-    ok("right-clicking a card offers copy image and copy file name", cardMenu?.includes("Copy image") && cardMenu?.includes("Copy file name"), JSON.stringify(cardMenu));
     await press("Escape");
   } catch (e) {
     ok(`run aborted: ${e.message}`, false, e.stack);
