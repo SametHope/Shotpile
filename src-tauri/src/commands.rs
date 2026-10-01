@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
 
 use crate::db::{
@@ -84,6 +84,14 @@ pub struct ScanProgress {
     pub found: usize,
 }
 
+/// Payload of the `commit-progress` event: files deleted so far.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommitProgress {
+    pub current: usize,
+    pub total: usize,
+    pub current_file: String,
+}
+
 /// How often `scan_root` reports progress. The walk finds thousands of files a
 /// second on a fast disk; the UI only needs to look alive.
 const PROGRESS_EVERY: std::time::Duration = std::time::Duration::from_millis(120);
@@ -94,13 +102,21 @@ pub struct MonthThumbs {
     pub paths: Vec<String>,
 }
 
+/// Local statistics counters.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CounterGroup {
+    pub name: String,
+    pub label: String,
+    pub counters: Vec<(String, i64)>,
+}
+
 fn tz_offset_min(tz: Option<i64>) -> i64 {
     tz.unwrap_or(0)
 }
 
 fn validate_scope(scope: &str) -> Result<&str, String> {
     match scope {
-        "month" | "random" | "unreviewed" | "skipped" | "staged" => Ok(scope),
+        "month" | "random" | "unreviewed" | "skipped" | "staged" | "kept" => Ok(scope),
         other => Err(format!("invalid queue: {other}")),
     }
 }
@@ -254,6 +270,72 @@ pub fn reveal(state: State<'_, AppState>, target: String, id: Option<i64>) -> Re
     Ok(())
 }
 
+/// Copies an image file to the clipboard. Only called for image files (PNG, JPG, etc).
+#[tauri::command]
+pub fn copy_image(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    let shot = lock(&state.db)
+        .shot(id)?
+        .ok_or_else(|| format!("no such screenshot: {id}"))?;
+    let path = std::path::Path::new(&shot.path);
+    if !path.exists() {
+        return Err(format!("{} no longer exists", path.display()));
+    }
+    copy_image_file_to_clipboard(path)?;
+    crate::log::info("copy-image", &format!("id {}", id));
+    Ok(())
+}
+
+fn copy_image_file_to_clipboard(path: &Path) -> Result<(), String> {
+    if cfg!(windows) {
+        // On Windows, copy the file path to clipboard so it can be pasted as a file
+        let path_str = path.to_string_lossy();
+        let cmd = format!(
+            "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Clipboard]::SetFileDropList((New-Object System.Collections.Specialized.StringCollection).Add('{}'))",
+            path_str.replace('\'', "''")
+        );
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &cmd])
+            .spawn()
+            .map_err(|e| format!("couldn't open PowerShell: {e}"))?
+            .wait()
+            .map_err(|e| format!("PowerShell failed: {e}"))?;
+        Ok(())
+    } else if cfg!(target_os = "macos") {
+        // On macOS, use pbcopy to copy the image file
+        let image_data =
+            std::fs::read(path).map_err(|e| format!("couldn't read the image: {e}"))?;
+        let mut child = std::process::Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("couldn't run pbcopy: {e}"))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            stdin
+                .write_all(&image_data)
+                .map_err(|e| format!("couldn't write to pbcopy: {e}"))?;
+        }
+        child.wait().map_err(|e| format!("pbcopy failed: {e}"))?;
+        Ok(())
+    } else {
+        // On Linux, use xclip if available, otherwise just copy the path
+        let image_data =
+            std::fs::read(path).map_err(|e| format!("couldn't read the image: {e}"))?;
+        let mut child = std::process::Command::new("xclip")
+            .args(["-selection", "clipboard", "-t", "image/png", "-i"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("couldn't run xclip: {e}"))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            stdin
+                .write_all(&image_data)
+                .map_err(|e| format!("couldn't write to xclip: {e}"))?;
+        }
+        child.wait().map_err(|e| format!("xclip failed: {e}"))?;
+        Ok(())
+    }
+}
+
 fn open_url(url: &str) -> Result<(), String> {
     let spawned = if cfg!(windows) {
         // `start` is a cmd builtin; the empty string is its window title.
@@ -286,19 +368,20 @@ fn open_in_file_manager(path: &Path) -> Result<(), String> {
             cmd.arg(path);
         }
         cmd.spawn()
+    } else if cfg!(target_os = "macos") {
+        let mut cmd = std::process::Command::new("open");
+        if path.is_file() {
+            cmd.arg("-R");
+        }
+        cmd.arg(path);
+        cmd.spawn()
     } else {
         let dir = if path.is_file() {
             path.parent().unwrap_or(path)
         } else {
             path
         };
-        std::process::Command::new(if cfg!(target_os = "macos") {
-            "open"
-        } else {
-            "xdg-open"
-        })
-        .arg(dir)
-        .spawn()
+        std::process::Command::new("xdg-open").arg(dir).spawn()
     };
     spawned
         .map(|_| ())
@@ -533,6 +616,18 @@ pub fn apply_decision(db: &Db, undo: &mut UndoStack, id: i64, kind: &str) -> Res
         return Err(format!("{} is already in the Recycle Bin", before.name));
     }
     db.set_status(id, status, Some(scan::now_ms()))?;
+
+    // Increment counter for this decision type
+    let counter_name = match kind {
+        "keep" => "decision:kept",
+        "skip" => "decision:skipped",
+        "delete" => "decision:staged",
+        _ => "",
+    };
+    if !counter_name.is_empty() {
+        let _ = db.incr_counter(counter_name, 1);
+    }
+
     let shot = db
         .shot(id)?
         .ok_or_else(|| format!("no such screenshot: {id}"))?;
@@ -564,6 +659,21 @@ pub fn apply_undo(db: &Db, undo: &mut UndoStack) -> Result<Option<Shot>, String>
     };
     let next_decided_ms = db.status_of(entry.id)?.and_then(|(_, ms)| ms);
     db.set_status(entry.id, &entry.prev, entry.prev_decided_ms)?;
+
+    // Decrement counter for the undone decision
+    let counter_name = match entry.next.as_str() {
+        "kept" => "decision:kept",
+        "skipped" => "decision:skipped",
+        "staged" => "decision:staged",
+        _ => "",
+    };
+    if !counter_name.is_empty() {
+        let _ = db.incr_counter(counter_name, -1);
+    }
+
+    // Increment counter for undos
+    let _ = db.incr_counter("session:undos", 1);
+
     crate::log::info(
         "undo",
         &format!("{} {} -> {}", entry.id, entry.next, entry.prev),
@@ -582,6 +692,21 @@ pub fn apply_redo(db: &Db, undo: &mut UndoStack) -> Result<Option<Shot>, String>
         return Ok(None);
     };
     db.set_status(entry.id, &entry.next, entry.next_decided_ms)?;
+
+    // Increment counter for the redone decision
+    let counter_name = match entry.next.as_str() {
+        "kept" => "decision:kept",
+        "skipped" => "decision:skipped",
+        "staged" => "decision:staged",
+        _ => "",
+    };
+    if !counter_name.is_empty() {
+        let _ = db.incr_counter(counter_name, 1);
+    }
+
+    // Increment counter for redos
+    let _ = db.incr_counter("session:redos", 1);
+
     crate::log::info(
         "redo",
         &format!("{} {} -> {}", entry.id, entry.prev, entry.next),
@@ -696,10 +821,16 @@ pub fn apply_commit(
         db.set_status(id, STATUS_DELETED, Some(now))?;
     }
 
+    // Increment deletion counters
+    let _ = db.incr_counter("deletion:files_deleted", moved.len() as i64);
+    let bytes_freed: i64 = moved.iter().map(|r| r.size).sum();
+    let _ = db.incr_counter("deletion:bytes_deleted", bytes_freed);
+    let _ = db.incr_counter("session:commits", 1);
+
     let (still_staged, _) = db.staged_totals(root_id)?;
     let report = CommitReport {
         deleted: moved.len(),
-        bytes_freed: moved.iter().map(|r| r.size).sum(),
+        bytes_freed,
         still_staged: still_staged as usize,
         failed,
     };
@@ -722,18 +853,111 @@ pub fn apply_commit(
 ///
 /// Reading the staged list and writing the results back are fast queries done
 /// under the lock; the Recycle Bin calls in between (which shell out and can
-/// block) run on a worker without it.
+/// block) run on a worker without it. Progress events are emitted periodically.
 #[tauri::command]
 pub async fn commit_deletes(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     root_id: Option<i64>,
 ) -> Result<CommitReport, String> {
     let rows = lock(&state.db).staged_rows(root_id)?;
-    let outcome = tauri::async_runtime::spawn_blocking(move || trash_staged(rows))
-        .await
-        .map_err(|e| e.to_string())?;
+    let total = rows.len();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let mut outcome = TrashOutcome::default();
+        for (idx, row) in rows.into_iter().enumerate() {
+            // Emit progress every 5 files or at the end
+            if idx % 5 == 0 || idx == total - 1 {
+                let _ = app.emit(
+                    "commit-progress",
+                    CommitProgress {
+                        current: idx,
+                        total,
+                        current_file: row.name.clone(),
+                    },
+                );
+            }
+            match trash::delete(&row.path) {
+                Ok(()) => outcome.moved.push(row),
+                Err(e) => {
+                    crate::log::warn("commit", &format!("{}: {e}", row.name));
+                    outcome.failed.push(FailedItem {
+                        id: row.id,
+                        gone: !Path::new(&row.path).exists(),
+                        name: row.name,
+                        error: e.to_string(),
+                    });
+                }
+            }
+        }
+        outcome
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     let db = lock(&state.db);
     apply_commit(&db, &mut lock(&state.undo), root_id, outcome)
+}
+
+#[tauri::command]
+pub fn get_counters(state: State<'_, AppState>) -> Result<Vec<CounterGroup>, String> {
+    let db = lock(&state.db);
+    let all = db.get_all_counters()?;
+
+    let mut groups = Vec::new();
+
+    // Decision counters
+    let decision_counters: Vec<_> = all
+        .iter()
+        .filter(|(k, _)| k.starts_with("decision:"))
+        .map(|(k, v)| (k.strip_prefix("decision:").unwrap_or("").to_string(), *v))
+        .collect();
+    if !decision_counters.is_empty() {
+        groups.push(CounterGroup {
+            name: "decision".to_string(),
+            label: "Decisions".to_string(),
+            counters: decision_counters,
+        });
+    }
+
+    // Deletion counters
+    let deletion_counters: Vec<_> = all
+        .iter()
+        .filter(|(k, _)| k.starts_with("deletion:"))
+        .map(|(k, v)| (k.strip_prefix("deletion:").unwrap_or("").to_string(), *v))
+        .collect();
+    if !deletion_counters.is_empty() {
+        groups.push(CounterGroup {
+            name: "deletion".to_string(),
+            label: "Deletion".to_string(),
+            counters: deletion_counters,
+        });
+    }
+
+    // Session counters
+    let session_counters: Vec<_> = all
+        .iter()
+        .filter(|(k, _)| k.starts_with("session:"))
+        .map(|(k, v)| (k.strip_prefix("session:").unwrap_or("").to_string(), *v))
+        .collect();
+    if !session_counters.is_empty() {
+        groups.push(CounterGroup {
+            name: "session".to_string(),
+            label: "Session".to_string(),
+            counters: session_counters,
+        });
+    }
+
+    Ok(groups)
+}
+
+#[tauri::command]
+pub fn reset_counters(state: State<'_, AppState>, group: Option<String>) -> Result<(), String> {
+    let db = lock(&state.db);
+    if let Some(g) = group {
+        db.reset_counter_group(&g)?;
+    } else {
+        db.reset_all_counters()?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
