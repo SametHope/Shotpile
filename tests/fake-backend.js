@@ -247,6 +247,12 @@
   window.addEventListener("error", (e) => FAILS.push("window error: " + e.message));
   window.addEventListener("unhandledrejection", (e) => FAILS.push("unhandled rejection: " + ((e.reason && e.reason.message) || e.reason)));
 
+  // ---- events (window.__TAURI__.event) ----
+  const listeners = {};
+  function emit(name, payload) {
+    for (const cb of listeners[name] || []) cb({ event: name, payload });
+  }
+
   // ---- fake screenshots ----
   // Every path gets its own picture, so a test (or a person) can tell cards
   // apart, and the sizes vary so letterboxing is exercised both ways.
@@ -316,8 +322,21 @@
         LOG.push("invoke:" + cmd);
         const fn = handlers[cmd];
         if (!fn) throw new Error("unmocked command: " + cmd);
-        if (cmd === "scan_root" && faults.scanDelayMs) await new Promise((r) => setTimeout(r, faults.scanDelayMs));
+        if (cmd === "scan_root" && faults.scanDelayMs) {
+          // A slow scan reports progress the way scan_root's events do.
+          for (const found of [37, 412, 1280]) {
+            await new Promise((r) => setTimeout(r, faults.scanDelayMs / 4));
+            emit("scan-progress", { path: args.path, found });
+          }
+          await new Promise((r) => setTimeout(r, faults.scanDelayMs / 4));
+        }
         return fn(args);
+      },
+    },
+    event: {
+      listen: async (name, cb) => {
+        (listeners[name] ||= []).push(cb);
+        return () => { listeners[name] = listeners[name].filter((x) => x !== cb); };
       },
     },
   };

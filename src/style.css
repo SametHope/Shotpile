@@ -397,6 +397,7 @@ kbd {
 }
 .empty-glyph.ok { color: var(--ok); background: var(--ok-soft); border-color: transparent; }
 .empty.scanning h2 { margin-top: 16px; }
+.scan-found { color: var(--text-2); font-variant-numeric: tabular-nums; min-height: 1.5em; }
 
 .busy {
   display: inline-block;
@@ -816,6 +817,8 @@ kbd {
   overflow: hidden;
   background: var(--letterbox);
   cursor: zoom-in;
+  /* Waiting cards are dimmed; a promoted one brightens as it glides up. */
+  transition: opacity .3s var(--ease-out);
 }
 .card.zoomed .imgwrap { cursor: grab; }
 

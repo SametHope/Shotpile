@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use serde::Serialize;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 use crate::db::{
     Db, MonthStat, Root, Shot, StagedRow, Summary, STATUS_DELETED, STATUS_KEPT, STATUS_PENDING,
@@ -68,6 +68,17 @@ pub struct TrashOutcome {
     pub failed: Vec<FailedItem>,
 }
 
+/// Payload of the `scan-progress` event: images found so far in `path`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScanProgress {
+    pub path: String,
+    pub found: usize,
+}
+
+/// How often `scan_root` reports progress. The walk finds thousands of files a
+/// second on a fast disk; the UI only needs to look alive.
+const PROGRESS_EVERY: std::time::Duration = std::time::Duration::from_millis(120);
+
 #[derive(Debug, Serialize)]
 pub struct MonthThumbs {
     pub month: String,
@@ -89,12 +100,20 @@ fn validate_scope(scope: &str) -> Result<&str, String> {
 /// touches no database state, so `scan_root` can run it on a worker without
 /// holding the lock.
 fn walk(path: &str) -> Result<(Vec<ScannedFile>, CollectStats, u128), String> {
+    walk_with(path, |_| {})
+}
+
+/// `walk`, passing the running count of images found to `progress`.
+fn walk_with(
+    path: &str,
+    progress: impl FnMut(usize),
+) -> Result<(Vec<ScannedFile>, CollectStats, u128), String> {
     let root = Path::new(path);
     if !root.is_dir() {
         return Err(format!("folder not found: {path}"));
     }
     let started = std::time::Instant::now();
-    let (files, stats) = scan::collect(root);
+    let (files, stats) = scan::collect(root, progress);
     Ok((files, stats, started.elapsed().as_millis()))
 }
 
@@ -221,14 +240,34 @@ pub async fn pick_folder() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-pub async fn scan_root(state: State<'_, AppState>, path: String) -> Result<ScanReport, String> {
+pub async fn scan_root(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<ScanReport, String> {
     // The walk is IO-bound, so it runs off the UI thread. The database is not
     // touched until that finishes, which keeps the mutex guard out of the
-    // closure and off the worker thread.
+    // closure and off the worker thread. Meanwhile a throttled `scan-progress`
+    // event tells the UI how far it got, so a big first scan does not look
+    // frozen.
     let walk_path = path.clone();
-    let (files, stats, elapsed_ms) = tauri::async_runtime::spawn_blocking(move || walk(&walk_path))
-        .await
-        .map_err(|e| e.to_string())??;
+    let (files, stats, elapsed_ms) = tauri::async_runtime::spawn_blocking(move || {
+        let mut last: Option<std::time::Instant> = None;
+        walk_with(&walk_path, |found| {
+            if last.is_some_and(|t| t.elapsed() < PROGRESS_EVERY) {
+                return;
+            }
+            last = Some(std::time::Instant::now());
+            let progress = ScanProgress {
+                path: walk_path.clone(),
+                found,
+            };
+            // Progress is cosmetic: a failed emit must not fail the scan.
+            let _ = app.emit("scan-progress", progress);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
     let db = lock(&state.db);
     let report = store_scan(&db, &path, files, stats, elapsed_ms)?;

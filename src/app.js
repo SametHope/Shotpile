@@ -96,6 +96,7 @@ const state = {
   deciding: false, // a decision write is in flight
   busy: false, // a commit is running: decisions and undo wait for it
   scanning: null, // path being scanned; scans never touch decisions, so they block nothing else
+  scanFound: 0, // images the running scan has found so far (scan-progress events)
   stagedToken: 0, // guards the async staged view against a stale paint
 };
 
@@ -299,7 +300,8 @@ function renderHeader() {
   }
   el.scan.hidden = !(root && v === "months");
   el.scan.disabled = state.busy || !!state.scanning;
-  el.scan.replaceChildren(icon("refresh", { size: 16, cls: state.scanning ? "spin" : "" }), state.scanning ? "Scanning…" : "Rescan");
+  const scanLabel = state.scanFound ? `Scanning… ${formatCount(state.scanFound)}` : "Scanning…";
+  el.scan.replaceChildren(icon("refresh", { size: 16, cls: state.scanning ? "spin" : "" }), state.scanning ? scanLabel : "Rescan");
 }
 
 // ---------------------------------------------------------------------- setup
@@ -331,7 +333,21 @@ function renderScanning() {
   el.view.replaceChildren(h("div", { class: "empty scanning" },
     h("span", { class: "busy lg" }),
     h("h2", { text: "Looking for screenshots…" }),
-    h("p", { class: "muted", text: state.scanning || "" })));
+    h("p", { class: "muted", text: state.scanning || "" }),
+    h("p", { class: "scan-found", id: "scan-found", text: scanFoundText() })));
+}
+
+function scanFoundText() {
+  return state.scanFound ? `Found ${countOf(state.scanFound, "image")} so far` : "";
+}
+
+/** `scan-progress` from the backend: a big first scan should not look frozen. */
+function onScanProgress(p) {
+  if (!p || p.path !== state.scanning) return;
+  state.scanFound = Number(p.found) || 0;
+  const node = document.getElementById("scan-found");
+  if (node) node.textContent = scanFoundText();
+  if (!el.scan.hidden) renderHeader();
 }
 
 // -------------------------------------------------------------------- library
@@ -1575,6 +1591,7 @@ async function scanFolder(path) {
   const known = state.roots.some((r) => r.path === path);
   const prevView = state.view;
   state.scanning = path;
+  state.scanFound = 0;
   // A first scan has nothing to show yet; a rescan keeps the library on screen.
   if (!known || prevView === "setup") state.view = "scanning";
   render();
@@ -1601,6 +1618,7 @@ async function scanFolder(path) {
     if (state.view === "scanning") state.view = state.roots.length ? "months" : "setup";
   } finally {
     state.scanning = null;
+    state.scanFound = 0;
     // A full render would rebuild a review's deck under the user's hands.
     if (state.view === "review") renderHeader();
     else render();
@@ -1826,6 +1844,9 @@ el.commit.addEventListener("click", commit);
 el.undo.addEventListener("click", () => undo());
 el.stagedBtn.addEventListener("click", openStaged);
 el.help.addEventListener("click", showShortcuts);
+// Progress is optional: without the event API the scan still completes.
+window.__TAURI__.event?.listen?.("scan-progress", (e) => onScanProgress(e.payload))
+  ?.catch?.((err) => log.warn("scan", `no scan progress: ${err}`));
 
 (async function boot() {
   log.info("boot", "starting");
