@@ -5,8 +5,71 @@ them by month and deals them out one at a time: swipe left to delete, right to
 keep, up to decide later. Nothing leaves the disk until you confirm, and then
 it goes to the Windows Recycle Bin, not into the void.
 
+<p align="center">
+  <img src="docs/screenshots/swipe.webp" width="760" alt="Sorting a month of screenshots: a card dragged right is kept, one dragged left is marked for deletion, then the arrow keys keep, skip and undo.">
+</p>
+
 Nothing is uploaded. The database, the queue logic and every filesystem touch
 live on the local machine.
+
+## Download
+
+Get the installer from the
+[latest release](https://github.com/SametHope/Screenshot-Sifter/releases/latest)
+(Windows 10 or 11, 64-bit):
+
+- `Screenshot-Sifter_<version>_x64-setup.exe` installs it for your user, with a
+  Start menu entry and an uninstaller.
+- `Screenshot-Sifter_<version>_x64-portable.exe` runs as is, without
+  installing.
+
+The builds are not code-signed yet, so Windows SmartScreen may say *Windows
+protected your PC*. Choose **More info**, then **Run anyway**. The app needs
+Microsoft Edge WebView2, which current Windows already has; the installer
+fetches it if it is missing.
+
+## A quick tour
+
+**Pick a folder.** On first run it asks for the folder your screenshots pile
+up in. A big folder is counted as it scans, so a first scan never looks stuck.
+
+![The welcome screen: three cards stamped Delete, Skip and Keep explain the swipes, above a Choose a folder button.](docs/screenshots/welcome.webp)
+
+**See what is left.** The library shows the whole folder as one bar (kept,
+marked for deletion, deleted, skipped, unsorted), then a row per month. Click
+a month to sort it, or *Continue sorting* to walk everything unsorted, newest
+first.
+
+![The library: 115 screenshots, 44 left to sort, a stacked progress bar, and a row per month with thumbnails and what is left in it.](docs/screenshots/library.webp)
+
+**Sort.** The screenshots come one at a time, on a deck. Drag the card right
+to keep it, left to mark it for deletion, up to skip it for now, or use the
+arrow keys. The card tints and stamps itself as you drag, so you can see what
+will happen before you let go. Scroll to zoom in, `Space` opens the photo full
+screen, `Z` undoes.
+
+![A card dragged to the right, tilted and stamped KEEP, with the next screenshot already waiting underneath.](docs/screenshots/review.webp)
+
+**Finish a month.** The end of a pass shows what you decided, how much space
+the deletions would free, and offers the next month that still has work.
+
+![September 2026 is sorted: 7 kept, 5 marked for deletion, with buttons for the next month and the deletion pile.](docs/screenshots/summary.webp)
+
+**Delete for real, when you are ready.** Marked files wait on the *To delete*
+pile, still on disk. Put back anything you marked by mistake, or check them
+one by one.
+
+![The deletion pile: a grid of the ten screenshots marked for deletion, each with a Put back button.](docs/screenshots/pile.webp)
+
+*Move to Recycle Bin* shows every file once more and starts on *Cancel*, so
+Enter never deletes by accident. The files go to the Windows Recycle Bin, so
+you can still restore them from there.
+
+![The confirmation dialog listing the ten files with previews, with Cancel and Move 10 files buttons.](docs/screenshots/confirm.webp)
+
+**Light or dark.** It follows the Windows theme.
+
+![The review in the dark theme, with a card dragged left and stamped DELETE.](docs/screenshots/review-dark.webp)
 
 ## How it works
 
@@ -58,7 +121,9 @@ live on the local machine.
 | `F12` / `Ctrl+Shift+I` | Developer tools |
 | `Ctrl+Shift+L` | Show the backend log |
 
-## Requirements
+## Building from source
+
+You need:
 
 - Windows 10/11 with WebView2 (preinstalled on current Windows).
 - [Rust](https://rustup.rs) with the MSVC toolchain.
@@ -68,17 +133,37 @@ Linux works for development and the test suites; it needs the usual Tauri
 packages (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `librsvg2-dev`,
 `libayatana-appindicator3-dev`).
 
-## Running it
-
 ```powershell
 npm install
 npm run dev          # tauri dev
 npm run build        # NSIS installer in src-tauri/target/release/bundle
 npm run preview      # the UI in any browser, against an in-memory fake backend
+npm run screenshots  # regenerate the pictures in this README
 ```
 
 `npm run preview` serves the real `src/` with `tests/fake-backend.js` injected,
-so the interface can be worked on without building Rust.
+so the interface can be worked on without building Rust. Open `/?demo` for a
+lived-in library of over a hundred screenshots, or `/` for the small fixture
+the GUI test uses.
+
+`npm run screenshots` drives that demo library in headless Chrome with real
+mouse and key input and writes `docs/screenshots/`, including the animation at
+the top (which needs ffmpeg on `PATH`).
+
+### Releases
+
+Pushing a version tag builds the installer and the portable exe on a Windows
+runner and publishes them as a GitHub release
+(`.github/workflows/release.yml`). The tag has to match the version in
+`src-tauri/tauri.conf.json`:
+
+```powershell
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The workflow can also be started by hand from the Actions tab for an existing
+tag.
 
 ## Diagnosing problems
 
@@ -100,7 +185,7 @@ Both are always on, including in release builds.
 ```powershell
 npm test                                  # both JS suites
 npm run test:logic                        # 44 logic tests (node --test)
-npm run test:gui                          # 189 GUI assertions in headless Chrome
+npm run test:gui                          # 209 GUI assertions in headless Chrome
 cd src-tauri; cargo test                  # 65 unit + 4 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
@@ -138,7 +223,9 @@ src-tauri/src/
 tests/
   logic.test.mjs      node --test
   gui-smoke.cjs       CDP driver, with serve.cjs, fake-backend.js, probes.js
-tools/app-icon.svg    icon source: npx tauri icon tools/app-icon.svg
+tools/
+  app-icon.svg        icon source: npx tauri icon tools/app-icon.svg
+  screenshots.cjs     regenerates docs/screenshots/ from the demo library
 ```
 
 ### Why no plugins

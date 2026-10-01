@@ -1,0 +1,94 @@
+name: Release
+
+# Builds the Windows installer and a portable exe and publishes them as a
+# GitHub release. Runs when a version tag is pushed:
+#
+#   git tag v1.2.0 && git push origin v1.2.0
+#
+# or by hand from the Actions tab, for a tag that already exists. The tag must
+# match the version in src-tauri/tauri.conf.json, so a release can never ship
+# a binary that reports a different version.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and release, e.g. v1.0.0
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+
+      - name: Check the tag against the app version
+        shell: bash
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::$TAG does not match version $version in src-tauri/tauri.conf.json"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      # tauri build: the release exe, then the NSIS installer around it.
+      - run: npm run build
+
+      - name: Collect the release files
+        shell: bash
+        run: |
+          exe=(src-tauri/target/release/*.exe)
+          setup=(src-tauri/target/release/bundle/nsis/*-setup.exe)
+          if [ ${#exe[@]} -ne 1 ] || [ ${#setup[@]} -ne 1 ]; then
+            echo "::error::expected one exe and one installer, found: ${exe[*]} / ${setup[*]}"
+            exit 1
+          fi
+          mkdir release
+          cp "${setup[0]}" "release/Screenshot-Sifter_${VERSION}_x64-setup.exe"
+          cp "${exe[0]}" "release/Screenshot-Sifter_${VERSION}_x64-portable.exe"
+          cd release
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes=$(cat <<EOF
+          For Windows 10 or 11, 64-bit.
+
+          - **Screenshot-Sifter_${VERSION}_x64-setup.exe** installs the app for your user, with a Start menu entry and an uninstaller.
+          - **Screenshot-Sifter_${VERSION}_x64-portable.exe** runs without installing.
+
+          The files are not code-signed yet, so Windows SmartScreen may say *Windows protected your PC*: choose **More info**, then **Run anyway**. The app needs Microsoft Edge WebView2, which current Windows already has; the installer fetches it if it is missing. \`SHA256SUMS.txt\` has the checksums.
+          EOF
+          )
+          # A rerun replaces the files of a release that already exists.
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" release/* --verify-tag --title "Screenshot Sifter $VERSION" --notes "$notes" --generate-notes
+          fi

@@ -11,7 +11,8 @@
     "preview": "node tests/serve.cjs",
     "test": "npm run test:logic && npm run test:gui",
     "test:logic": "node --test \"tests/**/*.test.mjs\"",
-    "test:gui": "node tests/gui-smoke.cjs"
+    "test:gui": "node tests/gui-smoke.cjs",
+    "screenshots": "node tools/screenshots.cjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

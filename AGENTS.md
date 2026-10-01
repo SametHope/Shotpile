@@ -52,6 +52,8 @@ tests/serve.cjs        serves the repo; injects the fake backend into src/index.
 tests/fake-backend.js  in-memory mirror of the Rust commands (also `npm run preview`)
 tests/probes.js        page-side helpers the GUI test calls
 tests/gui-smoke.cjs    CDP driver: asserts on the rendered DOM and real keys
+tests/browser.cjs      finds and starts headless Chrome; minimal CDP client
+tools/screenshots.cjs  regenerates docs/screenshots/ (README pictures)
 src-tauri/src/db.rs       schema + queries + month grouping
 src-tauri/src/scan.rs     walkdir + filename date parsing
 src-tauri/src/undo.rs     session undo stack (stale entries are skipped)
@@ -71,7 +73,7 @@ is always `db`, then `undo`.
 
 ```powershell
 npm run test:logic                          # 44 frontend logic tests
-npm run test:gui                            # 189 GUI assertions in headless Chrome
+npm run test:gui                            # 209 GUI assertions in headless Chrome
 cd src-tauri; cargo test                    # 65 unit + 4 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
@@ -91,7 +93,21 @@ files kept out of queues); when a command changes, change the fake with it. If
 you change a view, a shortcut, or the dialog, add a probe and an assertion.
 Chrome or Chromium must be installed (`CHROME=` overrides the search); the
 script has no npm dependencies. `npm run preview` serves the same page for
-manual UI work.
+manual UI work; `/?demo` there swaps the test fixture for a seeded, lived-in
+library (`seedDemo()` in the fake), which is also what the README pictures show.
+
+## README pictures and releases
+
+- `npm run screenshots` drives the `?demo` library with real mouse and key
+  input and rewrites `docs/screenshots/` (WebP stills, plus the animated demo,
+  which needs ffmpeg). When a change is visible in a view the README shows,
+  rerun it and commit the pictures with the change. The demo data is seeded, so
+  a rerun only differs where the UI did. Keep the alt texts in `README.md` true
+  to the pictures.
+- `.github/workflows/release.yml` builds the NSIS installer and a portable exe
+  on `windows-latest` and publishes a GitHub release when a `v*` tag is pushed.
+  It refuses a tag that does not match `src-tauri/tauri.conf.json`, so bump the
+  version there, in `src-tauri/Cargo.toml` and in `package.json` together.
 
 ## Diagnosing
 

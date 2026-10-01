@@ -11,11 +11,12 @@ that made these changes); CI runs them on Linux and Windows.
 | Suite | Command | Result |
 | --- | --- | --- |
 | Frontend logic | `npm run test:logic` | 44 passed |
-| GUI (real `app.js` in headless Chrome) | `npm run test:gui` | 189 passed, 0 console errors |
+| GUI (real `app.js` in headless Chrome) | `npm run test:gui` | 209 passed, 0 console errors |
 | Rust | `cd src-tauri; cargo test` | 65 unit + 4 e2e |
 | Rust lint / format | `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` | clean |
 
-The release installer has **not** been rebuilt since these changes.
+Releases are built by `.github/workflows/release.yml` when a `v*` tag is
+pushed; the README links the latest one.
 
 ## What the last session changed
 
@@ -54,13 +55,34 @@ Bugs fixed (each has a regression test):
   in the folder picker title.
 - The app icon had stray "feet" from wrong arc angles in the old generator.
 
+A review pass over the reworked UI then found and fixed (each with a test that
+fails when the fix is reverted):
+
+- A key pressed while a jumped-to card was still loading decided the card still
+  on screen and advanced from the new position, skipping a card unseen.
+- Opening a month while a commit was moving files gave a review that ignored
+  every key; folders could be switched or forgotten mid-scan or mid-commit (a
+  scan finishing after a forget added the folder straight back).
+- Checking the deletion pile card by card used the current folder's filter, so
+  other folders' files never came up; `Skip` there silently took a file off the
+  pile; keeping one did not update the badge.
+- An undo pressed while the last card was leaving was dropped, and the summary
+  then covered the card.
+- With focus on a review button, `Enter` in the viewer decided the card behind
+  the photo; `Enter` on a dialog over the viewer closed the viewer instead.
+- A toast's *Undo* stayed clickable above the delete confirmation; the
+  collapsed footer kept its buttons in the tab order; *Put back* lost its
+  confirmation when the count refresh failed; the pile opened scrolled to
+  wherever the library was.
+
 New: a redesigned library (overview line, stacked status bars, months grouped
 by year with a fan of thumbnails), an end-of-pass summary that offers the next
 month, the deletion pile as a thumbnail grid with *put back*, a folder switcher
 with *forget folder*, onboarding that explains the gestures, a `?` shortcuts
 sheet, a dark theme, undo animations, screen-reader announcements, a live
 count during scans, frontend errors and panics in the file log,
-`npm run preview`, and CI.
+`npm run preview` (with a `?demo` library), CI, a README tour with pictures
+generated from the real UI (`npm run screenshots`), and a release workflow.
 
 ## Open items
 
@@ -95,7 +117,8 @@ src/log.js          leveled logger + ring buffer + file-log sink
 src/style.css       tokens (light, dark) first, then per-view rules
 src-tauri/src/      db.rs, scan.rs, commands.rs, undo.rs, log.rs
 tests/              logic.test.mjs, gui-smoke.cjs (+ serve.cjs, fake-backend.js, probes.js)
-tools/app-icon.svg  icon source
+tools/              app-icon.svg (icon source), screenshots.cjs (README pictures)
+docs/screenshots/   the README pictures, generated; do not edit by hand
 ```
 
 ## How to verify a change

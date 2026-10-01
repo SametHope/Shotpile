@@ -3,6 +3,8 @@
 //
 //   node tests/serve.cjs        -> http://127.0.0.1:8731/  (npm run preview)
 //
+// `/?demo` loads a lived-in demo library instead of the test fixture.
+//
 // The GUI test starts the same server. There is deliberately no copy of the
 // app's markup under tests/: the old harness kept one, and it drifted (Turkish
 // labels, a footer bar the real app does not hide) without anyone noticing.
@@ -37,9 +39,10 @@ function appPage() {
 
 function start(port = 8731, host = "127.0.0.1") {
   const server = http.createServer((req, res) => {
-    const url = decodeURIComponent(req.url.split("?")[0]);
+    const [rawPath, query] = req.url.split("?");
+    const url = decodeURIComponent(rawPath);
     if (url === "/" || url === "/index.html") {
-      res.writeHead(302, { location: "/src/index.html" }).end();
+      res.writeHead(302, { location: `/src/index.html${query ? `?${query}` : ""}` }).end();
       return;
     }
     if (url === "/src/index.html") {
@@ -66,6 +69,8 @@ module.exports = { start };
 if (require.main === module) {
   const port = Number(process.env.PORT) || 8731;
   start(port).then(() => {
-    console.log(`Screenshot Sifter preview (fake backend): http://127.0.0.1:${port}/`);
+    console.log("Screenshot Sifter preview, on an in-memory fake backend:");
+    console.log(`  demo library   http://127.0.0.1:${port}/?demo`);
+    console.log(`  test fixture   http://127.0.0.1:${port}/`);
   });
 }
