@@ -1247,7 +1247,12 @@ async function decide(action, { via = "key", from = null, saved = null } = {}) {
   let updated;
   try {
     // A redo has already written the decision; only the card has to move.
-    updated = saved || (await api("decide", { id: shot.id, kind: action }));
+    updated = saved || (await api("decide", {
+      id: shot.id,
+      kind: action,
+      swipe_dx: from?.dx,
+      swipe_dy: from?.dy,
+    }));
   } catch (e) {
     state.deciding = false;
     state.queue.restore(before);
@@ -1886,6 +1891,10 @@ function showOptions() {
           h("button", { class: "btn sm", onclick: () => { closeModal(); showLog(); } }, icon("log", { size: 15 }), "View the log"),
           h("button", { class: "btn sm", onclick: () => { closeModal(); showShortcuts(); } }, icon("keyboard", { size: 15 }), "Keyboard shortcuts"))),
       h("section", { class: "opt-group" },
+        h("h3", { text: "Statistics" }),
+        h("p", { class: "about-note", text: "Local statistics about your use of Shotpile. Nothing is sent anywhere." }),
+        h("div", { id: "stats-body", class: "stats-container" })),
+      h("section", { class: "opt-group" },
         h("h3", { text: "About" }),
         h("dl", { class: "about-list" },
           fact("Shotpile", info.app_version ? `v${info.app_version}, by SametHope` : ""),
@@ -1900,6 +1909,33 @@ function showOptions() {
     ],
     actions: [{ label: "Close" }],
   });
+
+  // Load statistics after the modal is shown
+  loadStatistics();
+}
+
+function loadStatistics() {
+  api("get_counters").then((groups) => {
+    const statsBody = document.getElementById("stats-body");
+    if (statsBody && groups) {
+      const sections = groups.map((group) =>
+        h("div", { class: "stats-group" },
+          h("div", { class: "stats-header" },
+            h("h4", { text: group.label }),
+            h("button", { class: "btn sm ghost", onclick: () => {
+              api("reset_counters", { group: group.name })
+                .then(() => loadStatistics())
+                .catch((e) => log.error("stats", `Reset ${group.name} failed: ${e}`));
+            }, title: `Reset ${group.label.toLowerCase()} statistics` }, "Reset")),
+          h("dl", { class: "stats-list" },
+            ...group.counters.map(([name, value]) => {
+              const label = name.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+              const formatted = value > 1000000 ? (value / 1048576).toFixed(2) + " MB" : value > 1000 ? (value / 1024).toFixed(2) + " KB" : String(value);
+              return [h("dt", { text: label }), h("dd", { text: formatted })];
+            }))));
+      statsBody.replaceChildren(...sections);
+    }
+  }).catch((e) => log.warn("stats", `Failed to load counters: ${e}`));
 }
 
 // -------------------------------------------------------------- context menus

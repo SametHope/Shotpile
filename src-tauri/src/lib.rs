@@ -55,7 +55,7 @@ pub fn decide_for_tests(
     id: i64,
     kind: &str,
 ) -> Result<db::Shot, String> {
-    commands::apply_decision(db, undo, id, kind)
+    commands::apply_decision(db, undo, id, kind, None, None)
 }
 
 #[doc(hidden)]

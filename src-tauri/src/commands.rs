@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
 
 use crate::db::{
@@ -92,6 +92,25 @@ const PROGRESS_EVERY: std::time::Duration = std::time::Duration::from_millis(120
 pub struct MonthThumbs {
     pub month: String,
     pub paths: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DecideArgs {
+    pub id: i64,
+    pub kind: String,
+    #[serde(default)]
+    pub swipe_dx: Option<f64>,
+    #[serde(default)]
+    pub swipe_dy: Option<f64>,
+}
+
+/// Local statistics counters, grouped by category.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub struct CounterGroup {
+    pub name: String,
+    pub label: String,
+    pub counters: Vec<(String, i64)>,
 }
 
 fn tz_offset_min(tz: Option<i64>) -> i64 {
@@ -516,7 +535,14 @@ pub fn items(state: State<'_, AppState>, ids: Vec<i64>) -> Result<Vec<Shot>, Str
 }
 
 /// The body of `decide`, minus the state plumbing.
-pub fn apply_decision(db: &Db, undo: &mut UndoStack, id: i64, kind: &str) -> Result<Shot, String> {
+pub fn apply_decision(
+    db: &Db,
+    undo: &mut UndoStack,
+    id: i64,
+    kind: &str,
+    swipe_dx: Option<f64>,
+    swipe_dy: Option<f64>,
+) -> Result<Shot, String> {
     let status = match kind {
         "keep" => STATUS_KEPT,
         "skip" => STATUS_SKIPPED,
@@ -533,6 +559,34 @@ pub fn apply_decision(db: &Db, undo: &mut UndoStack, id: i64, kind: &str) -> Res
         return Err(format!("{} is already in the Recycle Bin", before.name));
     }
     db.set_status(id, status, Some(scan::now_ms()))?;
+
+    // Increment counter for this decision type
+    let counter_name = match kind {
+        "keep" => "decision:kept",
+        "skip" => "decision:skipped",
+        "delete" => "decision:staged",
+        _ => "",
+    };
+    if !counter_name.is_empty() {
+        let _ = db.incr_counter(counter_name, 1);
+    }
+
+    // Track swipe direction if available
+    if let (Some(dx), Some(dy)) = (swipe_dx, swipe_dy) {
+        let adx = dx.abs();
+        let ady = dy.abs();
+        if adx >= 80.0 {
+            if dx < 0.0 {
+                let _ = db.incr_counter("swipe:left", 1);
+            } else {
+                let _ = db.incr_counter("swipe:right", 1);
+            }
+        }
+        if ady >= 80.0 && dy < 0.0 {
+            let _ = db.incr_counter("swipe:up", 1);
+        }
+    }
+
     let shot = db
         .shot(id)?
         .ok_or_else(|| format!("no such screenshot: {id}"))?;
@@ -548,9 +602,16 @@ pub fn apply_decision(db: &Db, undo: &mut UndoStack, id: i64, kind: &str) -> Res
 }
 
 #[tauri::command]
-pub fn decide(state: State<'_, AppState>, id: i64, kind: String) -> Result<Shot, String> {
+pub fn decide(state: State<'_, AppState>, args: DecideArgs) -> Result<Shot, String> {
     let db = lock(&state.db);
-    apply_decision(&db, &mut lock(&state.undo), id, &kind)
+    apply_decision(
+        &db,
+        &mut lock(&state.undo),
+        args.id,
+        &args.kind,
+        args.swipe_dx,
+        args.swipe_dy,
+    )
 }
 
 /// The body of `undo_last`: walks back the most recent action that still
@@ -564,6 +625,19 @@ pub fn apply_undo(db: &Db, undo: &mut UndoStack) -> Result<Option<Shot>, String>
     };
     let next_decided_ms = db.status_of(entry.id)?.and_then(|(_, ms)| ms);
     db.set_status(entry.id, &entry.prev, entry.prev_decided_ms)?;
+
+    // Decrement counter for the decision being undone
+    let counter_name = match entry.next.as_str() {
+        STATUS_KEPT => "decision:kept",
+        STATUS_SKIPPED => "decision:skipped",
+        STATUS_STAGED => "decision:staged",
+        _ => "",
+    };
+    if !counter_name.is_empty() {
+        let _ = db.incr_counter(counter_name, -1);
+    }
+    let _ = db.incr_counter("session:undos", 1);
+
     crate::log::info(
         "undo",
         &format!("{} {} -> {}", entry.id, entry.next, entry.prev),
@@ -582,6 +656,19 @@ pub fn apply_redo(db: &Db, undo: &mut UndoStack) -> Result<Option<Shot>, String>
         return Ok(None);
     };
     db.set_status(entry.id, &entry.next, entry.next_decided_ms)?;
+
+    // Increment counter for the decision being redone
+    let counter_name = match entry.next.as_str() {
+        STATUS_KEPT => "decision:kept",
+        STATUS_SKIPPED => "decision:skipped",
+        STATUS_STAGED => "decision:staged",
+        _ => "",
+    };
+    if !counter_name.is_empty() {
+        let _ = db.incr_counter(counter_name, 1);
+    }
+    let _ = db.incr_counter("session:redos", 1);
+
     crate::log::info(
         "redo",
         &format!("{} {} -> {}", entry.id, entry.prev, entry.next),
@@ -703,6 +790,12 @@ pub fn apply_commit(
         still_staged: still_staged as usize,
         failed,
     };
+
+    // Track deletion counters
+    let _ = db.incr_counter("deletion:files_deleted", moved.len() as i64);
+    let _ = db.incr_counter("deletion:bytes_deleted", report.bytes_freed);
+    let _ = db.incr_counter("session:commits", 1);
+
     crate::log::info(
         "commit",
         &format!(
@@ -734,6 +827,113 @@ pub async fn commit_deletes(
         .map_err(|e| e.to_string())?;
     let db = lock(&state.db);
     apply_commit(&db, &mut lock(&state.undo), root_id, outcome)
+}
+
+#[tauri::command]
+#[allow(dead_code)]
+pub fn get_counters(state: State<'_, AppState>) -> Result<Vec<CounterGroup>, String> {
+    let db = lock(&state.db);
+    let all = db.get_all_counters()?;
+
+    let mut groups = Vec::new();
+
+    // Decision counters
+    let decision_counters: Vec<_> = all
+        .iter()
+        .filter(|(k, _)| k.starts_with("decision:"))
+        .map(|(k, v)| (k.strip_prefix("decision:").unwrap_or("").to_string(), *v))
+        .collect();
+    if !decision_counters.is_empty() {
+        groups.push(CounterGroup {
+            name: "decision".to_string(),
+            label: "Decisions".to_string(),
+            counters: decision_counters,
+        });
+    }
+
+    // Deletion counters
+    let deletion_counters: Vec<_> = all
+        .iter()
+        .filter(|(k, _)| k.starts_with("deletion:"))
+        .map(|(k, v)| (k.strip_prefix("deletion:").unwrap_or("").to_string(), *v))
+        .collect();
+    if !deletion_counters.is_empty() {
+        groups.push(CounterGroup {
+            name: "deletion".to_string(),
+            label: "Deletion".to_string(),
+            counters: deletion_counters,
+        });
+    }
+
+    // Swipe counters
+    let swipe_counters: Vec<_> = all
+        .iter()
+        .filter(|(k, _)| k.starts_with("swipe:"))
+        .map(|(k, v)| (k.strip_prefix("swipe:").unwrap_or("").to_string(), *v))
+        .collect();
+    if !swipe_counters.is_empty() {
+        groups.push(CounterGroup {
+            name: "swipe".to_string(),
+            label: "Swipes".to_string(),
+            counters: swipe_counters,
+        });
+    }
+
+    // Session counters
+    let session_counters: Vec<_> = all
+        .iter()
+        .filter(|(k, _)| k.starts_with("session:"))
+        .map(|(k, v)| (k.strip_prefix("session:").unwrap_or("").to_string(), *v))
+        .collect();
+    if !session_counters.is_empty() {
+        groups.push(CounterGroup {
+            name: "session".to_string(),
+            label: "Session".to_string(),
+            counters: session_counters,
+        });
+    }
+
+    // Interaction counters
+    let interaction_counters: Vec<_> = all
+        .iter()
+        .filter(|(k, _)| k.starts_with("interaction:"))
+        .map(|(k, v)| (k.strip_prefix("interaction:").unwrap_or("").to_string(), *v))
+        .collect();
+    if !interaction_counters.is_empty() {
+        groups.push(CounterGroup {
+            name: "interaction".to_string(),
+            label: "Interaction".to_string(),
+            counters: interaction_counters,
+        });
+    }
+
+    // Review counters
+    let review_counters: Vec<_> = all
+        .iter()
+        .filter(|(k, _)| k.starts_with("review:"))
+        .map(|(k, v)| (k.strip_prefix("review:").unwrap_or("").to_string(), *v))
+        .collect();
+    if !review_counters.is_empty() {
+        groups.push(CounterGroup {
+            name: "review".to_string(),
+            label: "Review".to_string(),
+            counters: review_counters,
+        });
+    }
+
+    Ok(groups)
+}
+
+#[tauri::command]
+#[allow(dead_code)]
+pub fn reset_counters(state: State<'_, AppState>, group: Option<String>) -> Result<(), String> {
+    let db = lock(&state.db);
+    if let Some(g) = group {
+        db.reset_counter_group(&g)?;
+    } else {
+        db.reset_all_counters()?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -776,9 +976,9 @@ mod tests {
     #[test]
     fn undo_walks_decisions_back_with_their_times() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 1, "keep").unwrap();
+        apply_decision(&db, &mut undo, 1, "keep", None, None).unwrap();
         let kept_at = status(&db, 1).1;
-        apply_decision(&db, &mut undo, 1, "skip").unwrap();
+        apply_decision(&db, &mut undo, 1, "skip", None, None).unwrap();
 
         let shot = apply_undo(&db, &mut undo).unwrap().unwrap();
         assert_eq!(
@@ -796,7 +996,7 @@ mod tests {
     #[test]
     fn redo_reapplies_an_undone_decision_with_its_time() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 1, "delete").unwrap();
+        apply_decision(&db, &mut undo, 1, "delete", None, None).unwrap();
         let decided = status(&db, 1);
         apply_undo(&db, &mut undo).unwrap().unwrap();
         assert_eq!(status(&db, 1).0, STATUS_PENDING);
@@ -812,7 +1012,7 @@ mod tests {
     #[test]
     fn redo_never_touches_a_committed_row() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 1, "delete").unwrap();
+        apply_decision(&db, &mut undo, 1, "delete", None, None).unwrap();
         apply_undo(&db, &mut undo).unwrap();
         db.set_status(1, STATUS_DELETED, Some(1)).unwrap();
         assert!(apply_redo(&db, &mut undo).unwrap().is_none());
@@ -822,7 +1022,7 @@ mod tests {
     #[test]
     fn undoing_an_unstage_restores_the_original_stage_time() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 2, "delete").unwrap();
+        apply_decision(&db, &mut undo, 2, "delete", None, None).unwrap();
         let staged_at = status(&db, 2).1;
         assert!(staged_at.is_some());
 
@@ -845,7 +1045,7 @@ mod tests {
     #[test]
     fn unstage_leaves_a_row_that_is_not_staged_alone() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 1, "keep").unwrap();
+        apply_decision(&db, &mut undo, 1, "keep", None, None).unwrap();
         let shot = apply_unstage(&db, &mut undo, 1).unwrap();
         assert_eq!(shot.status, STATUS_KEPT);
         assert_eq!(undo.len(), 1, "nothing new to undo");
@@ -855,8 +1055,8 @@ mod tests {
     #[test]
     fn undo_after_a_commit_does_not_resurrect_the_row() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 1, "keep").unwrap();
-        apply_decision(&db, &mut undo, 2, "delete").unwrap();
+        apply_decision(&db, &mut undo, 1, "keep", None, None).unwrap();
+        apply_decision(&db, &mut undo, 2, "delete", None, None).unwrap();
         let report = apply_commit(&db, &mut undo, None, all_moved(&db)).unwrap();
         assert_eq!(report.deleted, 1);
         assert_eq!(report.bytes_freed, 200);
@@ -875,7 +1075,7 @@ mod tests {
         // Belt and braces: without the commit's purge, the status check alone
         // still keeps the row deleted.
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 2, "delete").unwrap();
+        apply_decision(&db, &mut undo, 2, "delete", None, None).unwrap();
         db.set_status(2, STATUS_DELETED, Some(1)).unwrap();
         assert!(apply_undo(&db, &mut undo).unwrap().is_none());
         assert_eq!(status(&db, 2).0, STATUS_DELETED);
@@ -884,10 +1084,10 @@ mod tests {
     #[test]
     fn a_committed_row_cannot_be_decided_or_unstaged_again() {
         let (db, mut undo) = setup();
-        apply_decision(&db, &mut undo, 2, "delete").unwrap();
+        apply_decision(&db, &mut undo, 2, "delete", None, None).unwrap();
         apply_commit(&db, &mut undo, None, all_moved(&db)).unwrap();
         for kind in ["keep", "skip", "delete"] {
-            assert!(apply_decision(&db, &mut undo, 2, kind).is_err());
+            assert!(apply_decision(&db, &mut undo, 2, kind, None, None).is_err());
         }
         assert!(apply_unstage(&db, &mut undo, 2).is_err());
         assert_eq!(status(&db, 2).0, STATUS_DELETED);
@@ -898,7 +1098,7 @@ mod tests {
     fn commit_settles_gone_files_and_keeps_real_failures_staged() {
         let (db, mut undo) = setup();
         for id in 1..=3 {
-            apply_decision(&db, &mut undo, id, "delete").unwrap();
+            apply_decision(&db, &mut undo, id, "delete", None, None).unwrap();
         }
         let rows = db.staged_rows(None).unwrap();
         let (moved, gone, stuck) = (&rows[0], &rows[1], &rows[2]);
@@ -950,8 +1150,8 @@ mod tests {
         )
         .unwrap();
         let x = db.queue_ids("unreviewed", None, Some(other), 0).unwrap()[0];
-        apply_decision(&db, &mut undo, 1, "delete").unwrap();
-        apply_decision(&db, &mut undo, x, "keep").unwrap();
+        apply_decision(&db, &mut undo, 1, "delete", None, None).unwrap();
+        apply_decision(&db, &mut undo, x, "keep", None, None).unwrap();
 
         apply_forget_root(&db, &mut undo, 1).unwrap();
         assert_eq!(undo.len(), 1, "only the other root's entry is left");
