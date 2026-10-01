@@ -33,6 +33,7 @@ import {
   getKeysForAction,
   gestureVisual,
   groupByYear,
+  matchesFilename,
   monthLabel,
   nextMonthWithWork,
   panLimit,
@@ -114,6 +115,7 @@ const state = {
   stagedToken: 0, // guards the async staged view against a stale paint
   libraryScroll: 0, // where the library was scrolled to, restored on return
   showToken: 0, // the latest showCurrent(); an older one must not paint over it
+  filter: "", // filename filter in review view, narrows the queue display
 };
 
 // ---------------------------------------------------------------- tauri glue
@@ -179,6 +181,46 @@ function paintCounts() {
   el.footbar.classList.toggle("on", staged > 0 && state.view !== "review" && state.view !== "staged");
 }
 
+// --------------------------------------------------------------- batched rendering
+
+/**
+ * Render items in batches over animation frames to avoid freezing the UI.
+ * Takes a container element, an array of items, and a function to render each item.
+ * Items are rendered in chunks of batchSize per frame.
+ */
+function batchRender(container, items, renderItem, batchSize = 100) {
+  if (!items.length) {
+    container.replaceChildren();
+    return;
+  }
+
+  const fragments = [];
+  let i = 0;
+
+  function renderBatch() {
+    const end = Math.min(i + batchSize, items.length);
+    const batch = items.slice(i, end);
+    const frag = new DocumentFragment();
+    for (const item of batch) {
+      frag.appendChild(renderItem(item));
+    }
+    fragments.push(frag);
+    i = end;
+
+    if (i < items.length) {
+      requestAnimationFrame(renderBatch);
+    } else {
+      // All items rendered, add to container
+      container.replaceChildren();
+      for (const frag of fragments) {
+        container.appendChild(frag);
+      }
+    }
+  }
+
+  renderBatch();
+}
+
 // ----------------------------------------------------------------- data load
 
 async function loadRoots() {
@@ -237,6 +279,7 @@ async function openQueue(scope, month = null, label = "") {
   state.cache.clear();
   state.queue = new ReviewQueue(ids);
   state.pass = new PassTally();
+  state.filter = "";
   state.scope = { scope, month, label };
   state.view = "review";
   await showCurrent({ enter: "fade" });
@@ -455,17 +498,49 @@ function renderLibrary() {
   const showDone = prefs.get().showDone;
   const shown = showDone ? state.months : state.months.filter((m) => !progressOf(m).done);
   const hidden = state.months.length - shown.length;
-  const years = groupByYear(shown).map((g) => h("section", { class: "year" },
-    h("h2", { class: "section-label", text: g.year }),
-    h("div", { class: "months" }, g.months.map(monthRow))));
   const hiddenNote = hidden
     ? h("p", { class: "filter-note" },
         `${countOf(hidden, "sorted month")} hidden. `,
         h("button", { class: "linklike", onclick: showFilters }, "Change filter"))
     : null;
 
-  el.view.replaceChildren(h("div", { class: "page" }, overview, years, hiddenNote));
-  el.view.scrollTop = state.libraryScroll;
+  const page = h("div", { class: "page" }, overview, hiddenNote);
+  el.view.replaceChildren(page);
+
+  // Batch render month rows grouped by year to avoid UI freeze on large libraries
+  const years = groupByYear(shown);
+  let monthIndex = 0;
+  const allMonths = shown;
+
+  function renderYearBatch() {
+    const batchSize = 100;
+    const endIndex = Math.min(monthIndex + batchSize, allMonths.length);
+    const batch = allMonths.slice(monthIndex, endIndex);
+
+    for (const m of batch) {
+      const year = String(m?.month ?? "").slice(0, 4) || "Undated";
+      let yearSection = page.querySelector(`.year:has(> h2[data-year="${year}"])`);
+      if (!yearSection) {
+        yearSection = h("section", { class: "year" },
+          h("h2", { class: "section-label", text: year, dataset: { year } }),
+          h("div", { class: "months" }));
+        page.appendChild(yearSection);
+      }
+      const monthsDiv = yearSection.querySelector(".months");
+      if (monthsDiv) {
+        monthsDiv.appendChild(monthRow(m));
+      }
+    }
+
+    monthIndex = endIndex;
+    if (monthIndex < allMonths.length) {
+      requestAnimationFrame(renderYearBatch);
+    } else {
+      el.view.scrollTop = state.libraryScroll;
+    }
+  }
+
+  renderYearBatch();
 }
 
 function monthRow(m) {
@@ -481,6 +556,7 @@ function monthRow(m) {
   return h("button", {
     class: `month${p.done ? " is-done" : ""}`,
     dataset: { month: m.month },
+    tabindex: 0,
     "aria-label": `${label}: ${countOf(p.total, "screenshot")}, ${p.done ? "sorted" : `${formatCount(p.remaining)} left`}`,
     onclick: () => (p.done ? openQueue("kept", m.month, `Kept from ${label}`) : openQueue("month", m.month, label)),
   },
@@ -588,6 +664,35 @@ function reviewHead() {
       chip(ACTION.KEEP, "check", c.keep, "Kept in this pass"),
       chip(ACTION.DELETE, "trash", c.delete, "Marked for deletion in this pass"),
       chip(ACTION.SKIP, "skip", c.skip, "Skipped in this pass")),
+    h("div", { class: "review-filter" },
+      h("input", {
+        id: "filter-input",
+        type: "text",
+        class: "filter-box",
+        placeholder: "Filter by filename",
+        value: state.filter,
+        onkeydown: (e) => {
+          if (e.key === "Escape") {
+            state.filter = "";
+            e.currentTarget.value = "";
+            renderReviewChrome();
+          }
+        },
+        oninput: (e) => {
+          state.filter = e.currentTarget.value;
+          renderReviewChrome();
+        },
+      }),
+      state.filter ? h("button", {
+        class: "btn sm",
+        title: "Clear filter",
+        onclick: () => {
+          state.filter = "";
+          const inp = document.getElementById("filter-input");
+          if (inp) inp.value = "";
+          renderReviewChrome();
+        },
+      }, icon("x", { size: 14 })) : null),
     h("div", { class: "review-bar", "aria-hidden": "true" }, h("i", { id: "review-bar" })));
 }
 
@@ -659,11 +764,14 @@ function paintFilmstrip() {
     if (!shot) missing.push(ids[i]);
     const status = shot?.status || "pending";
     const current = i === q.cursor;
+    const matches = matchesFilename(shot?.name, state.filter);
+    const hidden = state.filter && !matches && !current;
     items.push(h("button", {
-      class: `film-item${current ? " current" : ""}`,
+      class: `film-item${current ? " current" : ""}${hidden ? " hidden" : ""}`,
       dataset: { status, index: String(i), id: String(ids[i]) },
       title: shot ? `${shot.name}${status !== "pending" ? ` — ${STATUS_LABEL[status] || status}` : ""}` : `#${ids[i]}`,
       "aria-current": current ? "true" : null,
+      hidden: hidden ? true : undefined,
       onclick: () => jumpTo(i),
     },
       h("span", { class: "film-thumb" },
@@ -1543,7 +1651,7 @@ async function renderStaged() {
   }
 
   const total = rows.reduce((n, r) => n + (Number(r.size) || 0), 0);
-  el.view.replaceChildren(h("div", { class: "page" },
+  const page = h("div", { class: "page" },
     h("section", { class: "pile-head" },
       h("div", {},
         h("h1", { text: "Marked for deletion" }),
@@ -1553,7 +1661,30 @@ async function renderStaged() {
           icon("play", { size: 16 }), "Check one by one"),
         h("button", { class: "btn danger solid", id: "btn-pile-commit", onclick: commit },
           icon("trash", { size: 16 }), `Move to ${binName()}`))),
-    h("div", { class: "pile-grid", role: "list" }, rows.map(pileTile))));
+    h("div", { class: "pile-grid", role: "list" }));
+  el.view.replaceChildren(page);
+
+  // Batch render pile tiles to avoid UI freeze on large piles
+  const grid = page.querySelector(".pile-grid");
+  let tileIndex = 0;
+  const batchSize = 100;
+
+  function renderTileBatch() {
+    const endIndex = Math.min(tileIndex + batchSize, rows.length);
+    const batch = rows.slice(tileIndex, endIndex);
+    const frag = new DocumentFragment();
+    for (const row of batch) {
+      frag.appendChild(pileTile(row));
+    }
+    grid.appendChild(frag);
+    tileIndex = endIndex;
+
+    if (tileIndex < rows.length && state.view === "staged" && token === state.stagedToken) {
+      requestAnimationFrame(renderTileBatch);
+    }
+  }
+
+  renderTileBatch();
 }
 
 function thumb(shot) {
@@ -2344,6 +2475,44 @@ document.addEventListener("keydown", (e) => {
     if (!e.repeat) undo();
     return;
   }
+
+  // Library keyboard navigation: arrow keys move focus, Enter opens the focused month
+  if (state.view === "months") {
+    const months = document.querySelectorAll(".month");
+    if (!months.length) return;
+    const focused = document.activeElement;
+    const focusedIndex = Array.from(months).indexOf(focused);
+    let nextIndex = -1;
+
+    if (e.key === "ArrowRight") {
+      e.preventDefault();
+      nextIndex = focusedIndex < 0 ? 0 : Math.min(focusedIndex + 1, months.length - 1);
+    } else if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      nextIndex = focusedIndex < 0 ? months.length - 1 : Math.max(focusedIndex - 1, 0);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      // Move to next month in the visual grid (typically row-wise)
+      nextIndex = focusedIndex < 0 ? 0 : Math.min(focusedIndex + 4, months.length - 1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      // Move to previous month in the visual grid
+      nextIndex = focusedIndex < 0 ? months.length - 1 : Math.max(focusedIndex - 4, 0);
+    } else if (e.key === "Enter" && focusedIndex >= 0) {
+      e.preventDefault();
+      const focusedMonth = months[focusedIndex];
+      focusedMonth.click();
+      return;
+    } else {
+      return;
+    }
+
+    if (nextIndex >= 0) {
+      months[nextIndex].focus();
+    }
+    return;
+  }
+
   if (state.view !== "review") return;
   if (e.key === "z" || e.key === "Z" || e.key === "Backspace") {
     e.preventDefault();

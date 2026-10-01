@@ -579,4 +579,14 @@ export function detectKeyConflict(key, targetActionId, bindings) {
  */
 export function resetKeyBindings(prefs) {
   prefs.set({ keyBindings: null });
+/**
+ * Filter a filename by substring match. Case-insensitive. Returns true if the
+ * filename should be included in the filtered results.
+ *
+ * Empty filter string includes everything. Filters on the filename only,
+ * not the full path.
+ */
+export function matchesFilename(filename, filter) {
+  if (!filter || !String(filter).trim()) return true;
+  return String(filename || "").toLowerCase().includes(String(filter).toLowerCase());
 }
