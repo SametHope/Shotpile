@@ -129,6 +129,19 @@ export function anchorZoom(dx, dy, x, y, nextScale, scale) {
   return { x: dx - (dx - x) * k, y: dy - (dy - y) * k };
 }
 
+/**
+ * The zoom factor for one wheel event. A mouse wheel sends big steps (about
+ * 100 px per notch), a touchpad sends many small ones, and a touchpad pinch
+ * arrives as a ctrl+wheel with deltas of a few pixels. An exponential of the
+ * delta makes all three feel alike, where a fixed step per event made a
+ * touchpad jump or stall. Line and page modes are scaled to pixels first.
+ */
+export function wheelZoomFactor(deltaY, deltaMode = 0, pinch = false) {
+  const px = deltaMode === 1 ? deltaY * 16 : deltaMode === 2 ? deltaY * 400 : deltaY;
+  const capped = Math.max(-120, Math.min(120, px));
+  return Math.exp(-capped * (pinch ? 0.012 : 0.0016));
+}
+
 /** Clamps a scale to the 1x..MAX_ZOOM range the viewer and card both use. */
 export function clampScale(scale, factor, min = 1, max = MAX_ZOOM) {
   return Math.min(max, Math.max(min, scale * factor));

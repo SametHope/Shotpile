@@ -12,6 +12,7 @@ import {
   basename,
   classifyGesture,
   clampScale,
+  wheelZoomFactor,
   containedSize,
   countOf,
   dragTilt,
@@ -411,4 +412,18 @@ test("the pan threshold is a real zoom, not a hair", () => {
   assert.equal(ZOOM_PAN_THRESHOLD, 1.2);
   assert.equal(1.19 < ZOOM_PAN_THRESHOLD, true);
   assert.equal(1.21 >= ZOOM_PAN_THRESHOLD, true);
+});
+
+test("wheelZoomFactor: direction, touchpad smoothness and a cap", () => {
+  assert.ok(wheelZoomFactor(-100) > 1);
+  assert.ok(wheelZoomFactor(100) < 1);
+  assert.equal(wheelZoomFactor(0), 1);
+  // Many small touchpad events add up to about one notch, not one jump each.
+  const small = wheelZoomFactor(-4) ** 25;
+  assert.ok(Math.abs(small - wheelZoomFactor(-100)) < 0.05, `${small}`);
+  // A pinch (ctrl+wheel) is more sensitive than a plain wheel.
+  assert.ok(wheelZoomFactor(-4, 0, true) > wheelZoomFactor(-4, 0, false));
+  // One huge event cannot jump past the cap; line mode counts as pixels.
+  assert.equal(wheelZoomFactor(-5000), wheelZoomFactor(-120));
+  assert.equal(wheelZoomFactor(-3, 1), wheelZoomFactor(-48, 0));
 });
