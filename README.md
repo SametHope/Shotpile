@@ -298,6 +298,20 @@ Tracked but not previewable, shown as a placeholder you can still decide on:
   drives), Windows asks before deleting each file permanently; cancelling
   leaves it on the pile.
 
+## Planned
+
+Not built yet, roughly in this order:
+
+- Copy image to the clipboard from the right-click menu.
+- "Show in file manager" selecting the file instead of opening a folder.
+- A right-click menu on pile tiles: restore, open, show in file manager, copy
+  full path, copy file name.
+- `A` and `D` to step to the previous and next photo in the review strip.
+- Rebindable keyboard shortcuts in Options.
+- Possible later: keyboard navigation in the library, a filename filter inside
+  a review, bulk restore from the pile, a clearer report when a commit cannot
+  delete some files, and duplicate detection.
+
 ## License
 
 [PolyForm Noncommercial 1.0.0](LICENSE). You may use, change and share

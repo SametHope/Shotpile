@@ -24,3 +24,17 @@ Nothing is known broken. In rough priority order:
    pass on a Mac. On macOS the `trash` crate goes through Finder, which asks
    for Automation permission on the first commit. Shortcut labels say `Ctrl`
    even where `Cmd` works.
+5. **Planned features** (also in the README's Planned section):
+   - Right-click menu: copy image; make "show in file manager" select the file
+     (it currently opens Documents); extend the menu to pile tiles with
+     restore, open, show in file manager, copy full path and copy file name.
+   - `A`/`D` (maybe Down for previous) to move through the filmstrip relative
+     to the current photo.
+   - Rebindable shortcuts in Options. Needs actions separated from keys first
+     (an action table in `logic.js`, keys looked up through it, saved in
+     prefs), so the keyboard handler and the Keyboard help share one source.
+   - Remove the dot on the Filter button while months are hidden.
+   - Ideas, unrated: library keyboard navigation, filename filter in a review,
+     bulk restore from the pile, a per-file failure list after a commit,
+     grouped undo for a pass, duplicate detection (needs a hashing crate whose
+     licence is in `about.toml`).
