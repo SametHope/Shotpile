@@ -38,3 +38,10 @@ Nothing is known broken. In rough priority order:
      bulk restore from the pile, a per-file failure list after a commit,
      grouped undo for a pass, duplicate detection (needs a hashing crate whose
      licence is in `about.toml`).
+6. **White flashes after start-up.** The start-up flash is handled (hidden
+   window, `#splash`, boot.js), but a white flash can still show when the
+   window goes fullscreen and on the first scroll afterwards. Not yet
+   investigated: it may be the WebView (WebView2) painting before the page
+   catches up, or a Tauri window background issue. Worth researching properly:
+   the window and WebView background colour (including dark theme), the
+   resize-to-fullscreen repaint, and compositing of the scrolling `#view`.
