@@ -280,16 +280,18 @@ export function groupByYear(months) {
 }
 
 /**
- * The month to offer after finishing `current`: the next older one that still
- * has work, else the newest one that does, else null.
+ * The month to offer after finishing `current`: the nearest later month that
+ * still has work, else the nearest earlier one, else null.
  */
 export function nextMonthWithWork(months, current) {
-  const list = months || [];
-  const at = list.findIndex((m) => m.month === current);
-  const hasWork = (m) => m.month !== current && (Number(m.remaining) || 0) > 0;
-  for (let i = at + 1; i < list.length; i++) if (hasWork(list[i])) return list[i].month;
-  const any = list.find(hasWork);
-  return any ? any.month : null;
+  const open = (months || []).filter(
+    (m) => m.month !== current && (Number(m.remaining) || 0) > 0,
+  );
+  const key = (m) => String(m.month ?? "");
+  const later = open.filter((m) => key(m) > String(current ?? ""));
+  if (later.length) return later.reduce((a, m) => (key(m) < key(a) ? m : a)).month;
+  const earlier = open.filter((m) => key(m) < String(current ?? ""));
+  return earlier.length ? earlier.reduce((a, m) => (key(m) > key(a) ? m : a)).month : null;
 }
 
 /**

@@ -82,14 +82,17 @@ test("groupByYear keeps newest-first order", () => {
   assert.deepEqual(groupByYear(undefined), []);
 });
 
-test("nextMonthWithWork prefers the next older month, then any with work", () => {
+test("nextMonthWithWork goes chronologically forward, else backward", () => {
   const months = [
     { month: "2026-03", remaining: 4 },
     { month: "2026-02", remaining: 0 },
     { month: "2026-01", remaining: 2 },
+    { month: "2025-06", remaining: 1 },
+    { month: "2025-05", remaining: 3 },
   ];
-  assert.equal(nextMonthWithWork(months, "2026-03"), "2026-01");
-  assert.equal(nextMonthWithWork(months, "2026-01"), "2026-03", "wraps to the newest with work");
+  assert.equal(nextMonthWithWork(months, "2025-05"), "2025-06", "nearest later month");
+  assert.equal(nextMonthWithWork(months, "2025-06"), "2026-01", "skips finished months");
+  assert.equal(nextMonthWithWork(months, "2026-03"), "2026-01", "no later month: nearest earlier");
   assert.equal(nextMonthWithWork([{ month: "2026-03", remaining: 4 }], "2026-03"), null);
 });
 
