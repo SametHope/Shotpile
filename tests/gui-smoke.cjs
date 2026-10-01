@@ -23,6 +23,11 @@ const KEYS = {
   ArrowRight: { vk: 39, code: "ArrowRight" },
   ArrowDown: { vk: 40, code: "ArrowDown" },
   z: { vk: 90, code: "KeyZ", text: "z" },
+  y: { vk: 89, code: "KeyY", text: "y" },
+  "=": { vk: 187, code: "Equal", text: "=" },
+  "-": { vk: 189, code: "Minus", text: "-" },
+  "0": { vk: 48, code: "Digit0", text: "0" },
+  ",": { vk: 188, code: "Comma", text: "," },
   i: { vk: 73, code: "KeyI" },
   l: { vk: 76, code: "KeyL" },
   "?": { vk: 191, code: "Slash", text: "?" },
@@ -114,6 +119,7 @@ const CTRL_SHIFT = CTRL | SHIFT;
     // ---- boot: the library ----
     const months = await probe("p.monthRows()");
     ok("boots into the library", months.length === 2, JSON.stringify(months));
+    ok("the page tells the backend to show the window", (await waitFor("p.logFilter('ready').length === 1")) === true, JSON.stringify(await probe("p.logFilter('ready')")));
     ok("months are ordered newest first", /September/.test(months[0] || ""), JSON.stringify(months));
     ok("month rows count screenshots, singular included", /3 screenshots/.test(months[0] || "") && /1 screenshot(?!s)/.test(months[1] || ""), JSON.stringify(months));
     ok("month rows show a fan of thumbnails", (await probe("p.monthThumbCount()")) > 0, String(await probe("p.monthThumbCount()")));
@@ -392,6 +398,17 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await waitFor(`p.cardName() === ${JSON.stringify(first)}`);
     ok("Z undoes the keep", (await status(first)) === "pending", await status(first));
     ok("cursor returns to the undone position", (await probe("p.progress()")) === "1 of 3", await probe("p.progress()"));
+
+    // ---- redo throws it again, and undo takes it back once more ----
+    await press("y");
+    await waitFor(`p.cardName() === ${JSON.stringify(SECOND)}`);
+    ok("Y redoes the keep", (await status(first)) === "kept", await status(first));
+    ok("redo advances the deck like a decision", (await probe("p.cardName()")) === SECOND, String(await probe("p.cardName()")));
+    await sleep(450);
+    await press("z");
+    await waitFor(`p.cardName() === ${JSON.stringify(first)}`);
+    ok("undo after a redo walks it back again", (await status(first)) === "pending", await status(first));
+    await sleep(450);
 
     // ---- skip, then undo (the deferred-item case) ----
     await press("ArrowUp");
@@ -742,6 +759,42 @@ const CTRL_SHIFT = CTRL | SHIFT;
     const bg = await probe("p.bodyBg()");
     const lum = (bg.match(/\d+/g) || []).slice(0, 3).reduce((n, v) => n + Number(v), 0);
     ok("the app follows a dark system theme", lum < 120, bg);
+    ok("the splash is gone once the app is up", (await probe("getComputedStyle(document.getElementById('splash')).visibility")) === "hidden", await probe("getComputedStyle(document.getElementById('splash')).visibility"));
+
+    // ---- options: a theme choice beats the system setting ----
+    await press(",", CTRL);
+    ok("Ctrl+, opens the options", (await waitFor("document.querySelector('.options-sheet') !== null")) === true);
+    ok("the options show the versions", /2\.11\.6/.test(await probe("document.querySelector('.about-list').textContent")), await probe("document.querySelector('.about-list')?.textContent"));
+    await js("document.querySelector('.segmented [data-theme=light]').click();");
+    ok("choosing Light overrides a dark system", (await probe("document.documentElement.dataset.theme")) === "light", await probe("document.documentElement.dataset.theme"));
+    ok("the choice is saved", /"theme":"light"/.test(await probe("localStorage.getItem('sifter.prefs')")), await probe("localStorage.getItem('sifter.prefs')"));
+    await js("document.querySelector('.segmented [data-theme=system]').click();");
+    ok("System follows the system again", (await probe("document.documentElement.dataset.theme")) === "dark", await probe("document.documentElement.dataset.theme"));
+    await js("[...document.querySelectorAll('.options-sheet .btn')].find((b) => b.textContent === 'Open').click();");
+    ok("Open shows the data folder", (await waitFor("p.logFilter('reveal:data').length > 0")) === true, JSON.stringify(await probe("p.logFilter('reveal')")));
+    await press("Escape");
+
+    // ---- app zoom ----
+    await press("=", CTRL);
+    ok("Ctrl+= zooms the app in a step", (await waitFor("document.documentElement.style.zoom === '1.1'")) === true, await probe("document.documentElement.style.zoom"));
+    await press("-", CTRL);
+    await press("-", CTRL);
+    ok("Ctrl+- zooms out", (await probe("document.documentElement.style.zoom")) === "0.9", await probe("document.documentElement.style.zoom"));
+    ok("the zoom is saved", /"zoom":0.9/.test(await probe("localStorage.getItem('sifter.prefs')")), await probe("localStorage.getItem('sifter.prefs')"));
+    await press("0", CTRL);
+    ok("Ctrl+0 resets the zoom", (await probe("document.documentElement.style.zoom")) === "1", await probe("document.documentElement.style.zoom"));
+
+    // ---- right-click menus ----
+    const rightClick = (sel) => js(`const n = document.querySelector(${JSON.stringify(sel)}); const r = n.getBoundingClientRect();
+      n.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 20 }));`);
+    await rightClick(".month");
+    const monthMenu = await probe("[...document.querySelectorAll('.menu .menu-label')].map((n) => n.textContent)");
+    ok("right-clicking a month offers to sort it", monthMenu?.[0] === "Sort this month" && monthMenu.includes("Options"), JSON.stringify(monthMenu));
+    await press("Escape");
+    ok("Escape closes the context menu", (await probe("document.querySelector('.menu')")) === null);
+    const nativeKept = await js(`const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true }); document.querySelector("#view").dispatchEvent(ev); return ev.defaultPrevented;`);
+    ok("the browser's own menu is replaced", nativeKept === true);
+    await press("Escape");
   } catch (e) {
     ok(`run aborted: ${e.message}`, false, e.stack);
   }

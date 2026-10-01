@@ -93,7 +93,8 @@ you can still restore them from there.
   again and you skip it again, it stays skipped and the pass moves on.
 - **Undo** (`Z`, `Ctrl+Z`, `Backspace`) brings a card back from the side it
   left. It walks back decisions only while they still apply: a file that is
-  already in the Recycle Bin is never brought back as a live row.
+  already in the Recycle Bin is never brought back as a live row. **Redo**
+  (`Y`, `Ctrl+Y`, `Ctrl+Shift+Z`) throws an undone card again.
 - **Looking closer.** Scroll to zoom the card around the cursor (up to 8×);
   once zoomed, a drag pans instead of deciding. `Space` or a click opens the
   photo full screen with the same zoom.
@@ -106,7 +107,15 @@ you can still restore them from there.
 - **Several folders.** The folder name in the header switches between saved
   folders, adds another, or forgets one. Forgetting only removes it from the
   app's database; no file is touched.
-- Light and dark themes follow Windows. `?` lists every shortcut.
+- **Options** (the sliders button, or `Ctrl+,`) picks the theme (System,
+  Light or Dark) and the app zoom, shows where your data and logs live with
+  buttons to open them, and lists the versions and licences in an About
+  section. Zoom also follows `Ctrl` with `+`, `-`, `0` or the mouse wheel, and
+  is remembered; at 125% or 150% Windows scaling the layout tightens up rather
+  than cutting things off.
+- **Right-click** a card, a pile tile or a filmstrip thumbnail to open it, show
+  it in File Explorer, copy its path, or decide it; a month offers to sort it.
+- `?` lists every shortcut.
 
 ### Keyboard
 
@@ -114,6 +123,8 @@ you can still restore them from there.
 | --- | --- |
 | `←` `→` `↑` | Delete (mark), keep, skip. Holding a key decides once. |
 | `Z`, `Backspace`, `Ctrl+Z` | Undo. `Ctrl+Z` also works outside a review. |
+| `Y`, `Ctrl+Y`, `Ctrl+Shift+Z` | Redo |
+| `Ctrl` + `+` `-` `0` | Zoom the whole app; `Ctrl+,` opens Options |
 | `Space` | Open the current photo full screen (and close it again) |
 | `+` `-` `0` | Zoom the card in, out, back to 100%. Arrows pan while zoomed. |
 | `Esc` | Close the viewer or a dialog |
@@ -187,8 +198,8 @@ Both are always on, including in release builds.
 ```powershell
 npm test                                  # both JS suites
 npm run test:logic                        # 44 logic tests (node --test)
-npm run test:gui                          # 209 GUI assertions in headless Chrome
-cd src-tauri; cargo test                  # 65 unit + 4 end-to-end tests
+npm run test:gui                          # 227 GUI assertions in headless Chrome
+cd src-tauri; cargo test                  # 71 unit + 4 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
 ```

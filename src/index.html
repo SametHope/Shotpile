@@ -7,8 +7,13 @@
   <title>Screenshot Sifter</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%231d4ed8'/%3E%3Cpath d='M5 7h14M7.4 11h9.2M9.8 15h4.4' stroke='white' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="./style.css" />
+  <script src="./boot.js"></script>
 </head>
 <body data-view="loading">
+  <div id="splash" aria-hidden="true">
+    <span class="splash-mark"><svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4.2 6.2h15.6M6.8 10.5h10.4M9.4 14.8h5.2"/><circle cx="9.3" cy="19.2" r="1.15" fill="currentColor" stroke="none"/><circle cx="12" cy="19.2" r="1.15" fill="currentColor" stroke="none"/><circle cx="14.7" cy="19.2" r="1.15" fill="currentColor" stroke="none"/></svg></span>
+    <span class="splash-name">Screenshot Sifter</span>
+  </div>
   <div id="app">
     <header class="topbar">
       <div class="hwrap">
@@ -29,6 +34,7 @@
         <button id="btn-staged" class="btn pile-btn" hidden title="Screenshots marked for deletion">
           To delete <span class="badge" id="staged-badge">0</span>
         </button>
+        <button id="btn-options" class="btn ghost icon" title="Options (Ctrl+,)" aria-label="Options"><span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg></span></button>
         <button id="btn-help" class="btn ghost icon" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
       </div>
     </header>
@@ -42,6 +48,7 @@
         <span class="staged-count"><b id="staged-n">0 screenshots</b> marked for deletion <span id="staged-size" class="muted"></span> &middot; still on disk</span>
         <div class="spacer"></div>
         <button id="btn-undo" class="btn ghost" title="Undo the last decision (Ctrl+Z)">Undo</button>
+        <button id="btn-redo" class="btn ghost" title="Redo what was undone (Ctrl+Y)">Redo</button>
         <button id="btn-commit" class="btn danger solid">Move to Recycle Bin</button>
       </div>
     </div>

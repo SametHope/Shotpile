@@ -21,6 +21,9 @@ deletion into the Windows Recycle Bin.
   frontend. `package.json` exists only for the Tauri CLI and the tests.
 - **Decisions are never reset by a rescan.** The upsert in `db.rs` deliberately
   omits `status` and `decided_ms`. Keep it that way.
+- **Redo mirrors undo.** An undone entry moves to the redo side and only
+  reapplies while its row still shows `prev`; a new decision clears redo, and
+  commits and forgets purge both sides.
 - **Undo never resurrects a committed file.** `undo.rs` entries record the
   status they set (`next`) and only apply while the row still shows it; a
   `deleted` row is never changed by undo, `decide` or `unstage`, and the commit
@@ -42,6 +45,7 @@ deletion into the Windows Recycle Bin.
 ## Layout
 
 ```
+src/boot.js      classic <head> script: theme + zoom prefs before first paint
 src/logic.js     pure, DOM-free, unit tested in tests/logic.test.mjs
 src/log.js       leveled logger, DOM-free; forwards warn/error through a sink
 src/icons.js     icon SVG strings, DOM-free
@@ -73,8 +77,8 @@ is always `db`, then `undo`.
 
 ```powershell
 npm run test:logic                          # 44 frontend logic tests
-npm run test:gui                            # 209 GUI assertions in headless Chrome
-cd src-tauri; cargo test                    # 65 unit + 4 end-to-end tests
+npm run test:gui                            # 227 GUI assertions in headless Chrome
+cd src-tauri; cargo test                    # 71 unit + 4 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
 ```
@@ -128,6 +132,19 @@ library (`seedDemo()` in the fake), which is also what the README pictures show.
   `log_read` command backs it.
 - Both are compiled into release builds. When something breaks, ask for the
   console output or the file log before guessing.
+
+## Start-up, theme and zoom
+
+- The window starts hidden (`visible: false`); `revealApp()` in app.js calls
+  `app_ready` after the first view paints, and lib.rs shows it after 4 s
+  regardless. The `#splash` in index.html covers the gap.
+- Dark mode is `:root[data-theme="dark"]`, never a `prefers-color-scheme`
+  query: boot.js resolves "System" itself, so an Options choice can beat it.
+  Give every new dark override that selector.
+- Zoom is the WebView's own (`set_zoom`), saved by boot.js. Tauri's built-in
+  zoom hotkeys are off so the app's steps and saved value stay the only path.
+- Narrow and short windows (Windows scaling at 125%/150%) are handled by the
+  `small windows` media queries at the end of style.css.
 
 ## CSS gotchas
 

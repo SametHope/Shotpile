@@ -242,9 +242,10 @@ export function menuOpen() {
 /**
  * A small popover menu under `anchor`. Items: `{ label, sub, icon, onClick,
  * checked, danger }`, or `{ separator: true }`. Closes on an item, Escape, a
- * click elsewhere, or the window losing focus.
+ * click elsewhere, or the window losing focus. With `at` ({ x, y }) it opens
+ * at that point instead, as a context menu; `anchor` may then be null.
  */
-export function openMenu(anchor, items, { align = "start" } = {}) {
+export function openMenu(anchor, items, { align = "start", at = null } = {}) {
   closeMenu();
   const list = h("div", { class: "menu", role: "menu" });
   for (const item of items) {
@@ -269,15 +270,25 @@ export function openMenu(anchor, items, { align = "start" } = {}) {
     ));
   }
   document.body.append(list);
-  const r = anchor.getBoundingClientRect();
   const w = list.offsetWidth;
-  const left = align === "end" ? r.right - w : r.left;
+  const hgt = list.offsetHeight;
+  let left;
+  let top;
+  if (at) {
+    left = at.x;
+    // Flip above the pointer when there is no room below it.
+    top = at.y + hgt + 8 > window.innerHeight ? at.y - hgt : at.y;
+  } else {
+    const r = anchor.getBoundingClientRect();
+    left = align === "end" ? r.right - w : r.left;
+    top = r.bottom + 6;
+  }
   list.style.left = `${Math.max(8, Math.min(left, window.innerWidth - w - 8))}px`;
-  list.style.top = `${r.bottom + 6}px`;
-  anchor.setAttribute("aria-expanded", "true");
+  list.style.top = `${Math.max(8, Math.min(top, window.innerHeight - hgt - 8))}px`;
+  anchor?.setAttribute("aria-expanded", "true");
 
   const onDown = (e) => {
-    if (!list.contains(e.target) && !anchor.contains(e.target)) closeMenu();
+    if (!list.contains(e.target) && !anchor?.contains(e.target)) closeMenu();
   };
   const onKey = (e) => {
     // Tabbing away leaves the menu behind, so it closes and lets focus move on.
@@ -289,7 +300,7 @@ export function openMenu(anchor, items, { align = "start" } = {}) {
       e.preventDefault();
       e.stopPropagation();
       closeMenu();
-      anchor.focus();
+      anchor?.focus();
       return;
     }
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -317,6 +328,6 @@ export function closeMenu() {
   document.removeEventListener("keydown", onKey, true);
   window.removeEventListener("blur", closeMenu);
   window.removeEventListener("resize", closeMenu);
-  anchor.setAttribute("aria-expanded", "false");
+  anchor?.setAttribute("aria-expanded", "false");
   list.remove();
 }

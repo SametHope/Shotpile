@@ -105,6 +105,13 @@ pub fn run() {
                 "boot",
                 &format!("database opened: {}", dir.join("sifter.db").display()),
             );
+            // The window starts hidden and the page shows it once painted; if
+            // the page never does (a script error, say), show it anyway.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(4));
+                let _ = commands::show_main_window(&handle);
+            });
             app.manage(AppState {
                 db: Mutex::new(db),
                 undo: Mutex::new(UndoStack::new(UNDO_LIMIT)),
@@ -124,12 +131,16 @@ pub fn run() {
             commands::items,
             commands::decide,
             commands::undo_last,
+            commands::redo_last,
             commands::unstage,
             commands::staged_list,
             commands::commit_deletes,
             commands::log_read,
             commands::log_write,
             commands::open_devtools,
+            commands::reveal,
+            commands::set_zoom,
+            commands::app_ready,
         ])
         .run(tauri::generate_context!())
         .expect("Screenshot Sifter failed to start");

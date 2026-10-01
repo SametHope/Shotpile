@@ -21,6 +21,7 @@
   let nextId = 1;
   const shots = new Map();
   const undoStack = [];
+  const redoStack = [];
   const UNDO_LIMIT = 200;
 
   // Fault injection, for the edge cases the logic tests cannot reach.
@@ -154,6 +155,7 @@
   const byTaken = (dir) => (x, y) => dir * (x.taken_ms - y.taken_ms || x.id - y.id);
 
   function pushUndo(entry) {
+    redoStack.length = 0;
     undoStack.push(entry);
     if (undoStack.length > UNDO_LIMIT) undoStack.splice(0, undoStack.length - UNDO_LIMIT);
   }
@@ -174,6 +176,7 @@
     app_info: () => ({
       data_dir: "C:/fake", db_path: "C:/fake/sifter.db", log_path: "C:/fake/logs/sifter.log",
       schema_version: 1, app_version: "1.0.0", image_exts: ["png"], unviewable_exts: ["heic"],
+      tauri_version: "2.11.6", webview_version: "131.0.2903.70", sqlite_version: "3.50.4",
     }),
     list_roots: () => roots
       .slice()
@@ -275,6 +278,7 @@
         const e = undoStack.pop();
         const s = shots.get(e.id);
         if (!s || s.status !== e.next || s.status === "deleted") continue;
+        redoStack.push({ ...e, next_decided_ms: s.decided_ms });
         s.status = e.prev;
         s.decided_ms = e.prev_decided_ms;
         LOG.push("undo:" + s.name);
@@ -282,6 +286,24 @@
       }
       return null;
     },
+    // Like apply_redo: the mirror rule, the row must still show `prev`.
+    redo_last: () => {
+      while (redoStack.length) {
+        const e = redoStack.pop();
+        const s = shots.get(e.id);
+        if (!s || s.status !== e.prev || s.status === "deleted") continue;
+        s.status = e.next;
+        s.decided_ms = e.next_decided_ms;
+        undoStack.push(e);
+        LOG.push("redo:" + s.name);
+        return { ...s };
+      }
+      return null;
+    },
+    reveal: (a) => { LOG.push("reveal:" + a.target + (a.id != null ? ":" + a.id : "")); return null; },
+    // The real command zooms the WebView; CSS zoom is the closest stand-in.
+    set_zoom: (a) => { document.documentElement.style.zoom = String(a.factor); LOG.push("zoom:" + a.factor); return null; },
+    app_ready: () => { LOG.push("ready"); return null; },
     unstage: (a) => {
       const s = shots.get(a.id);
       if (!s) throw new Error("no such screenshot: " + a.id);
@@ -305,6 +327,7 @@
       }
       const ids = new Set(moved.map((s) => s.id));
       for (let i = undoStack.length - 1; i >= 0; i--) if (ids.has(undoStack[i].id)) undoStack.splice(i, 1);
+      for (let i = redoStack.length - 1; i >= 0; i--) if (ids.has(redoStack[i].id)) redoStack.splice(i, 1);
       LOG.push("commit:" + moved.length);
       return { deleted: moved.length, failed, still_staged: failed.length, bytes_freed: bytes(moved) };
     },
@@ -327,6 +350,7 @@
       roots.splice(at, 1);
       for (const s of all()) if (s.root_id === a.rootId) shots.delete(s.id);
       for (let i = undoStack.length - 1; i >= 0; i--) if (!shots.has(undoStack[i].id)) undoStack.splice(i, 1);
+      for (let i = redoStack.length - 1; i >= 0; i--) if (!shots.has(redoStack[i].id)) redoStack.splice(i, 1);
       LOG.push("forget:" + a.rootId);
       return null;
     },
@@ -497,7 +521,7 @@
   };
 
   window.__fake = {
-    roots, shots, undoStack, faults, LOG, UI_LOG,
+    roots, shots, undoStack, redoStack, faults, LOG, UI_LOG,
     resetShots() {
       for (const s of shots.values()) {
         s.status = "pending";
@@ -506,6 +530,7 @@
         delete s.__failCommit;
       }
       undoStack.length = 0;
+      redoStack.length = 0;
     },
   };
 })();

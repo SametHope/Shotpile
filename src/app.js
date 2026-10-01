@@ -40,6 +40,7 @@ import {
 import { log } from "./log.js";
 import {
   closeMenu,
+  closeModal,
   confirmDialog,
   h,
   icon,
@@ -73,7 +74,12 @@ const el = {
   stagedSize: document.getElementById("staged-size"),
   commit: document.getElementById("btn-commit"),
   undo: document.getElementById("btn-undo"),
+  redo: document.getElementById("btn-redo"),
+  options: document.getElementById("btn-options"),
 };
+
+/** Theme and zoom, owned by boot.js (it applies them before the first paint). */
+const prefs = window.sifterPrefs;
 
 const state = {
   view: "loading", // loading | setup | scanning | months | review | staged
@@ -628,7 +634,7 @@ function paintFilmstrip() {
     const current = i === q.cursor;
     items.push(h("button", {
       class: `film-item${current ? " current" : ""}`,
-      dataset: { status, index: String(i) },
+      dataset: { status, index: String(i), id: String(ids[i]) },
       title: shot ? `${shot.name}${status !== "pending" ? ` — ${STATUS_LABEL[status] || status}` : ""}` : `#${ids[i]}`,
       "aria-current": current ? "true" : null,
       onclick: () => jumpTo(i),
@@ -1193,7 +1199,7 @@ function onCardClick(e) {
  * promoted once the write lands, so a failed write can put everything back: the
  * queue and the pass tally are restored and the card is rendered again.
  */
-async function decide(action, { via = "key", from = null } = {}) {
+async function decide(action, { via = "key", from = null, saved = null } = {}) {
   if (state.view !== "review" || !state.card || state.deciding || state.busy) return false;
   // Checking the deletion pile is keep-or-delete: a skip would write
   // "skipped" and silently take the file off the pile.
@@ -1211,7 +1217,8 @@ async function decide(action, { via = "key", from = null } = {}) {
 
   let updated;
   try {
-    updated = await api("decide", { id: shot.id, kind: action });
+    // A redo has already written the decision; only the card has to move.
+    updated = saved || (await api("decide", { id: shot.id, kind: action }));
   } catch (e) {
     state.deciding = false;
     state.queue.restore(before);
@@ -1322,6 +1329,46 @@ async function undo() {
     await refreshCounts();
   } catch (e) {
     log.warn("undo", `couldn't refresh after undo: ${e}`);
+  }
+}
+
+/** The decision a status stands for, for redo. */
+const ACTION_OF = { kept: ACTION.KEEP, staged: ACTION.DELETE, skipped: ACTION.SKIP };
+
+async function redo() {
+  if (state.deciding || state.busy) return;
+  let shot;
+  try {
+    shot = await api("redo_last");
+  } catch (e) {
+    log.error("redo", "couldn't redo", e);
+    toast(`Couldn't redo: ${e}`, { tone: "error" });
+    return;
+  }
+  if (!shot) {
+    toast("Nothing to redo");
+    return;
+  }
+  log.info("redo", `${shot.name} -> ${shot.status}`);
+  const action = ACTION_OF[shot.status];
+  // The card the undo brought back is usually still on top: throw it again,
+  // the way it left the first time.
+  if (state.view === "review" && action && state.card?.id === shot.id) {
+    await decide(action, { via: "key", saved: shot });
+    return;
+  }
+  state.cache.set(shot.id, shot);
+  try {
+    if (state.view === "review") renderReviewChrome();
+    else if (state.view === "staged") renderStaged();
+    else {
+      await loadMonths();
+      render();
+    }
+    toast(`Redid: ${shot.name}`);
+    await refreshCounts();
+  } catch (e) {
+    log.warn("redo", `couldn't refresh after redo: ${e}`);
   }
 }
 
@@ -1724,6 +1771,154 @@ async function forgetRoot(root) {
 // ------------------------------------------------------------------- dialogs
 
 /** Opens the file log in a modal, for diagnosing without DevTools. */
+// ------------------------------------------------------------------- options
+
+/** The zoom steps Ctrl+plus and Ctrl+minus walk through. */
+const ZOOM_STEPS = [0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+
+function applyZoom(factor) {
+  invoke("set_zoom", { factor }).catch((e) => log.warn("zoom", `couldn't set ${factor}: ${e}`));
+}
+
+/** `step` is +1 or -1 for the next step, 0 to reset. */
+function zoomApp(step) {
+  const now = prefs.get().zoom;
+  let next = 1;
+  if (step > 0) next = ZOOM_STEPS.find((z) => z > now + 0.001) ?? now;
+  else if (step < 0) next = [...ZOOM_STEPS].reverse().find((z) => z < now - 0.001) ?? now;
+  const saved = prefs.set({ zoom: next });
+  applyZoom(saved.zoom);
+  log.info("zoom", `${Math.round(saved.zoom * 100)}%`);
+  document.querySelectorAll(".zoom-value").forEach((n) => { n.textContent = `${Math.round(saved.zoom * 100)}%`; });
+  if (step || now !== 1) toast(`Zoom ${Math.round(saved.zoom * 100)}%`, { ms: 1200 });
+}
+
+/** Opens a known place (the data or logs folder, or a screenshot) in Explorer. */
+async function reveal(target, id = null) {
+  try {
+    await api("reveal", { target, id });
+  } catch (e) {
+    toast(`Couldn't open it: ${e}`, { tone: "error" });
+  }
+}
+
+async function copyText(text, what) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(`Copied ${what}`, { ms: 1600 });
+  } catch (e) {
+    log.warn("clipboard", `couldn't copy: ${e}`);
+    toast("Couldn't copy to the clipboard", { tone: "error" });
+  }
+}
+
+const THEME_LABEL = { system: "System", light: "Light", dark: "Dark" };
+
+function showOptions() {
+  const info = state.info || {};
+  const current = prefs.get();
+  const themeButtons = prefs.THEMES.map((t) => h("button", {
+    type: "button",
+    "aria-pressed": String(current.theme === t),
+    dataset: { theme: t },
+    text: THEME_LABEL[t],
+    onclick: (e) => {
+      prefs.set({ theme: t });
+      log.info("options", `theme ${t}`);
+      for (const b of e.currentTarget.parentElement.children) b.setAttribute("aria-pressed", String(b === e.currentTarget));
+    },
+  }));
+  const place = (label, path, target) => h("div", { class: "opt-row" },
+    h("div", { class: "opt-label" }, label, h("small", { class: "opt-path", text: path || "unknown" })),
+    h("button", { class: "btn sm", title: "Copy the path", "aria-label": `Copy the ${label.toLowerCase()} path`, onclick: () => copyText(path, "the path") }, icon("copy", { size: 15 })),
+    h("button", { class: "btn sm", onclick: () => reveal(target) }, icon("folder", { size: 15 }), "Open"));
+  const fact = (k, v) => [h("dt", { text: k }), h("dd", { text: v || "unknown" })];
+
+  modal({
+    title: "Options",
+    cls: "options-sheet",
+    body: [
+      h("section", { class: "opt-group" },
+        h("h3", { text: "Appearance" }),
+        h("div", { class: "opt-row" },
+          h("div", { class: "opt-label" }, "Theme", h("small", { text: "System follows the Windows setting" })),
+          h("div", { class: "segmented", role: "group", "aria-label": "Theme" }, themeButtons)),
+        h("div", { class: "opt-row" },
+          h("div", { class: "opt-label" }, "Zoom", h("small", { text: "Ctrl and + or −, or Ctrl and the mouse wheel" })),
+          h("button", { class: "btn sm icon", "aria-label": "Zoom out", onclick: () => zoomApp(-1) }, icon("zoom-out", { size: 15 })),
+          h("span", { class: "zoom-value", text: `${Math.round(current.zoom * 100)}%` }),
+          h("button", { class: "btn sm icon", "aria-label": "Zoom in", onclick: () => zoomApp(1) }, icon("zoom-in", { size: 15 })),
+          h("button", { class: "btn sm ghost", onclick: () => zoomApp(0), text: "Reset" }))),
+      h("section", { class: "opt-group" },
+        h("h3", { text: "Your data" }),
+        h("p", { class: "about-note", text: "Decisions live in one database file on this PC. Your screenshots are never copied or uploaded." }),
+        place("Data folder", info.data_dir, "data"),
+        place("Logs", info.log_path, "logs"),
+        h("div", { class: "opt-row" },
+          h("button", { class: "btn sm", onclick: () => { closeModal(); showLog(); } }, icon("log", { size: 15 }), "View the log"),
+          h("button", { class: "btn sm", onclick: () => { closeModal(); showShortcuts(); } }, icon("keyboard", { size: 15 }), "Keyboard shortcuts"))),
+      h("section", { class: "opt-group" },
+        h("h3", { text: "About" }),
+        h("dl", { class: "about-list" },
+          fact("Screenshot Sifter", info.app_version ? `v${info.app_version}` : ""),
+          fact("Tauri", info.tauri_version),
+          fact("WebView2", info.webview_version),
+          fact("SQLite", info.sqlite_version ? `${info.sqlite_version}, built in` : ""),
+          fact("Database schema", info.schema_version != null ? String(info.schema_version) : "")),
+        h("p", { class: "about-note", text: "Screenshot Sifter is free software under the MIT License, © 2026 SametHope. Source: github.com/SametHope/Screenshot-Sifter" }),
+        h("p", { class: "about-note", text: "Built on Tauri (MIT or Apache-2.0) and Microsoft Edge WebView2, with rusqlite (MIT), SQLite (public domain), trash (MIT), walkdir (MIT or Unlicense), chrono, regex, serde (MIT or Apache-2.0) and rfd (MIT). The interface uses no third-party code." })),
+    ],
+    actions: [{ label: "Close" }],
+  });
+}
+
+// -------------------------------------------------------------- context menus
+
+/** The shot a right-click landed on: a deck card, a pile tile, a filmstrip item. */
+function shotAt(target) {
+  const node = target.closest?.(".card[data-id], .tile[data-id], .film-item[data-id]");
+  if (!node) return null;
+  return { node, shot: state.cache.get(Number(node.dataset.id)) || null };
+}
+
+function onContextMenu(e) {
+  const t = e.target;
+  // Text fields and selected text keep the native menu, for copy and paste.
+  if (t.closest?.("input, textarea, [contenteditable]") || String(window.getSelection?.() || "")) return;
+  e.preventDefault();
+  if (modalOpen() || viewerOpen()) return;
+  const at = { x: e.clientX, y: e.clientY };
+  const items = [];
+  const hit = shotAt(t);
+  if (hit?.shot) {
+    const { shot, node } = hit;
+    const onTop = node.classList.contains("card") && node === topCard() && state.card?.id === shot.id;
+    items.push({ label: "Open full screen", icon: "expand", meta: onTop ? "Space" : null, onClick: () => openShotViewer(shot, onTop ? node : null) });
+    if (onTop) {
+      items.push(
+        { label: "Keep", icon: "check", meta: "→", onClick: () => decide(ACTION.KEEP, { via: "button" }) },
+        { label: "Mark for deletion", icon: "trash", meta: "←", danger: true, onClick: () => decide(ACTION.DELETE, { via: "button" }) });
+      if (state.scope?.scope !== "staged") items.push({ label: "Skip for now", icon: "skip", meta: "↑", onClick: () => decide(ACTION.SKIP, { via: "button" }) });
+    }
+    if (node.classList.contains("tile")) items.push({ label: "Put back", sub: "Take it off the deletion pile", icon: "undo", onClick: () => unstageOne(shot.id, node) });
+    items.push({ separator: true },
+      { label: "Show in File Explorer", icon: "folder", onClick: () => reveal("shot", shot.id) },
+      { label: "Copy file path", icon: "copy", onClick: () => copyText(shot.path, "the file path") });
+  } else {
+    const month = t.closest?.(".month[data-month]");
+    if (month) {
+      items.push({ label: "Sort this month", icon: "play", onClick: () => month.click() }, { separator: true });
+    }
+    items.push(
+      { label: "Undo", icon: "undo", meta: "Ctrl+Z", onClick: () => undo() },
+      { label: "Redo", icon: "redo", meta: "Ctrl+Y", onClick: () => redo() },
+      { separator: true },
+      { label: "Options", icon: "sliders", meta: "Ctrl+,", onClick: showOptions },
+      { label: "Keyboard shortcuts", icon: "keyboard", meta: "?", onClick: showShortcuts });
+  }
+  openMenu(null, items, { at });
+}
+
 async function showLog() {
   log.info("log", "opening log");
   let text;
@@ -1757,12 +1952,18 @@ function showShortcuts() {
         row(["→"], "Keep"),
         row(["↑"], "Skip for now (comes back once, at the end)"),
         row(["Z"], "Undo the last decision"),
-        row(["Ctrl", "Z"], "Undo, from any page")),
+        row(["Ctrl", "Z"], "Undo, from any page"),
+        row(["Ctrl", "Y"], "Redo (also Ctrl+Shift+Z, or Y while sorting)")),
       group("Looking closer",
         row(["Space"], "Open full screen"),
         row(["+", "−"], "Zoom the card"),
         row(["0"], "Back to 100%"),
         row(["Esc"], "Close full screen")),
+      group("Window",
+        row(["Ctrl", "+"], "Zoom the app in"),
+        row(["Ctrl", "−"], "Zoom the app out"),
+        row(["Ctrl", "0"], "Reset the app zoom"),
+        row(["Ctrl", ","], "Options")),
       group("Troubleshooting",
         row(["F12"], "Developer tools"),
         row(["Ctrl", "Shift", "L"], "Show the log")),
@@ -1787,6 +1988,15 @@ document.addEventListener("keydown", (e) => {
     showLog();
     return;
   }
+  // App zoom works everywhere, dialogs included, like a browser's.
+  if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+    const step = { "=": 1, "+": 1, "-": -1, "_": -1, "0": 0 }[e.key];
+    if (step !== undefined) {
+      e.preventDefault();
+      zoomApp(step);
+      return;
+    }
+  }
 
   // A dialog owns the keyboard first: the log can open over the viewer, and
   // Enter on its Close button must close the log, not the viewer behind it.
@@ -1804,7 +2014,18 @@ document.addEventListener("keydown", (e) => {
     showShortcuts();
     return;
   }
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+  const ctrl = e.ctrlKey || e.metaKey;
+  if (ctrl && e.key === ",") {
+    e.preventDefault();
+    showOptions();
+    return;
+  }
+  if (ctrl && (e.key.toLowerCase() === "y" || (e.shiftKey && e.key.toLowerCase() === "z"))) {
+    e.preventDefault();
+    if (!e.repeat) redo();
+    return;
+  }
+  if (ctrl && e.key.toLowerCase() === "z") {
     e.preventDefault();
     if (!e.repeat) undo();
     return;
@@ -1813,6 +2034,11 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "z" || e.key === "Z" || e.key === "Backspace") {
     e.preventDefault();
     if (!e.repeat) undo();
+    return;
+  }
+  if (e.key === "y" || e.key === "Y") {
+    e.preventDefault();
+    if (!e.repeat) redo();
     return;
   }
   // On the end-of-pass summary the focused button handles Enter and Space.
@@ -1898,14 +2124,34 @@ el.folderBtn.addEventListener("click", folderMenu);
 el.scan.addEventListener("click", rescan);
 el.commit.addEventListener("click", commit);
 el.undo.addEventListener("click", () => undo());
+el.redo.addEventListener("click", () => redo());
+el.options.addEventListener("click", showOptions);
+document.addEventListener("contextmenu", onContextMenu);
+// Ctrl + wheel zooms the app in steps, through the same preference.
+window.addEventListener("wheel", (e) => {
+  if (!e.ctrlKey) return;
+  e.preventDefault();
+  zoomApp(e.deltaY < 0 ? 1 : -1);
+}, { passive: false });
 el.stagedBtn.addEventListener("click", openStaged);
 el.help.addEventListener("click", showShortcuts);
 // Progress is optional: without the event API the scan still completes.
 window.__TAURI__.event?.listen?.("scan-progress", (e) => onScanProgress(e.payload))
   ?.catch?.((err) => log.warn("scan", `no scan progress: ${err}`));
 
+/** Takes the splash down and shows the native window (it starts hidden, so
+    nothing paints before the page has). */
+function revealApp() {
+  if (document.body.classList.contains("ready")) return;
+  requestAnimationFrame(() => {
+    document.body.classList.add("ready");
+    invoke("app_ready").catch((e) => log.warn("boot", `couldn't show the window: ${e}`));
+  });
+}
+
 (async function boot() {
   log.info("boot", "starting");
+  applyZoom(prefs.get().zoom);
   try {
     state.info = await api("app_info");
     log.info("app_info", `v${state.info.app_version}, db ${state.info.db_path} (schema ${state.info.schema_version})`);
@@ -1915,6 +2161,7 @@ window.__TAURI__.event?.listen?.("scan-progress", (e) => onScanProgress(e.payloa
       h("h2", { text: "Couldn't start the app backend" }),
       h("p", { text: String(e) }),
       h("p", { class: "muted", text: "Press Ctrl+Shift+L for the log, or F12 for developer tools." })));
+    revealApp();
     return;
   }
   try {
@@ -1924,6 +2171,7 @@ window.__TAURI__.event?.listen?.("scan-progress", (e) => onScanProgress(e.payloa
       log.info("boot", "no saved folders, setup screen");
       state.view = "setup";
       render();
+      revealApp();
       return;
     }
     state.rootId = active.id;
@@ -1934,4 +2182,5 @@ window.__TAURI__.event?.listen?.("scan-progress", (e) => onScanProgress(e.payloa
     toast(`Couldn't load the library: ${e}`, { tone: "error" });
   }
   render();
+  revealApp();
 })();

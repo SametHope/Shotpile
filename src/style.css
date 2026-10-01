@@ -41,7 +41,7 @@
   --seg-staged: #dc4646;
   --seg-deleted: #9aa4b2;
   --seg-skipped: #d98c2b;
-  --seg-track: #e3e7ee;
+  --seg-track: #d5dbe5;
 
   --radius: 12px;
   --shadow: 0 1px 2px rgba(13, 18, 24, .06), 0 1px 3px rgba(13, 18, 24, .05);
@@ -59,52 +59,52 @@
   --font-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
+/* Dark tokens. boot.js sets data-theme before the first paint, from the
+   Options choice or, for "System", from prefers-color-scheme. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
 
-    --bg: #0c1017;
-    --wash-1: rgba(48, 78, 150, .22);
-    --wash-2: rgba(84, 64, 140, .16);
-    --wash-3: rgba(32, 72, 110, .18);
-    --wash-4: rgba(30, 90, 70, .12);
-    --surface: #151b25;
-    --surface-2: #1a212d;
-    --surface-3: #212a37;
-    --topbar: rgba(16, 21, 29, .86);
-    --letterbox: linear-gradient(180deg, #121821 0%, #0e131b 100%);
+  --bg: #0c1017;
+  --wash-1: rgba(48, 78, 150, .22);
+  --wash-2: rgba(84, 64, 140, .16);
+  --wash-3: rgba(32, 72, 110, .18);
+  --wash-4: rgba(30, 90, 70, .12);
+  --surface: #151b25;
+  --surface-2: #1a212d;
+  --surface-3: #212a37;
+  --topbar: rgba(16, 21, 29, .86);
+  --letterbox: linear-gradient(180deg, #121821 0%, #0e131b 100%);
 
-    --line: #253041;
-    --line-2: #34415a;
-    --line-soft: #1c2430;
-    --text: #e7ecf3;
-    --text-2: #c5cdd9;
-    --muted: #8d99ab;
+  --line: #253041;
+  --line-2: #34415a;
+  --line-soft: #1c2430;
+  --text: #e7ecf3;
+  --text-2: #c5cdd9;
+  --muted: #8d99ab;
 
-    --accent: #3d6be0;
-    --accent-hover: #4b78ec;
-    --accent-text: #8fb0ff;
-    --accent-soft: rgba(96, 140, 255, .16);
+  --accent: #3d6be0;
+  --accent-hover: #4b78ec;
+  --accent-text: #8fb0ff;
+  --accent-soft: rgba(96, 140, 255, .16);
 
-    --danger: #ff8080;
-    --danger-strong: #d23c3c;
-    --danger-soft: rgba(255, 110, 110, .13);
-    --ok: #5fd08f;
-    --ok-soft: rgba(80, 200, 130, .13);
-    --warn: #f0b05a;
-    --warn-soft: rgba(240, 170, 80, .13);
+  --danger: #ff8080;
+  --danger-strong: #d23c3c;
+  --danger-soft: rgba(255, 110, 110, .13);
+  --ok: #5fd08f;
+  --ok-soft: rgba(80, 200, 130, .13);
+  --warn: #f0b05a;
+  --warn-soft: rgba(240, 170, 80, .13);
 
-    --seg-kept: #3fae6e;
-    --seg-staged: #e05757;
-    --seg-deleted: #5d6879;
-    --seg-skipped: #d99433;
-    --seg-track: #232c39;
+  --seg-kept: #3fae6e;
+  --seg-staged: #e05757;
+  --seg-deleted: #5d6879;
+  --seg-skipped: #d99433;
+  --seg-track: #232c39;
 
-    --shadow: 0 1px 2px rgba(0, 0, 0, .3);
-    --shadow-md: 0 4px 14px rgba(0, 0, 0, .35);
-    --shadow-lg: 0 12px 34px rgba(0, 0, 0, .5), 0 2px 8px rgba(0, 0, 0, .3);
-    --shadow-card: 0 20px 50px rgba(0, 0, 0, .55), 0 3px 10px rgba(0, 0, 0, .35);
-  }
+  --shadow: 0 1px 2px rgba(0, 0, 0, .3);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, .35);
+  --shadow-lg: 0 12px 34px rgba(0, 0, 0, .5), 0 2px 8px rgba(0, 0, 0, .3);
+  --shadow-card: 0 20px 50px rgba(0, 0, 0, .55), 0 3px 10px rgba(0, 0, 0, .35);
 }
 
 * { box-sizing: border-box; }
@@ -116,6 +116,9 @@
 [hidden] { display: none !important; }
 
 html, body { margin: 0; padding: 0; min-height: 100%; }
+/* The canvas behind everything: without it a fast scroll or a resize shows the
+   WebView's white for a frame before the body repaints. */
+html { background: var(--bg); }
 
 /* No page-level scrollbars: they flicker into view during a swipe. The library
    and the pile scroll inside #view, which gets a thin themed bar instead. */
@@ -249,8 +252,11 @@ h1, h2, h3 { font-family: var(--font-display); }
 main {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-x: hidden;
+  /* Only #view scrolls. `overflow-x: hidden` alone made main a vertical
+     scroller too, so a card dragged downwards showed a scrollbar. */
+  overflow: hidden;
 }
+main:has(> #view.reviewing) { overflow: visible; }
 
 /* #view needs a definite height so the review stage (and the absolutely
    positioned deck inside it) can resolve a height. Without it the whole chain
@@ -533,6 +539,9 @@ kbd {
   height: 6px;
   border-radius: 999px;
   background: var(--seg-track);
+  /* The unsorted track sits on the page wash; the edge keeps it from fading
+     into it in the light theme. */
+  box-shadow: inset 0 0 0 1px var(--line-2);
   overflow: hidden;
   gap: 2px;
 }
@@ -934,18 +943,15 @@ kbd {
 }
 .card .fmeta .missing { color: #b91c1c; font-weight: 650; }
 
-@media (prefers-color-scheme: dark) {
-  .card .foot {
-    background: linear-gradient(to top,
-      rgba(12, 16, 23, .72) 0%,
-      rgba(12, 16, 23, .38) 58%,
-      rgba(12, 16, 23, 0) 100%);
-  }
-  .card .fname { color: #eef2f7; text-shadow: 0 1px 2px rgba(0, 0, 0, .6); }
-  .card .fmeta { color: rgba(214, 222, 232, .92); text-shadow: 0 1px 2px rgba(0, 0, 0, .6); }
-  .card .fmeta .missing { color: #ff8a8a; }
+:root[data-theme="dark"] .card .foot {
+  background: linear-gradient(to top,
+    rgba(12, 16, 23, .72) 0%,
+    rgba(12, 16, 23, .38) 58%,
+    rgba(12, 16, 23, 0) 100%);
 }
-
+:root[data-theme="dark"] .card .fname { color: #eef2f7; text-shadow: 0 1px 2px rgba(0, 0, 0, .6); }
+:root[data-theme="dark"] .card .fmeta { color: rgba(214, 222, 232, .92); text-shadow: 0 1px 2px rgba(0, 0, 0, .6); }
+:root[data-theme="dark"] .card .fmeta .missing { color: #ff8a8a; }
 /* ---------- decision bar ---------- */
 
 .actions {
@@ -1368,12 +1374,9 @@ kbd {
 #toast button { color: #93c5fd; }
 #toast button:hover { background: rgba(255, 255, 255, .08); }
 
-@media (prefers-color-scheme: dark) {
-  #toast { background: #e9eef5; color: #0c1017; }
-  #toast button { color: #1d4ed8; }
-  #toast button:hover { background: rgba(0, 0, 0, .06); }
-}
-
+:root[data-theme="dark"] #toast { background: #e9eef5; color: #0c1017; }
+:root[data-theme="dark"] #toast button { color: #1d4ed8; }
+:root[data-theme="dark"] #toast button:hover { background: rgba(0, 0, 0, .06); }
 /* ---------- photo viewer ---------- */
 
 .viewer {
@@ -1436,4 +1439,94 @@ kbd {
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+}
+
+/* ---------------------------------------------------------------- splash */
+
+/* Painted with the first frame (index.html markup, boot.js theme) and faded
+   out by app.js once the first real view is on screen. */
+#splash {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 14px;
+  background: var(--bg);
+  color: var(--text);
+  transition: opacity .28s var(--ease), visibility 0s linear .28s;
+}
+#splash .splash-mark {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: var(--shadow-lg);
+  animation: splash-breathe 1.4s var(--ease) infinite alternate;
+}
+#splash .splash-name { font-family: var(--font-display); font-weight: 650; font-size: 15px; color: var(--text-2); }
+body.ready #splash { opacity: 0; visibility: hidden; }
+@keyframes splash-breathe { from { transform: scale(1); } to { transform: scale(1.05); } }
+@media (prefers-reduced-motion: reduce) { #splash .splash-mark { animation: none; } }
+
+/* --------------------------------------------------------------- options */
+
+.modal.options-sheet { width: min(580px, calc(100vw - 32px)); }
+.opt-group { display: grid; gap: 10px; }
+.opt-group + .opt-group { border-top: 1px solid var(--line); padding-top: 14px; }
+.opt-group h3 { margin: 0; font-size: 13px; font-weight: 650; color: var(--text-2); }
+.opt-row { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; }
+.opt-row > .opt-label { flex: 1 1 160px; min-width: 0; }
+.opt-label small { display: block; color: var(--muted); font-size: 12px; }
+.segmented { display: inline-flex; padding: 3px; gap: 2px; border-radius: 10px; background: var(--surface-3); }
+.segmented button {
+  border: 0;
+  background: none;
+  padding: 5px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.segmented button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow); font-weight: 600; }
+.zoom-value { min-width: 48px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; }
+.opt-path {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.about-list { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; font-size: 13px; }
+.about-list dt { color: var(--muted); }
+.about-list dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.about-note { margin: 0; font-size: 12.5px; color: var(--muted); }
+
+/* ------------------------------------------------------------ small windows */
+
+/* Windows display scaling shrinks the page: a 1180 px window at 125% is a
+   944 px page, and the minimum window at 150% is 480 px. The header gives up
+   the wordmark first, then the review gives up the filmstrip on short
+   windows, so the card keeps most of the height. */
+@media (max-width: 900px) {
+  body[data-view="review"] .brand-name,
+  body[data-view="staged"] .brand-name { display: none; }
+}
+@media (max-width: 720px) {
+  .brand-name { display: none; }
+  .folder-chip { max-width: 170px; }
+  .hwrap { padding: 8px 12px; gap: 6px; }
+  .page { padding: 18px 12px 40px; }
+  .review { padding: 8px 12px 8px; }
+}
+@media (max-height: 600px) {
+  .filmstrip { display: none; }
+  .stage { margin: 8px 0 20px; }
+  .deck .deck-1 { --deck-dy: 12px; }
+  .deck .deck-2 { --deck-dy: 24px; }
+  .page { padding-top: 16px; }
+  .review { padding-top: 6px; padding-bottom: 6px; }
 }

@@ -24,6 +24,9 @@ pub struct AppInfo {
     pub app_version: String,
     pub image_exts: Vec<String>,
     pub unviewable_exts: Vec<String>,
+    pub tauri_version: String,
+    pub webview_version: String,
+    pub sqlite_version: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -187,7 +190,104 @@ pub fn app_info(state: State<'_, AppState>) -> Result<AppInfo, String> {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         image_exts: scan::IMAGE_EXTS.iter().map(|e| e.to_string()).collect(),
         unviewable_exts: unviewable,
+        tauri_version: tauri::VERSION.to_string(),
+        webview_version: tauri::webview_version().unwrap_or_else(|_| "unknown".to_string()),
+        sqlite_version: rusqlite::version().to_string(),
     })
+}
+
+/// Shows a known place in the system file manager: the data folder, the logs
+/// folder, or one screenshot (selected in its folder). The frontend names the
+/// place, never a path, so this cannot be pointed anywhere else.
+#[tauri::command]
+pub fn reveal(state: State<'_, AppState>, target: String, id: Option<i64>) -> Result<(), String> {
+    let path = match target.as_str() {
+        "data" => lock(&state.db)
+            .path()
+            .and_then(|p| p.parent())
+            .map(Path::to_path_buf)
+            .ok_or("the database has no folder")?,
+        "logs" => crate::log::path()
+            .and_then(|p| p.parent().map(Path::to_path_buf))
+            .ok_or("the file log is not open")?,
+        "shot" => {
+            let id = id.ok_or("no screenshot given")?;
+            let shot = lock(&state.db)
+                .shot(id)?
+                .ok_or_else(|| format!("no such screenshot: {id}"))?;
+            std::path::PathBuf::from(shot.path)
+        }
+        other => return Err(format!("unknown place: {other}")),
+    };
+    open_in_file_manager(&path)?;
+    crate::log::info("reveal", &format!("{target}: {}", path.display()));
+    Ok(())
+}
+
+fn open_in_file_manager(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Err(format!("{} no longer exists", path.display()));
+    }
+    let spawned = if cfg!(windows) {
+        let mut cmd = std::process::Command::new("explorer");
+        if path.is_file() {
+            cmd.arg(format!("/select,{}", path.display()));
+        } else {
+            cmd.arg(path);
+        }
+        cmd.spawn()
+    } else {
+        let dir = if path.is_file() {
+            path.parent().unwrap_or(path)
+        } else {
+            path
+        };
+        std::process::Command::new(if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        })
+        .arg(dir)
+        .spawn()
+    };
+    spawned
+        .map(|_| ())
+        .map_err(|e| format!("couldn't open the file manager: {e}"))
+}
+
+/// Shows the main window. It starts hidden (`visible: false` in
+/// tauri.conf.json) so the WebView's blank white never shows; the frontend
+/// calls this once its first view is painted. lib.rs shows it anyway after a
+/// few seconds, in case the page never gets that far.
+#[tauri::command]
+pub fn app_ready(app: tauri::AppHandle) -> Result<(), String> {
+    show_main_window(&app)
+}
+
+pub fn show_main_window(app: &tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    if !window.is_visible().unwrap_or(false) {
+        window
+            .show()
+            .map_err(|e| format!("couldn't show the window: {e}"))?;
+        let _ = window.set_focus();
+    }
+    Ok(())
+}
+
+/// Sets the page zoom of the main window (1.0 is 100%). The frontend keeps the
+/// preference and applies it at start-up and from the zoom shortcuts.
+#[tauri::command]
+pub fn set_zoom(app: tauri::AppHandle, factor: f64) -> Result<(), String> {
+    let factor = factor.clamp(0.5, 2.0);
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    window
+        .set_zoom(factor)
+        .map_err(|e| format!("couldn't set the zoom: {e}"))
 }
 
 /// Returns the tail of the file log, for diagnosing a release build from inside
@@ -391,6 +491,7 @@ pub fn apply_decision(db: &Db, undo: &mut UndoStack, id: i64, kind: &str) -> Res
         prev: before.status,
         prev_decided_ms: before.decided_ms,
         next: status.to_string(),
+        next_decided_ms: None,
     });
     crate::log::info("decide", &format!("{id} {} -> {status}", shot.name));
     Ok(shot)
@@ -411,12 +512,39 @@ pub fn apply_undo(db: &Db, undo: &mut UndoStack) -> Result<Option<Shot>, String>
     let Some(entry) = entry else {
         return Ok(None);
     };
+    let next_decided_ms = db.status_of(entry.id)?.and_then(|(_, ms)| ms);
     db.set_status(entry.id, &entry.prev, entry.prev_decided_ms)?;
     crate::log::info(
         "undo",
         &format!("{} {} -> {}", entry.id, entry.next, entry.prev),
     );
-    db.shot(entry.id)
+    let id = entry.id;
+    undo.push_redo(entry, next_decided_ms);
+    db.shot(id)
+}
+
+/// The body of `redo_last`: applies the most recently undone action again,
+/// while its row still shows the status the undo restored. A committed row is
+/// never touched.
+pub fn apply_redo(db: &Db, undo: &mut UndoStack) -> Result<Option<Shot>, String> {
+    let entry = undo.pop_redo(|id| db.status_of(id).map(|row| row.map(|(status, _)| status)))?;
+    let Some(entry) = entry else {
+        return Ok(None);
+    };
+    db.set_status(entry.id, &entry.next, entry.next_decided_ms)?;
+    crate::log::info(
+        "redo",
+        &format!("{} {} -> {}", entry.id, entry.prev, entry.next),
+    );
+    let id = entry.id;
+    undo.push_redone(entry);
+    db.shot(id)
+}
+
+#[tauri::command]
+pub fn redo_last(state: State<'_, AppState>) -> Result<Option<Shot>, String> {
+    let db = lock(&state.db);
+    apply_redo(&db, &mut lock(&state.undo))
 }
 
 #[tauri::command]
@@ -445,6 +573,7 @@ pub fn apply_unstage(db: &Db, undo: &mut UndoStack, id: i64) -> Result<Shot, Str
         prev: before.status,
         prev_decided_ms: before.decided_ms,
         next: STATUS_PENDING.to_string(),
+        next_decided_ms: None,
     });
     crate::log::info(
         "unstage",
@@ -607,6 +736,32 @@ mod tests {
             (STATUS_PENDING, None)
         );
         assert!(apply_undo(&db, &mut undo).unwrap().is_none());
+    }
+
+    #[test]
+    fn redo_reapplies_an_undone_decision_with_its_time() {
+        let (db, mut undo) = setup();
+        apply_decision(&db, &mut undo, 1, "delete").unwrap();
+        let decided = status(&db, 1);
+        apply_undo(&db, &mut undo).unwrap().unwrap();
+        assert_eq!(status(&db, 1).0, STATUS_PENDING);
+        let shot = apply_redo(&db, &mut undo).unwrap().unwrap();
+        assert_eq!(shot.status, STATUS_STAGED);
+        assert_eq!(status(&db, 1), decided);
+        assert!(apply_redo(&db, &mut undo).unwrap().is_none());
+        // And it can be undone again.
+        apply_undo(&db, &mut undo).unwrap().unwrap();
+        assert_eq!(status(&db, 1).0, STATUS_PENDING);
+    }
+
+    #[test]
+    fn redo_never_touches_a_committed_row() {
+        let (db, mut undo) = setup();
+        apply_decision(&db, &mut undo, 1, "delete").unwrap();
+        apply_undo(&db, &mut undo).unwrap();
+        db.set_status(1, STATUS_DELETED, Some(1)).unwrap();
+        assert!(apply_redo(&db, &mut undo).unwrap().is_none());
+        assert_eq!(status(&db, 1).0, STATUS_DELETED);
     }
 
     #[test]
