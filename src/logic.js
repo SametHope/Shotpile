@@ -496,3 +496,87 @@ export function exitVector(action, distance = 900) {
       return { x: 0, y: 0 };
   }
 }
+
+/** Keybinding actions with human-readable descriptions. */
+export const ACTIONS = {
+  DELETE: { id: "delete", label: "Mark for deletion", group: "Sorting" },
+  KEEP: { id: "keep", label: "Keep", group: "Sorting" },
+  SKIP: { id: "skip", label: "Skip for now", group: "Sorting" },
+  UNDO: { id: "undo", label: "Undo the last decision", group: "Sorting" },
+  REDO: { id: "redo", label: "Redo", group: "Sorting" },
+  PREV_IMAGE: { id: "prevImage", label: "Previous image in filmstrip", group: "Sorting" },
+  NEXT_IMAGE: { id: "nextImage", label: "Next image in filmstrip", group: "Sorting" },
+  ZOOM_IN: { id: "zoomIn", label: "Zoom in", group: "Looking closer" },
+  ZOOM_OUT: { id: "zoomOut", label: "Zoom out", group: "Looking closer" },
+  ZOOM_RESET: { id: "zoomReset", label: "Reset zoom to 100%", group: "Looking closer" },
+  OPEN_VIEWER: { id: "openViewer", label: "Open full screen", group: "Looking closer" },
+  OPEN_OPTIONS: { id: "openOptions", label: "Options", group: "Window" },
+  HELP: { id: "help", label: "Keyboard shortcuts", group: "Window" },
+};
+
+/** Default key bindings: key -> action id. */
+export const DEFAULT_KEYS = {
+  ArrowLeft: ACTIONS.DELETE.id,
+  ArrowRight: ACTIONS.KEEP.id,
+  ArrowUp: ACTIONS.SKIP.id,
+  z: ACTIONS.UNDO.id,
+  Z: ACTIONS.UNDO.id,
+  Backspace: ACTIONS.UNDO.id,
+  y: ACTIONS.REDO.id,
+  Y: ACTIONS.REDO.id,
+  a: ACTIONS.PREV_IMAGE.id,
+  A: ACTIONS.PREV_IMAGE.id,
+  d: ACTIONS.NEXT_IMAGE.id,
+  D: ACTIONS.NEXT_IMAGE.id,
+  ArrowDown: ACTIONS.PREV_IMAGE.id,
+  "+": ACTIONS.ZOOM_IN.id,
+  "=": ACTIONS.ZOOM_IN.id,
+  "-": ACTIONS.ZOOM_OUT.id,
+  "_": ACTIONS.ZOOM_OUT.id,
+  0: ACTIONS.ZOOM_RESET.id,
+  " ": ACTIONS.OPEN_VIEWER.id,
+};
+
+/**
+ * Get current key bindings from preferences, or defaults if not set.
+ * Returns a map of key -> action id.
+ */
+export function getKeyBindings(prefs) {
+  if (!prefs) return DEFAULT_KEYS;
+  const saved = prefs.get().keyBindings;
+  return saved ? { ...DEFAULT_KEYS, ...saved } : DEFAULT_KEYS;
+}
+
+/**
+ * Save key bindings to preferences.
+ */
+export function setKeyBindings(prefs, bindings) {
+  const current = prefs.get();
+  prefs.set({ ...current, keyBindings: bindings });
+}
+
+/**
+ * Get all keys bound to a specific action id.
+ */
+export function getKeysForAction(actionId, bindings) {
+  return Object.entries(bindings)
+    .filter(([, id]) => id === actionId)
+    .map(([key]) => key);
+}
+
+/**
+ * Detect if a key is already bound to a different action.
+ * Returns the action id it's currently bound to, or null if unbound or same action.
+ */
+export function detectKeyConflict(key, targetActionId, bindings) {
+  const boundActionId = bindings[key];
+  if (!boundActionId || boundActionId === targetActionId) return null;
+  return boundActionId;
+}
+
+/**
+ * Reset key bindings to defaults.
+ */
+export function resetKeyBindings(prefs) {
+  prefs.set({ keyBindings: null });
+}

@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 
 import {
   ACTION,
+  ACTIONS,
+  DEFAULT_KEYS,
   GESTURE_THRESHOLD,
   MAX_ZOOM,
   PassTally,
@@ -12,6 +14,11 @@ import {
   basename,
   classifyGesture,
   clampScale,
+  detectKeyConflict,
+  getKeysForAction,
+  getKeyBindings,
+  resetKeyBindings,
+  setKeyBindings,
   wheelZoomFactor,
   containedSize,
   countOf,
@@ -429,4 +436,73 @@ test("wheelZoomFactor: direction, touchpad smoothness and a cap", () => {
   // One huge event cannot jump past the cap; line mode counts as pixels.
   assert.equal(wheelZoomFactor(-5000), wheelZoomFactor(-120));
   assert.equal(wheelZoomFactor(-3, 1), wheelZoomFactor(-48, 0));
+});
+
+test("keybinding actions are defined with metadata", () => {
+  assert.ok(ACTIONS.DELETE);
+  assert.equal(ACTIONS.DELETE.id, "delete");
+  assert.equal(ACTIONS.DELETE.group, "Sorting");
+});
+
+test("DEFAULT_KEYS maps keys to action ids", () => {
+  assert.equal(DEFAULT_KEYS.ArrowLeft, ACTIONS.DELETE.id);
+  assert.equal(DEFAULT_KEYS.ArrowRight, ACTIONS.KEEP.id);
+  assert.equal(DEFAULT_KEYS.ArrowUp, ACTIONS.SKIP.id);
+});
+
+test("getKeyBindings returns defaults when no custom bindings exist", () => {
+  const mockPrefs = {
+    get: () => ({ someOtherPref: "value" }),
+    set: () => {},
+  };
+  const bindings = getKeyBindings(mockPrefs);
+  assert.equal(bindings.ArrowLeft, ACTIONS.DELETE.id);
+  assert.equal(bindings[" "], ACTIONS.OPEN_VIEWER.id);
+});
+
+test("getKeyBindings merges custom bindings with defaults", () => {
+  const mockPrefs = {
+    get: () => ({ keyBindings: { "ArrowLeft": ACTIONS.KEEP.id } }),
+    set: () => {},
+  };
+  const bindings = getKeyBindings(mockPrefs);
+  assert.equal(bindings.ArrowLeft, ACTIONS.KEEP.id, "custom overrides default");
+  assert.equal(bindings.ArrowRight, ACTIONS.KEEP.id, "other defaults still exist");
+});
+
+test("setKeyBindings saves to prefs", () => {
+  let savedPrefs = null;
+  const mockPrefs = {
+    get: () => ({ existingPref: "value" }),
+    set: (prefs) => { savedPrefs = prefs; },
+  };
+  const newBindings = { "a": ACTIONS.KEEP.id };
+  setKeyBindings(mockPrefs, newBindings);
+  assert.deepEqual(savedPrefs.keyBindings, newBindings);
+  assert.equal(savedPrefs.existingPref, "value", "preserves other prefs");
+});
+
+test("getKeysForAction finds all keys bound to an action", () => {
+  const bindings = { "a": ACTIONS.DELETE.id, "A": ACTIONS.DELETE.id, "b": ACTIONS.KEEP.id };
+  const deleteKeys = getKeysForAction(ACTIONS.DELETE.id, bindings);
+  assert.deepEqual(deleteKeys.sort(), ["A", "a"]);
+  const keepKeys = getKeysForAction(ACTIONS.KEEP.id, bindings);
+  assert.deepEqual(keepKeys, ["b"]);
+});
+
+test("detectKeyConflict finds when a key is bound to a different action", () => {
+  const bindings = { "a": ACTIONS.DELETE.id, "b": ACTIONS.KEEP.id };
+  assert.equal(detectKeyConflict("a", ACTIONS.DELETE.id, bindings), null, "no conflict for same action");
+  assert.equal(detectKeyConflict("a", ACTIONS.KEEP.id, bindings), ACTIONS.DELETE.id, "conflict detected");
+  assert.equal(detectKeyConflict("c", ACTIONS.KEEP.id, bindings), null, "no conflict for unbound key");
+});
+
+test("resetKeyBindings removes custom bindings from prefs", () => {
+  let savedPrefs = null;
+  const mockPrefs = {
+    get: () => ({ keyBindings: { "a": ACTIONS.KEEP.id }, otherPref: "value" }),
+    set: (prefs) => { savedPrefs = prefs; },
+  };
+  resetKeyBindings(mockPrefs);
+  assert.equal(savedPrefs.keyBindings, null, "keyBindings set to null for deletion");
 });

@@ -10,7 +10,9 @@
 
 import {
   ACTION,
+  ACTIONS,
   DATE_SOURCE_LABELS,
+  DEFAULT_KEYS,
   GESTURE_THRESHOLD,
   PassTally,
   ReviewQueue,
@@ -21,18 +23,23 @@ import {
   classifyGesture,
   containedSize,
   countOf,
+  detectKeyConflict,
   dragTilt,
   exitVector,
   formatBytes,
   formatCount,
   formatDateTime,
+  getKeyBindings,
+  getKeysForAction,
   gestureVisual,
   groupByYear,
   monthLabel,
   nextMonthWithWork,
   panLimit,
   progressOf,
+  resetKeyBindings,
   scanSummary,
+  setKeyBindings,
   statusSegments,
   timeAgo,
   tzOffsetMinutes,
@@ -428,7 +435,7 @@ function renderLibrary() {
           : [icon("check-circle", { size: 16, cls: "ok" }), " Everything here is sorted", facts.length ? ` · ${facts.join(" · ")}` : ""])),
       h("div", { class: "overview-actions" },
         h("button", { class: "btn", id: "btn-filter", title: "Filter the month list", onclick: showFilters },
-          icon("filter", { size: 16 }), "Filter", prefs.get().showDone ? null : h("span", { class: "btn-dot", "aria-hidden": "true" })),
+          icon("filter", { size: 16 }), "Filter"),
         pending
           ? h("button", { class: "btn primary lg", id: "btn-sort-all", onclick: () => openQueue("unreviewed", null, "All unsorted") },
               icon("play", { size: 16 }), decided ? "Continue sorting" : "Start sorting", h("span", { class: "btn-count", text: formatCount(pending) }))
@@ -1978,6 +1985,80 @@ function showOptions() {
       counterBody.replaceChildren(...sections);
     }
   }).catch((e) => log.warn("stats", `Failed to load counters: ${e}`));
+  // Build shortcuts section by grouping actions
+  const keyBindings = getKeyBindings(prefs);
+  const shortcutsGroups = {};
+  for (const action of Object.values(ACTIONS)) {
+    if (!shortcutsGroups[action.group]) shortcutsGroups[action.group] = [];
+    shortcutsGroups[action.group].push(action);
+  }
+
+  let rebindingState = { actionId: null, conflict: null };
+  const shortcutsSections = Object.entries(shortcutsGroups).map(([group, actions]) =>
+    h("section", { class: "opt-group" },
+      h("h3", { text: group }),
+      h("div", { class: "shortcuts-list" },
+        actions.map((action) => {
+          const keys = getKeysForAction(action.id, keyBindings);
+          const displayKey = keys.length > 0 ? keys[0] : "—";
+          return h("div", { class: "shortcut-row", "data-action": action.id },
+            h("div", { class: "shortcut-label", text: action.label }),
+            h("button", {
+              class: "btn sm shortcut-key",
+              type: "button",
+              text: displayKey,
+              "aria-label": `Rebind ${action.label}, currently ${displayKey}`,
+              onclick: (e) => {
+                const btn = e.currentTarget;
+                rebindingState.actionId = action.id;
+                rebindingState.conflict = null;
+                btn.classList.add("waiting");
+                btn.textContent = "Press a key…";
+                const handleKey = (ke) => {
+                  ke.preventDefault();
+                  ke.stopPropagation();
+                  document.removeEventListener("keydown", handleKey, true);
+                  if (!document.body.contains(btn)) {
+                    rebindingState.actionId = null;
+                    return;
+                  }
+                  const newKeyBindings = { ...keyBindings };
+                  const conflict = detectKeyConflict(ke.key, action.id, newKeyBindings);
+                  if (conflict) {
+                    rebindingState.conflict = conflict;
+                    const conflictAction = Object.values(ACTIONS).find((a) => a.id === conflict);
+                    btn.textContent = "Conflict! Click to try again.";
+                    btn.classList.remove("waiting");
+                    btn.classList.add("conflict");
+                    toast(`${ke.key} is already bound to ${conflictAction?.label || "another action"}`, { duration: 3000 });
+                  } else {
+                    // Remove this key from any other actions, then bind it to this action
+                    Object.keys(newKeyBindings).forEach((k) => {
+                      if (newKeyBindings[k] === action.id) delete newKeyBindings[k];
+                    });
+                    newKeyBindings[ke.key] = action.id;
+                    setKeyBindings(prefs, newKeyBindings);
+                    btn.textContent = ke.key;
+                    btn.classList.remove("waiting");
+                    btn.classList.remove("conflict");
+                    toast(`Bound ${action.label} to ${ke.key}`, { duration: 2000 });
+                    log.info("shortcuts", `bound ${action.id} to ${ke.key}`);
+                  }
+                  rebindingState.actionId = null;
+                };
+                document.addEventListener("keydown", handleKey, true);
+                setTimeout(() => {
+                  if (rebindingState.actionId === action.id && document.body.contains(btn)) {
+                    document.removeEventListener("keydown", handleKey, true);
+                    btn.textContent = displayKey;
+                    btn.classList.remove("waiting");
+                    rebindingState.actionId = null;
+                  }
+                }, 5000);
+              },
+            }),
+          );
+        }))));
 
   modal({
     title: "Options",
@@ -1994,6 +2075,17 @@ function showOptions() {
           h("span", { class: "zoom-value", text: `${Math.round(current.zoom * 100)}%` }),
           h("button", { class: "btn sm icon", "aria-label": "Zoom in", onclick: () => zoomApp(1) }, icon("zoom-in", { size: 15 })),
           h("button", { class: "btn sm ghost", onclick: () => zoomApp(0), text: "Reset" }))),
+      ...shortcutsSections,
+      h("section", { class: "opt-group" },
+        h("h3", { text: "Reset shortcuts" }),
+        h("p", { class: "about-note", text: "Restore all keyboard shortcuts to their defaults." }),
+        h("button", { class: "btn sm ghost", onclick: () => {
+          resetKeyBindings(prefs);
+          toast("Shortcuts reset to defaults", { duration: 2000 });
+          log.info("shortcuts", "reset to defaults");
+          closeModal();
+          showOptions();
+        }, text: "Reset to defaults" })),
       h("section", { class: "opt-group" },
         h("h3", { text: "Your data" }),
         h("p", { class: "about-note", text: "Decisions live in one database file on this computer. Your screenshots are never copied or uploaded." }),
@@ -2224,9 +2316,29 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
+  // Get current key bindings for action lookup
+  const keyBindings = getKeyBindings(prefs);
+  const action = keyBindings[e.key];
+
+  // Filmstrip navigation (one press, one move, ignore repeat)
+  if (action === ACTIONS.PREV_IMAGE.id) {
+    e.preventDefault();
+    if (!e.repeat) jumpTo(state.queue.cursor - 1);
+    return;
+  }
+  if (action === ACTIONS.NEXT_IMAGE.id) {
+    e.preventDefault();
+    if (!e.repeat) jumpTo(state.queue.cursor + 1);
+    return;
+  }
+
   // Holding a key down must not machine-gun through the queue: one press, one
   // decision.
-  const decisionKey = { ArrowLeft: ACTION.DELETE, ArrowRight: ACTION.KEEP, ArrowUp: ACTION.SKIP }[e.key];
+  let decisionKey = null;
+  if (action === ACTIONS.DELETE.id) decisionKey = ACTION.DELETE;
+  else if (action === ACTIONS.KEEP.id) decisionKey = ACTION.KEEP;
+  else if (action === ACTIONS.SKIP.id) decisionKey = ACTION.SKIP;
+
   if (decisionKey) {
     e.preventDefault();
     // A key during a drag would decide the card under the pointer, and the
