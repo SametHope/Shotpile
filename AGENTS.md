@@ -47,7 +47,7 @@ src-tauri/src/commands.rs the entire command surface
 
 ```powershell
 npm run test:logic                          # 28 frontend logic tests
-npm run test:gui                            # 123 GUI assertions in headless Chrome
+npm run test:gui                            # 134 GUI assertions in headless Chrome
 cd src-tauri; cargo test                    # 39 unit + 2 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
@@ -122,6 +122,28 @@ probe there. Chrome must be installed; the script has no npm dependencies.
   snapping when the decision lands. `.deck.stacking` suppresses the transition
   while the pointer moves (otherwise it lags a frame behind); `resetStack()`
   removes it and glides the cards back for a cancelled gesture or a failed write.
+- **Advancing must not re-render the deck.** `advanceDeck()` promotes the card
+  that is already parked under the top one: it drops the outgoing node, relabels
+  `.deck-1` as `.deck-top` (clearing its inline transform so it inherits the top
+  position with *no* animation, because it is already there), promotes `.deck-2`
+  to `.deck-1`, and appends one freshly hydrated card at the back. Only
+  `renderReviewChrome()` re-renders, which touches the progress row, actions and
+  filmstrip and leaves the stage alone.
+  - Do not "simplify" this back into a `showCurrent()` call. A full render
+    destroys the gliding card mid-animation and replaces it with a new node that
+    fades in, which is exactly the flicker-then-snap this replaced.
+  - The promoted node is not wired by `attachGestures()` (which binds to the
+    stage), so it needs `attachCardZoom()` and a click-to-viewer listener
+    attached explicitly.
+  - `advanceDeck()` falls back to `showCurrent()` whenever the DOM is not in the
+    expected shape, so a stale deck cannot wedge the review.
+- The `cardEnter*` keyframes are **opacity-only** and now fire only on a first
+  paint (opening a queue, or jumping to a card that was not on the deck). They
+  used to animate transform, which fought the deck's positioning and produced the
+  "pops in, then snaps" look.
+- `deck.inert` disables pointer events on the deck for one animation frame after
+  a promotion, so a click aimed at the card that just left cannot land on the
+  half-wired node taking its place.
 - Because the image box now fills the frame and the photo is *letterboxed*
   inside it, the box size is not the photo size. Two places must measure the
   content instead: `clampPan()` (bounds panning) and the zoom-anchor test.

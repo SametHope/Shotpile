@@ -363,12 +363,54 @@ await js("p.dragTo(120, 0);");
   await sleep(200);
   ok("viewer closes after a card click", (await probe("p.viewerOpen()")) === false);
 
-  // ---- keep, then undo ----
-  await press("ArrowRight");
+// ---- a swipe must not rebuild the deck either ----
+  // The keyboard path and the swipe path have to behave identically, otherwise
+  // the smooth promotion only works for arrow keys.
+  await js("p.resetShots();");
+  await press("z");
   await sleep(300);
+  const swipeStart = await probe("p.topNodeId()");
+  const swipeName = await probe("p.cardName()");
+  await js("p.dragStart();");
+  await js("p.dragTo(300, 0);");
+  await js("p.dragEnd();");
+  await sleep(400);
+  const swipeEnd = await probe("p.topNodeId()");
+  ok("a swipe swaps the top card node", swipeEnd !== swipeStart, `${swipeStart} -> ${swipeEnd}`);
+  ok("the swiped card is now decided", (await probe(`p.status(${JSON.stringify(swipeName)})`)) === "kept", await probe(`p.status(${JSON.stringify(swipeName)})`));
+  ok("a swipe leaves the new top fully opaque", Number(await probe("p.topOpacity()")) === 1, String(await probe("p.topOpacity()")));
+  ok("a swipe leaves no drag transform on the new top", (await probe("p.topInlineTransform()")) === "", String(await probe("p.topInlineTransform()")));
+  ok("the deck accepts input again after a swipe", (await probe("p.deckInert()")) === false, String(await probe("p.deckInert()")));
+  // Put the queue back where the remaining tests expect it.
+  await press("z");
+  await sleep(320);
+  ok("undo after a swipe still lands on the right card", (await probe("p.cardName()")) === swipeName, String(await probe("p.cardName()")));
+
+  // ---- advancing must not rebuild the deck ----
+  // The bug this guards against: advancing re-rendered the whole review, so the
+  // card that had slid forward under the top card was destroyed mid-animation
+  // and replaced by a new node that then faded in. That read as a flicker, a
+  // snap and a fade all at once. Node identity is what proves the promotion is
+  // real, so these assertions track the actual DOM node.
+  await js("p.markStage();");
+  const nodeBefore = await probe("p.topNodeId()");
+  const nameBefore = await probe("p.cardName()");
+  await press("ArrowRight");
+  await sleep(320);
+  const nodeAfter = await probe("p.topNodeId()");
+  ok("the outgoing card is gone after a keep", nodeAfter !== nodeBefore, `${nodeBefore} -> ${nodeAfter}`);
+  ok("the new top card is fully opaque", Number(await probe("p.topOpacity()")) === 1, String(await probe("p.topOpacity()")));
+  ok("the new top card has no leftover drag transform", (await probe("p.topInlineTransform()")) === "", String(await probe("p.topInlineTransform()")));
+  ok("the promoted card is not running an entry animation", (await probe("p.topAnimateName()")) === "none", String(await probe("p.topAnimateName()")));
+  // Depth is however many shots remain, capped at top + 2 upcoming. This queue
+  // has 3 items and we are now on #2, so there is only 1 upcoming: 2 cards.
+  const depth = await probe("p.deckChildCount()");
+  ok("the deck holds the current card plus what is left", depth === 2, `${depth} cards on item 2 of 3`);
+
+  // ---- keep, then undo ----
   ok("ArrowRight keeps the card", (await probe(`p.status(${JSON.stringify(first)})`)) === "kept", await probe(`p.status(${JSON.stringify(first)})`));
   const afterKeep = await probe("p.cardName()");
-  ok("view advances after a keep", afterKeep !== first, String(afterKeep));
+  ok("view advances after a keep", afterKeep !== first && afterKeep !== nameBefore, String(afterKeep));
 
   await press("z");
   await sleep(300);

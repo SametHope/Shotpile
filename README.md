@@ -21,6 +21,11 @@ live on the local machine.
   untinted, the info bar picks up the colour, and the card shrinks further the
   further you pull (to a limit) as it recedes. The deck underneath glides forward
   with the drag, so the next card is already in place when the swipe lands.
+- **Advance without rebuilding.** Deciding a photo promotes the card that was
+  already waiting underneath into the top slot. It is the same DOM node, already
+  sitting exactly where it belongs, so nothing fades, pops or re-slides — the
+  queue reads as one continuous stack whether you swipe, use the arrow keys, or
+  press the buttons.
 - **See the whole photo.** The photo fills the card and is never cropped or hidden
   behind the info bar: the filename, date, size and format sit in a translucent
   overlay pinned to the bottom edge, so they cost the image no height.
@@ -80,7 +85,7 @@ Both are always on, including in release builds.
 
 ```powershell
 npm run test:logic   # 28 frontend logic tests (node --test)
-npm run test:gui     # 123 GUI assertions: the real src/app.js in headless Chrome
+npm run test:gui     # 134 GUI assertions: the real src/app.js in headless Chrome
 cd src-tauri; cargo test                  # 39 unit + 2 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check

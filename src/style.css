@@ -401,9 +401,14 @@ main {
 /* The deck glides forward as the top card is dragged away, and glides back if
    the gesture is cancelled. Transitions are suppressed while the pointer is
    moving (`.stacking`) so the stack tracks the finger instead of lagging
-   behind a transition on every frame. */
+   behind a transition on every frame.
+
+   `.deck` is inert for a beat after a promotion: the promoted node gets a click
+   listener and zoom handlers attached in the same tick it becomes `#card`, and
+   an inert deck means a stray click cannot land on a half-wired card. */
 .deck .deck-1, .deck .deck-2 { transition: transform .26s var(--ease); }
 .deck.stacking .deck-1, .deck.stacking .deck-2 { transition: none; }
+..deck.inert { pointer-events: none; }
 
 .deck .deck-card { pointer-events: none; }
 
@@ -536,21 +541,16 @@ main {
 
 /* ---------- entry animation ---------- */
 
-/* When a card replaces one just decided, it settles in from the direction the
-   decision went, so the queue reads as continuous. Purely CSS: nothing waits on
-   it and input stays live. */
-@keyframes cardEnterLeft {
-  from { opacity: 0; transform: translate(-50%, -50%) translateX(-26px) scale(.9); }
-  to { opacity: 1; transform: translate(-50%, -50%) translateX(0) scale(1); }
-}
-@keyframes cardEnterRight {
-  from { opacity: 0; transform: translate(-50%, -50%) translateX(26px) scale(.9); }
-  to { opacity: 1; transform: translate(-50%, -50%) translateX(0) scale(1); }
-}
-@keyframes cardEnterUp {
-  from { opacity: 0; transform: translate(-50%, -50%) translateY(26px) scale(.9); }
-  to { opacity: 1; transform: translate(-50%, -50%) translateY(0) scale(1); }
-}
+/* First-paint fade, used only when a card appears with nothing behind it (a
+   queue opening, or a jump to a card that was not on the deck). Advancing
+   through the queue does NOT animate: `advanceDeck()` promotes the card that is
+   already on screen, so there is nothing to fade in.
+
+   Opacity only. Animating transform here would fight the deck's own
+   positioning, which is what produced the "pops in, then snaps" effect. */
+@keyframes cardEnterLeft { from { opacity: 0; } to { opacity: 1; } }
+@keyframes cardEnterRight { from { opacity: 0; } to { opacity: 1; } }
+@keyframes cardEnterUp { from { opacity: 0; } to { opacity: 1; } }
 
 .card.enter.enter-left { animation: cardEnterLeft .26s var(--ease); }
 .card.enter.enter-right { animation: cardEnterRight .26s var(--ease); }

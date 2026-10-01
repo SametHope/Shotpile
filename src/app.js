@@ -284,6 +284,108 @@ async function showCurrent({ entering = false } = {}) {
   if (id !== null) preload();
 }
 
+/**
+ * Advances the review by one card, without re-rendering the whole deck.
+ *
+ * This is the smooth path, and it exists because a full `render()` throws the
+ * entire deck away and rebuilds it. The card that was gliding forward under the
+ * top one got destroyed mid-animation and replaced by a brand-new node that
+ * then faded in from opacity 0 — which read as a flicker, a snap, and a fade
+ * all at once.
+ *
+ * Instead the already-painted nodes are kept and promoted:
+ *
+ *   - the outgoing top card is removed once its exit animation has finished,
+ *   - the card that already slid into the top position becomes the new top card
+ *     with no animation at all, because it is already exactly where it belongs,
+ *   - the new deck-1 slides up from where deck-2 was,
+ *   - a fresh card is built for the back of the stack.
+ *
+ * Everything is driven by CSS transitions on transform, so nothing blocks the
+ * next swipe and there is no JS timer racing the animation.
+ *
+ * Falls back to `showCurrent()` when the DOM does not have the shape it
+ * expects, so a stale or partially-built deck can never wedge the review.
+ */
+async function advanceDeck() {
+  const deck = document.querySelector(".deck");
+  const outgoing = deck?.querySelector(".deck-top");
+  const incoming = deck?.querySelector(".deck-1");
+  if (!deck || !outgoing || !incoming) return showCurrent();
+
+  const id = state.queue.current();
+  if (id === null) return showCurrent();
+  const shot = state.cache.get(id);
+  if (!shot) return showCurrent();
+
+  // The outgoing card may still be animating out. Removing it here is safe: it
+  // has already faded to 0 opacity by the time a write completes, and its node
+  // is not reused for anything.
+  outgoing.remove();
+
+  // Promote the incoming card. It is already sitting at translateY(0) scale(1)
+  // because the drag moved it there, so this is a pure relabel: no transition,
+  // no opacity change, no animation. Clearing the inline styles is what lets it
+  // inherit the `.deck-top` position instead of the drag's leftovers.
+  incoming.classList.remove("deck-card", "deck-1");
+  incoming.classList.add("deck-top");
+  incoming.id = "card";
+  incoming.style.transform = "";
+  incoming.style.opacity = "";
+  incoming.style.transition = "";
+  incoming.classList.remove("zoomed", "pannable", "dragging", "tinted", "settling");
+
+  // deck-2 becomes the new deck-1. It carries its own inline transform from the
+  // drag, so clear it and let the transition animate it up from the -2 slot.
+  const second = deck.querySelector(".deck-2");
+  if (second) {
+    second.classList.remove("deck-2");
+    second.classList.add("deck-1");
+    second.style.transform = "";
+  }
+
+  deck.classList.remove("stacking");
+  deck.classList.add("inert");
+
+  state.card = shot;
+  state.cardZoom = null;
+  state.zoomReadout = null;
+
+  // Rebuild the back of the stack so the queue does not visibly shrink. This is
+  // a new card appearing *behind* everything, so it needs no animation.
+  //
+  // The tail is hydrated here rather than assumed: `showCurrent()` only warms
+  // `upcoming(2, 1)`, and the slot we just freed up is `upcoming(1, 2)`, which
+  // may not be in the cache yet on a cold pass. Without the await the deck
+  // silently shrinks to two cards and never recovers.
+  const tailIds = state.queue.upcoming(1, 2);
+  if (tailIds.length) await hydrate(tailIds);
+  const tailShot = tailIds.length ? state.cache.get(tailIds[0]) : null;
+  if (tailShot) {
+    const node = card(tailShot);
+    node.classList.add("deck-card", "deck-2");
+    deck.append(node);
+  }
+
+  // The promoted card needs the behaviour the fresh top card would have had:
+  // zoom and click-to-viewer. `attachGestures()` is bound to the stage, so the
+  // promoted node has to be wired up explicitly.
+  const imgwrap = incoming.querySelector(".imgwrap");
+  const img = imgwrap?.querySelector("img");
+  if (img) state.cardZoom = attachCardZoom(incoming, imgwrap, img);
+  incoming.addEventListener("click", () => {
+    if (!state.dragged) openViewer(shot);
+  });
+
+  renderReviewChrome();
+
+  // Re-enable input once the promoted node is wired and painted. Held until the
+  // next animation frame so the first frame after a promotion cannot swallow a
+  // click that was aimed at the card that just left.
+  requestAnimationFrame(() => deck.classList.remove("inert"));
+  preload();
+}
+
 function preload() {
   const next = state.queue.upcoming(3, 1);
   if (next.length) hydrate(next).catch(() => {});
@@ -425,54 +527,36 @@ function monthRow(m) {
 }
 
 function renderReview() {
-  const q = state.queue;
-  const label = state.scope?.label || "";
-  const total = q.length;
-  const pos = q.position();
-
-  const head = h("div", { class: "progress-row" },
-    h("span", { text: label }),
-    h("span", { class: "bar" }, h("i", { style: `width:${total ? Math.round((pos / total) * 100) : 0}%` })),
-    h("span", { text: total ? `${pos} / ${total}` : "0 / 0" }),
-    q.deferred ? h("span", { class: "chip skipped", text: `${q.deferred} skipped` }) : null
-  );
-
-  let body;
   if (!state.card) {
-    body = h("div", { class: "panel finale" },
-      h("div", { class: "big", text: String(q.deferred) }),
-      h("h2", { text: q.deferred ? "All files scanned" : "This queue is done" }),
-      h("p", { class: "hint", text: q.deferred ? "Skipped ones came back in the same pass." : "Pick another month or random mode." }),
-      h("div", { style: "display:flex;gap:8px;justify-content:center;margin-top:12px" },
-        h("button", { class: "btn primary", onclick: backToMonths }, "Back to months"),
-        h("button", { class: "btn", onclick: () => openQueue("random", null, "Random") }, "Random continue")
+    const q = state.queue;
+    el.view.replaceChildren(h("div", { class: "review" },
+      h("div", { class: "wrap" },
+        h("div", { class: "panel finale" },
+          h("div", { class: "big", text: String(q.deferred) }),
+          h("h2", { text: q.deferred ? "All files scanned" : "This queue is done" }),
+          h("p", { class: "hint", text: q.deferred ? "Skipped ones came back in the same pass." : "Pick another month or random mode." }),
+          h("div", { style: "display:flex;gap:8px;justify-content:center;margin-top:12px" },
+            h("button", { class: "btn primary", onclick: backToMonths }, "Back to months"),
+            h("button", { class: "btn", onclick: () => openQueue("random", null, "Random") }, "Random continue")
+          )
+        )
       )
-    );
-  } else {
-    body = h("div", { class: "stage", id: "stage" }, cardStack());
+    ));
+    return;
   }
 
-  const actions = h("div", { class: "actions" },
-    h("button", { class: "btn danger", onclick: () => decide(ACTION.DELETE), title: "←" },
-      "Delete ", kbd("←")),
-    h("button", { class: "btn", onclick: () => decide(ACTION.SKIP), title: "↑" },
-      "Skip ", kbd("↑")),
-    h("button", { class: "btn ok", onclick: () => decide(ACTION.KEEP), title: "→" },
-      "Keep ", kbd("→")),
-    h("button", { class: "btn ghost", onclick: undo, title: "Ctrl+Z" }, "Undo ", kbd("Z"))
+  const wrap = h("div", { class: "wrap" },
+    reviewHead(),
+    h("div", { class: "stage", id: "stage" }, cardStack()),
+    reviewActions(),
+    filmstrip()
   );
-
-  // The zoom readout lives in the existing progress row, not as its own line, so
-  // it costs the stage no height.
-  if (state.card) head.append(zoomReadout());
-  const wrap = h("div", { class: "wrap" }, head, body, actions);
-  if (state.card) wrap.append(filmstrip());
   el.view.replaceChildren(h("div", { class: "review" }, wrap));
   attachGestures();
 
-  // The incoming card animates in when it replaces one the user just decided,
-  // so advancing through a queue reads as continuous rather than a snap. It is
-  // a pure CSS animation on an already-painted element, so nothing blocks.
+  // First paint of a card (queue opened, or a jump landed on a new card) fades
+  // it in. Advancing through the queue does NOT use this: `advanceDeck()`
+  // promotes the card that is already on screen, so there is nothing to fade.
   if (state.entering && state.card) {
     const top = document.getElementById("card");
     if (top) {
@@ -488,6 +572,56 @@ function renderReview() {
     }
   }
   state.entering = false;
+}
+
+function reviewHead() {
+  const q = state.queue;
+  const label = state.scope?.label || "";
+  const total = q.length;
+  const pos = q.position();
+
+  const head = h("div", { class: "progress-row" },
+    h("span", { text: label }),
+    h("span", { class: "bar" }, h("i", { style: `width:${total ? Math.round((pos / total) * 100) : 0}%` })),
+    h("span", { text: total ? `${pos} / ${total}` : "0 / 0" }),
+    q.deferred ? h("span", { class: "chip skipped", text: `${q.deferred} skipped` }) : null
+  );
+  // The zoom readout lives in the existing progress row, not as its own line, so
+  // it costs the stage no height.
+  head.append(zoomReadout());
+  return head;
+}
+
+function reviewActions() {
+  return h("div", { class: "actions" },
+    h("button", { class: "btn danger", onclick: () => decide(ACTION.DELETE), title: "←" },
+      "Delete ", kbd("←")),
+    h("button", { class: "btn", onclick: () => decide(ACTION.SKIP), title: "↑" },
+      "Skip ", kbd("↑")),
+    h("button", { class: "btn ok", onclick: () => decide(ACTION.KEEP), title: "→" },
+      "Keep ", kbd("→")),
+    h("button", { class: "btn ghost", onclick: undo, title: "Ctrl+Z" }, "Undo ", kbd("Z"))
+  );
+}
+
+/**
+ * Re-renders only the chrome around the deck (progress row, actions,
+ * filmstrip), leaving the stage and its cards untouched.
+ *
+ * Used by `advanceDeck()`: the cards must not be rebuilt, but the counter, the
+ * chips and the filmstrip all still have to reflect the new position.
+ */
+function renderReviewChrome() {
+  const wrap = document.querySelector(".review .wrap");
+  if (!wrap) return render();
+  const stage = wrap.querySelector(".stage");
+  if (!stage) return render();
+
+  const nodes = [reviewHead(), stage, reviewActions()];
+  const film = filmstrip();
+  if (film) nodes.push(film);
+  wrap.replaceChildren(...nodes);
+  state.zoomReadout = document.querySelector(".zoom-readout");
 }
 
 /** Live zoom percentage for the current card, shown only while zoomed. */
@@ -927,8 +1061,8 @@ async function decide(action) {
 
   // No immediate render. A swipe is mid-exit-animation and a re-render now
   // would cut it short and flash the "queue done" finale; a keyboard/button
-  // decision fades the card out instead. showCurrent() re-renders once the
-  // write lands, and animates the replacement card in.
+  // decision fades the card out instead. `advanceDeck()` promotes the card
+  // already under this one once the write lands, so nothing is rebuilt.
   if (!state.animating) {
     const cardEl = document.getElementById("card");
     if (cardEl) {
@@ -968,15 +1102,20 @@ async function decide(action) {
     });
   }
 
+  // A failed write must undo the promotion too. `advanceDeck()` only runs on the
+  // success path, so a failure here has to fall back to a full re-render: the
+  // deck on screen belongs to the *next* shot, not the one being restored.
   if (state.queue.atEnd()) {
     state.view = "months";
     await loadMonths();
     render();
   } else {
-    // Animating in: the card that replaces this one slides up from slightly
-    // smaller and faded, matching the direction it was decided in.
-    state.advanceDir = action === ACTION.SKIP ? "up" : action === ACTION.KEEP ? "right" : "left";
-    await showCurrent({ entering: true });
+    // The card that replaces this one is already on screen, parked under the
+    // outgoing one and slid forward by the drag, so it is promoted in place
+    // instead of being rebuilt and faded in. That is what makes advancing read
+    // as continuous rather than as a flicker-and-snap.
+    state.advanceDir = null;
+    await advanceDeck();
   }
 }
 

@@ -235,7 +235,9 @@
   // ---- helpers the Node-side driver calls through CDP ----
   const $ = (s) => document.querySelector(s);
   const viewText = () => $("#view").textContent.replace(/\s+/g, " ").trim();
-  window.__probe = {
+  window.__nodeSeq = 0;
+
+window.__probe = {
     viewText,
     status: (name) => {
       const s = [...shots.values()].find((x) => x.name === name);
@@ -435,6 +437,31 @@ stampOpacity: (dir) => {
     deck1ComputedTransition: () => {
       const n = document.querySelector(".deck .deck-1");
       return n ? getComputedStyle(n).transitionDuration : null;
+    },
+    // --- smooth advance: node identity is what proves it ---
+    topNodeId: () => {
+      const n = document.querySelector(".deck .deck-top");
+      return n ? (n.__probeId || (n.__probeId = `n${++window.__nodeSeq}`)) : null;
+    },
+    topImgSrc: () => document.querySelector("#card .imgwrap img")?.getAttribute("src") || null,
+    topOpacity: () => {
+      const n = document.querySelector("#card");
+      return n ? getComputedStyle(n).opacity : null;
+    },
+    topInlineTransform: () => document.querySelector("#card")?.style.transform || "",
+    topHasEnterClass: () => !!document.querySelector("#card.enter"),
+    topAnimateName: () => {
+      const n = document.querySelector("#card");
+      return n ? getComputedStyle(n).animationName : "none";
+    },
+    deckChildCount: () => document.querySelectorAll(".deck .card").length,
+    stageIsSame: (mark) => document.querySelector(".deck")?.dataset.probeMark === mark,
+    deckInert: () => !!document.querySelector(".deck.inert"),
+    markStage: () => {
+      const d = document.querySelector(".deck");
+      if (!d) return null;
+      d.dataset.probeMark = `m${++window.__nodeSeq}`;
+      return d.dataset.probeMark;
     },
 
     // --- card zoom ---
