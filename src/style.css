@@ -734,6 +734,30 @@ kbd {
 }
 .zoom-readout.on { opacity: 1; background: var(--accent-soft); color: var(--accent-text); font-weight: 650; }
 
+/* The filename filter sits in the review head. It is the only text input in the
+   app, so it borrows the `.btn` shape: themed surface, the same 9px radius, and
+   the accent ring on focus. Filtering hides non-matching filmstrip items (the
+   current card is always shown), see paintFilmstrip(). */
+.review-filter { display: inline-flex; align-items: center; gap: 4px; }
+.filter-box {
+  width: clamp(150px, 22vw, 230px);
+  padding: 6px 10px;
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  transition: border-color .12s, box-shadow .12s;
+}
+.filter-box::placeholder { color: var(--muted); }
+.filter-box:hover { border-color: var(--muted); }
+.filter-box:focus,
+.filter-box:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
 .stage {
   position: relative;
   flex: 1 1 auto;
@@ -1083,8 +1107,11 @@ kbd {
 .film-item {
   position: relative;
   flex: 0 0 auto;
-  width: 60px;
-  height: 42px;
+  /* Scale with the strip so enlarging it shows bigger thumbnails instead of
+     empty space. At the default 52px height this is the original 42x60 item;
+     the aspect ratio keeps the thumbnail shape. */
+  height: calc(var(--filmstrip-height) - 10px);
+  aspect-ratio: 60 / 42;
   padding: 0;
   border: 2px solid transparent;
   border-radius: 9px;
