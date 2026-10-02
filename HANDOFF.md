@@ -16,46 +16,46 @@ unverified* until someone has run them in a real build.
 Nothing here was root-caused with a debugger; the "likely cause" lines are reading
 the code, not confirmed. Status as of the last session:
 
-- **Fixed:** A2 (missing command registrations), A5 (filmstrip thumbnails did not
-  scale), A6 (unstyled filename filter), plus the GUI suite's dependence on the
-  host OS colour scheme.
-- **Open:** A1 (rebinding still does nothing outside the review), A3 (file
-  manager), A4 (clipboard), A7 (the rest of the thin coverage).
+- **Fixed in code, still needs a manual pass on the target OS:** A1 (rebinding),
+  A2 (missing command registrations), A3 (file manager), A4 (clipboard),
+  A5 (filmstrip thumbnails), A6 (unstyled filename filter), plus the GUI suite's
+  dependence on the host OS colour scheme.
+- **Open:** A7 (the rest of the thin coverage).
 
-1. **Rebinding does nothing.** Setting the Options shortcut to `p` and pressing
-   it anywhere does not open Options. Likely cause: only the review view's
-   key handler (`keyBindings[e.key]` near the end of `src/app.js`) looks keys
-   up through the action table; the global shortcuts (Options, zoom, help,
-   viewer) are still hard-coded, and the rebinding UI saves into prefs that
-   only the review handler reads. Also check that the stored map's direction
-   (key to action id) matches what `getKeysForAction` and the lookup expect,
-   and that captured keys are normalised the same way (`e.key` case,
-   modifiers). Needs a GUI test that rebinds a key and presses it. **Open.**
+1. **Rebinding did nothing outside the review.** *Fixed:* the keydown handler
+   now resolves every key through the binding table, so Options, Help, zoom, the
+   viewer, undo and redo are rebindable and work in every view, not just the
+   review. Help is a default action (`?`); Options keeps Ctrl+, as a permanent
+   alias but also accepts a rebind. The capture ignores lone modifiers, cancels
+   on Escape, and reads the map fresh each time (a second rebind in one Options
+   sheet used to overwrite the first, and cancel/conflict restored a stale
+   label). GUI tests rebind Options and press it from the library, and cancel
+   with Escape. Confirmed in the fake-backend suite; press it in a real build
+   too.
 2. **`incr_counter` was not registered.** *Fixed:* it and `unstage_multiple`
    (which "Restore all" in the pile calls, and the report missed) are now in
    `tauri::generate_handler!`. `tests/commands.test.mjs` now compares every
    `api("...")`/`invoke("...")` name in `src/` against `lib.rs` and fails on a
    gap, so this class of bug cannot ship again. The frontend-driven counters
    still swallow errors with a warn; registration was the actual fault.
-3. **"Show in file manager" still opens Documents.** It should open the folder
-   containing the image with the file selected. The Windows branch runs
-   `explorer /select,<path>`; explorer falls back to Documents when the path
-   is not in the form it expects (forward slashes, a `\?\` prefix, or the
-   argument being quoted/split wrongly by `Command::arg`). Check what path
-   the `reveal` command receives for `target: "shot"` and normalise to
-   backslashes, passing `/select,` and the path as one raw argument
-   (`CommandExt::raw_arg` on Windows). Verify by hand on Windows; a unit test
-   can only check the argument building. **Open.**
-4. **"Copy image" is wrong on Windows.** It spawns a PowerShell window (visible
-   console flash; needs `CREATE_NO_WINDOW`) and the clipboard content cannot
-   be pasted into Discord or WhatsApp with Ctrl+V. Those apps want a bitmap
-   (`CF_DIB`/`CF_DIBV5`/PNG) or a file drop list of the right kind, and the
-   current approach does not provide one. Prefer a native clipboard write
-   from Rust (decode the image, put a bitmap on the clipboard; check any new
-   crate's licence is in `about.toml`) over shelling out. macOS (`pbcopy` with
-   raw bytes, which does not put an image on the pasteboard) and Linux
-   (needs `xclip`, which may not be installed) are very likely wrong too.
-   Never claim this works without pasting into a real app. **Open.**
+3. **"Show in file manager" opened Documents.** *Fixed:* the Windows branch now
+   passes a single `raw_arg` of the form `/select,"C:\dir\file.png"`, instead of
+   letting `Command::arg` quote the whole `/select,...` token — explorer parses
+   its own command line and answering a quoted token with Documents is the
+   documented failure. Forward slashes are normalised first. The argument string
+   is unit tested; the spawn still needs a glance on Windows (see the manual
+   list in the reply).
+4. **"Copy image" was wrong on Windows.** *Fixed, unverified:* the PowerShell
+   spawn and the `pbcopy`/`xclip` branches are gone. `copy_image` decodes the file
+   with the `image` crate (guessing the format, so a `.jfif` works) and puts a
+   bitmap on the clipboard with `arboard`: `CF_DIB`/`CF_BITMAP` on Windows, an
+   `NSImage` on macOS, `image/png` on Linux. That removes the console flash and
+   is what Discord and WhatsApp accept. Both crates are `MIT OR Apache-2.0`,
+   already inside `about.toml`; the resolved license expressions were checked
+   against the allowlist. Decoding is unit tested. **It still has to be pasted
+   into a real app** — neither headless Chromium nor the Rust tests can prove the
+   clipboard. AVIF cannot be decoded (the `avif` feature is deliberately off), so
+   copying one reports an error.
 5. **Resizable filmstrip was cosmetic.** *Fixed:* the thumbnails now scale with
    `--filmstrip-height` (`.film-item` height/width derive from it, keeping the
    thumbnail aspect), so enlarging the strip shows bigger previews. At the
@@ -69,10 +69,11 @@ the code, not confirmed. Status as of the last session:
    a GUI test checks the computed style and that typing actually hides
    non-matching filmstrip items.
 7. **Test coverage of the 1.3/1.4 features is thin.** *Partly fixed:* command
-   registration, the filename filter and filmstrip resizing are now covered.
-   Still thin: library keyboard navigation, batched grids, "Restore all", the
-   duplicates dialog, the progress modal, the statistics section and rebinding.
-   Each of A1/A3/A4 that gets fixed should come with a test that fails first.
+   registration, the filename filter, filmstrip resizing and global rebinding are
+   now covered. Still thin: library keyboard navigation, batched grids, "Restore
+   all", the duplicates dialog, the progress modal and the statistics section.
+   A3/A4 have unit tests only for what can be tested off-device (the explorer
+   argument, the image decode), which is the honest ceiling for OS-level work.
 
 Suggested way to work the rest: reproduce each item in `npm run dev` (or a
 real build), write the failing test where one is possible, fix, then check by
@@ -122,10 +123,11 @@ hand on Windows. Do not mark one done on the strength of the fake backend.
 ## C. What 1.3/1.4 added (implemented; verified only by the fake-backend tests
 unless section A says otherwise)
 
-- Right-click: copy image, copy file name, show in file manager (see A3, A4);
-  a pile-tile menu (restore, open, show in file manager, copy path/name).
+- Right-click: copy image (native clipboard, A4), copy file name, show in file
+  manager (raw-arg select, A3); a pile-tile menu (restore, open, show in file
+  manager, copy path/name).
 - `A`/`D`/ArrowDown step the filmstrip; shortcut rebinding UI in Options
-  (see A1); the Filter-button dot was removed.
+  (now wired to the handler, A1); the Filter-button dot was removed.
 - "Next month" is chronological (`nextMonthWithWork` in `logic.js`: nearest
   later month with work, else nearest earlier, with tests).
 - Done months can be opened (`kept` scope in `queue_ids`).
@@ -161,6 +163,16 @@ unless section A says otherwise)
 - GUI assertions that check a menu or button exists are not tests of what it
   does. Test the effect (the key opens Options, the thumbs resize, the
   clipboard holds a bitmap where that can be read back).
+- Some apps parse their own command line. `explorer.exe` is the example here:
+  it wants `/select,"C:\dir\file.png"` as one `raw_arg`, not an `arg` (Rust
+  would quote the whole token once it has a space, and explorer then opens
+  Documents). Extract the argument into a pure function so the part that can be
+  tested is tested.
+- A native clipboard write beats shelling out. `arboard` puts a bitmap
+  (`CF_DIB`/`CF_BITMAP`) on Windows, an `NSImage` on macOS and `image/png` on
+  Linux, with no PowerShell window. Before adding a dependency here, check its
+  license against `about.toml` (the release runs `cargo-about`); `cargo metadata`
+  lists every resolved package's license, which is enough to grep the allowlist.
 - Work done by parallel helpers merges cleanly in git and still breaks:
   re-run every suite after the merge and read the diff of shared files
   (`app.js`, `commands.rs`, `fake-backend.js`, `style.css`).
