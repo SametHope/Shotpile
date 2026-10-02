@@ -194,9 +194,9 @@ Both are always on, including in release builds.
 
 ```powershell
 npm test                                  # both JS suites
-npm run test:logic                        # 44 logic tests (node --test)
-npm run test:gui                          # 230 GUI assertions in headless Chrome
-cd src-tauri; cargo test                  # 71 unit + 4 end-to-end tests
+npm run test:logic                        # 59 logic tests (node --test)
+npm run test:gui                          # 250 GUI assertions in headless Chrome
+cd src-tauri; cargo test                  # 76 unit + 4 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
 ```
