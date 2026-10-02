@@ -92,31 +92,78 @@
       const r = $$(".film-item")[i]?.getBoundingClientRect();
       return r ? { w: Math.round(r.width), h: Math.round(r.height) } : null;
     },
-    // The review's vertical chain: the top card, the stage, the action row and
-    // the filmstrip. Used to check that enlarging the strip shrinks the deck
-    // instead of letting the action row ride up over it.
+    // The review's vertical chain: the lowest deck card (the peeking stack, not
+    // just the top card), the stage, the action row and the filmstrip. The
+    // peeking cards are translated below the stage, so measuring only the top
+    // card hid the real overlap with the buttons.
     reviewLayout: () => {
-      const top = document.querySelector("#stage .deck .card.deck-top");
       const stage = $("#stage");
       const actions = $("#review-actions");
       const strip = $("#filmstrip");
-      if (!top || !stage || !actions || !strip) return null;
-      const t = top.getBoundingClientRect();
+      const cards = $$("#stage .deck .card:not(.leaving)");
+      if (!stage || !actions || !strip || !cards.length) return null;
       const s = stage.getBoundingClientRect();
       const a = actions.getBoundingClientRect();
       const f = strip.getBoundingClientRect();
+      const bottoms = cards.map((c) => c.getBoundingClientRect().bottom);
       return {
         stageH: Math.round(s.height),
-        cardH: Math.round(t.height),
-        cardBottom: Math.round(t.bottom),
+        cardH: Math.round(cards[0].getBoundingClientRect().height),
+        cardBottom: Math.round(Math.max(...bottoms)),
         actionsTop: Math.round(a.top),
         stripH: Math.round(f.height),
       };
     },
+    // Every rendered filmstrip item, and whether the current one and all items
+    // sit inside the strip's horizontal bounds (nothing clipped off-screen).
+    filmBounds: () => {
+      const strip = $("#filmstrip");
+      if (!strip) return null;
+      const sr = strip.getBoundingClientRect();
+      const items = $$(".film-item");
+      const outside = items.filter((n) => {
+        const r = n.getBoundingClientRect();
+        return r.left < sr.left - 0.5 || r.right > sr.right + 0.5;
+      }).length;
+      const cur = items.find((n) => n.classList.contains("current"));
+      const cr = cur?.getBoundingClientRect();
+      return {
+        count: items.length,
+        outside,
+        currentVisible: !!cr && cr.left >= sr.left - 0.5 && cr.right <= sr.right + 0.5,
+        stripW: Math.round(sr.width),
+      };
+    },
+    // The rendered segment colours of the big progress bar, by status.
+    segbarColors: () => {
+      const out = {};
+      for (const n of $$(".segbar .seg")) {
+        const key = [...n.classList].find((c) => c.startsWith("seg-") && c !== "seg");
+        out[key] = getComputedStyle(n).backgroundColor;
+      }
+      return out;
+    },
+    segbarTrack: () => {
+      const n = $(".segbar");
+      return n ? getComputedStyle(n).backgroundImage : null;
+    },
     setFilmstripHeight: (h) => {
       const r = $(".review");
       if (r) r.style.setProperty("--filmstrip-height", `${h}px`);
+      // The real app re-renders the strip on a resize; trigger the same path.
+      window.dispatchEvent(new Event("resize"));
       return !!r;
+    },
+    // The computed colour a status segment paints, via a throwaway element so
+    // it works before any real segment of that status exists.
+    segTokenColor: (cls) => {
+      const n = document.createElement("i");
+      n.className = `seg ${cls}`;
+      n.style.display = "none";
+      document.body.appendChild(n);
+      const c = getComputedStyle(n).backgroundColor;
+      n.remove();
+      return c;
     },
     setFilter: (v) => {
       const n = $("#filter-input");
@@ -371,6 +418,21 @@
     },
     removeOldMonths: () => { for (const id of [...window.__shots.keys()]) if (id >= 500) window.__shots.delete(id); },
     stageOldMonths: () => { for (const s of window.__shots.values()) if (s.id >= 500) s.status = "staged"; },
+    // A whole synthetic month of pending shots (ids 900+), long enough that the
+    // filmstrip cannot show them all. Removed again after.
+    addMonthShots: (month, n) => {
+      const base = [...window.__shots.values()].find((x) => x.root_id === 1);
+      const [y, m] = month.split("-").map(Number);
+      for (let i = 0; i < n; i++) {
+        const id = 900 + i;
+        const name = `Bulk ${String(i).padStart(2, "0")}.png`;
+        window.__shots.set(id, {
+          ...base, id, name, path: `C:/1/${name}`, ext: "png", viewable: true,
+          taken_ms: Date.UTC(y, m - 1, 10, 9, 0, i % 60), status: "pending", decided_ms: null, missing: false,
+        });
+      }
+    },
+    removeMonthShots: () => { for (const id of [...window.__shots.keys()]) if (id >= 900) window.__shots.delete(id); },
     toastOn: () => $("#toast").classList.contains("on"),
     visibility: (sel) => { const n = $(sel); return n ? getComputedStyle(n).visibility : null; },
     appInert: () => $("#app").hasAttribute("inert"),

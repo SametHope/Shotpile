@@ -26,6 +26,7 @@ import {
   detectKeyConflict,
   dragTilt,
   exitVector,
+  filmItemsPerSide,
   formatBytes,
   formatCount,
   formatDateTime,
@@ -151,6 +152,20 @@ window.addEventListener("error", (e) => {
 window.addEventListener("unhandledrejection", (e) => {
   log.error("promise", "unhandled rejection", e.reason?.stack || String(e.reason));
 });
+
+// Keep the native window/webview background in step with the theme. WebView2's
+// default is white and flashes through before the page repaints (the first
+// scroll in a fullscreen window); tauri.conf.json only pins the light colour at
+// creation. boot.js applies the theme before this runs, and changes it after.
+function syncWindowBackground() {
+  const dark = document.documentElement.dataset.theme === "dark";
+  invoke("set_window_background", { color: dark ? "#0c1017" : "#eef1f6" }).catch(() => {});
+}
+new MutationObserver(syncWindowBackground).observe(document.documentElement, {
+  attributes: true,
+  attributeFilter: ["data-theme"],
+});
+syncWindowBackground();
 
 function tzArgs() {
   return { rootId: state.rootId ?? null, tz: tzOffsetMinutes() };
@@ -599,6 +614,8 @@ const DECK_SLOTS = [{ dy: 0, scale: 1 }, { dy: 22, scale: 0.95 }, { dy: 44, scal
 const ENTER_CLASSES = ["enter-fade", "enter-from-left", "enter-from-right", "enter-from-top"];
 const FILM_BEFORE = 5;
 const FILM_AFTER = 9;
+/** Gap between filmstrip items; keep in step with `.filmstrip` in style.css. */
+const FILM_GAP = 6;
 
 /** Exit animation length; keep in step with `.card.leaving` in style.css. */
 const EXIT_MS = 320;
@@ -624,6 +641,40 @@ function filmWindowIds() {
   if (!ids.length) return [];
   const cursor = Math.min(state.queue.cursor, ids.length - 1);
   return ids.slice(Math.max(0, cursor - FILM_BEFORE), Math.min(ids.length, cursor + FILM_AFTER + 1));
+}
+
+/**
+ * How many filmstrip items fit on each side of the current one. The strip does
+ * not scroll, so anything past this is clipped; rendering it anyway let the
+ * current item (or a clickable neighbour) sit off-screen once the strip grew
+ * taller. Derived from the real item size, so a taller strip renders fewer.
+ */
+function filmPerSide() {
+  const strip = document.getElementById("filmstrip");
+  if (!strip) return FILM_BEFORE;
+  const sample = strip.querySelector(".film-item");
+  let itemH = sample ? sample.getBoundingClientRect().height : 0;
+  if (!itemH) {
+    const review = strip.closest(".review");
+    const h = review ? parseFloat(getComputedStyle(review).getPropertyValue("--filmstrip-height")) : NaN;
+    itemH = Number.isFinite(h) ? Math.max(1, h - 10) : 42; // .film-item is calc(var(--filmstrip-height) - 10px)
+  }
+  const itemW = itemH * (60 / 42); // .film-item aspect-ratio
+  const room = strip.clientWidth;
+  // Before layout there is no width; keep the fixed window rather than
+  // collapsing to a single item.
+  return room ? filmItemsPerSide(room, itemW, FILM_GAP) : FILM_BEFORE;
+}
+
+/** Re-paint the strip after a layout change (filmstrip drag, window resize). */
+let filmPaintQueued = false;
+function scheduleFilmstripPaint() {
+  if (filmPaintQueued) return;
+  filmPaintQueued = true;
+  requestAnimationFrame(() => {
+    filmPaintQueued = false;
+    if (state.view === "review") paintFilmstrip();
+  });
 }
 
 function renderReview() {
@@ -769,8 +820,11 @@ function paintFilmstrip() {
     return;
   }
   const cursor = Math.min(q.cursor, ids.length - 1);
-  const start = Math.max(0, cursor - FILM_BEFORE);
-  const end = Math.min(ids.length, cursor + FILM_AFTER + 1);
+  // Render only what fits, centred on the cursor, so the current item is never
+  // clipped and no off-screen item can be clicked.
+  const perSide = filmPerSide();
+  const start = Math.max(0, cursor - perSide);
+  const end = Math.min(ids.length, cursor + perSide + 1);
   const missing = [];
   const items = [];
   for (let i = start; i < end; i++) {
@@ -1220,6 +1274,8 @@ function wireFilmstripResize(handle) {
     if (review) {
       review.style.setProperty("--filmstrip-height", `${clamped}px`);
     }
+    // A taller strip fits fewer items, so re-render the window to match.
+    scheduleFilmstripPaint();
   });
 
   handle.addEventListener("pointerup", (e) => {
@@ -1229,6 +1285,7 @@ function wireFilmstripResize(handle) {
     const clamped = Math.max(40, Math.min(300, newHeight));
     prefs.set({ filmstripHeight: clamped });
     startHeight = 0;
+    scheduleFilmstripPaint();
   });
 
   handle.addEventListener("pointercancel", () => {
@@ -1239,6 +1296,7 @@ function wireFilmstripResize(handle) {
       review.style.setProperty("--filmstrip-height", `${prefs.get().filmstripHeight}px`);
     }
     startHeight = 0;
+    scheduleFilmstripPaint();
   });
 }
 
@@ -2745,6 +2803,8 @@ window.addEventListener("wheel", (e) => {
 }, { passive: false });
 el.stagedBtn.addEventListener("click", openStaged);
 el.help.addEventListener("click", showShortcuts);
+// A window resize changes how many filmstrip items fit; re-render the window.
+window.addEventListener("resize", scheduleFilmstripPaint);
 // Progress is optional: without the event API the scan still completes.
 window.__TAURI__.event?.listen?.("scan-progress", (e) => onScanProgress(e.payload))
   ?.catch?.((err) => log.warn("scan", `no scan progress: ${err}`));

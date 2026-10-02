@@ -24,6 +24,7 @@ import {
   countOf,
   dragTilt,
   exitVector,
+  filmItemsPerSide,
   formatBytes,
   formatCount,
   gestureVisual,
@@ -536,3 +537,16 @@ test("matchesFilename handles null filename", () => {
   assert.equal(matchesFilename(null, "test"), false);
   assert.equal(matchesFilename(null, ""), true);
 });
+
+test("filmItemsPerSide fits the window to the strip width", () => {
+  // Room for the current item plus exactly one on each side.
+  assert.equal(filmItemsPerSide(60 + 2 * (60 + 6), 60, 6), 1);
+  // A wide strip fits more; a tall strip (bigger items) fits fewer.
+  const wide = filmItemsPerSide(1200, 60, 6);
+  assert.ok(wide > 5, `expected more than 5 per side, got ${wide}`);
+  assert.ok(filmItemsPerSide(1200, 200, 6) < wide, "bigger items must fit fewer");
+  // A strip narrower than a single item shows only the current one.
+  assert.equal(filmItemsPerSide(40, 60, 6), 0);
+  assert.equal(filmItemsPerSide(0, 60, 6), 0);
+});
+

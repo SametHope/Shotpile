@@ -39,9 +39,10 @@
 
   --seg-kept: #2f9e5b;
   --seg-staged: #dc4646;
-  --seg-deleted: #9aa4b2;
+  --seg-deleted: #b91c1c;
   --seg-skipped: #d98c2b;
   --seg-track: #d5dbe5;
+  --track-line: rgba(13, 18, 24, .07);
 
   --radius: 12px;
   --shadow: 0 1px 2px rgba(13, 18, 24, .06), 0 1px 3px rgba(13, 18, 24, .05);
@@ -97,9 +98,10 @@
 
   --seg-kept: #3fae6e;
   --seg-staged: #e05757;
-  --seg-deleted: #5d6879;
+  --seg-deleted: #d23c3c;
   --seg-skipped: #d99433;
   --seg-track: #232c39;
+  --track-line: rgba(255, 255, 255, .07);
 
   --shadow: 0 1px 2px rgba(0, 0, 0, .3);
   --shadow-md: 0 4px 14px rgba(0, 0, 0, .35);
@@ -546,7 +548,9 @@ kbd {
   display: flex;
   height: 6px;
   border-radius: 999px;
-  background: var(--seg-track);
+  /* The uncovered part of the bar is the unsorted remainder, so the track is
+     the striped one and the segments read as solid. */
+  background: repeating-linear-gradient(45deg, var(--seg-track) 0 4px, var(--track-line) 4px 8px);
   /* The unsorted track sits on the page wash; the edge keeps it from fading
      into it in the light theme. */
   box-shadow: inset 0 0 0 1px var(--line-2);
@@ -558,14 +562,7 @@ kbd {
 .seg:first-child { border-radius: 999px 0 0 999px; }
 .seg-kept { background: var(--seg-kept); }
 .seg-staged { background: var(--seg-staged); }
-.seg-deleted {
-  background:
-    repeating-linear-gradient(45deg, var(--seg-deleted) 0px, var(--seg-deleted) 4px, rgba(0, 0, 0, .1) 4px, rgba(0, 0, 0, .1) 8px);
-}
-:root[data-theme="dark"] .seg-deleted {
-  background:
-    repeating-linear-gradient(45deg, var(--seg-deleted) 0px, var(--seg-deleted) 4px, rgba(255, 255, 255, .1) 4px, rgba(255, 255, 255, .1) 8px);
-}
+.seg-deleted { background: var(--seg-deleted); }
 .seg-skipped { background: var(--seg-skipped); }
 
 .legend {
@@ -585,7 +582,7 @@ kbd {
 .lg-staged i { background: var(--seg-staged); }
 .lg-deleted i { background: var(--seg-deleted); }
 .lg-skipped i { background: var(--seg-skipped); }
-.lg-pending i { background: var(--seg-track); box-shadow: inset 0 0 0 1px var(--line-2); }
+.lg-pending i { background: repeating-linear-gradient(45deg, var(--seg-track) 0 4px, var(--track-line) 4px 8px); box-shadow: inset 0 0 0 1px var(--line-2); }
 
 .year + .year { margin-top: 26px; }
 .months { display: grid; gap: 8px; }
@@ -762,9 +759,11 @@ kbd {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
-  /* Room for the cards peeking out below the top one, so they never overlap
-     the buttons. */
-  margin: 14px 0 12px;
+  /* Room for the waiting cards peeking out below the top one. The stack is
+     translated down by up to `--deck-dy` (44px on .deck-2) and scaled, so the
+     bottom card reaches at most 44px past the stage; with less room the buttons
+     rode up over the stack. */
+  margin: 14px 0 48px;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
@@ -1102,6 +1101,9 @@ kbd {
   padding: 4px 2px 2px;
   height: var(--filmstrip-height);
   overflow: hidden;
+  /* The first and last items fade into the edges instead of being cut off. */
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
 }
 
 .film-item {

@@ -131,6 +131,12 @@ const CTRL_SHIFT = CTRL | SHIFT;
     const overview = await probe("p.overviewText()");
     ok("the overview leads with the total and what is left", /4 screenshots/.test(overview) && /4 left to sort/.test(overview), overview);
     ok("the header names the current folder", (await probe("p.folderName()")) === "Screenshots", await probe("p.folderName()"));
+    // The progress bar: the unsorted remainder is the striped track; deleted is
+    // a solid red, not a stripe.
+    ok("the unsorted progress track is striped", /repeating-linear-gradient/.test(await probe("p.segbarTrack()") || ""), await probe("p.segbarTrack()"));
+    const delColor = await probe("p.segTokenColor('seg-deleted')");
+    const dnum = (delColor.match(/\d+/g) || []).map(Number);
+    ok("the deleted segment is red", dnum[0] > 120 && dnum[1] < 110 && dnum[2] < 110, delColor);
 
     // ---- open the September queue ----
     await probe("p.clickMonth('2026-09')");
@@ -191,12 +197,18 @@ const CTRL_SHIFT = CTRL | SHIFT;
 
     // ---- filmstrip resizing: thumbnails scale, the deck yields the space ----
     const shortStrip = await probe("p.reviewLayout()");
-    await js("p.setFilmstripHeight(140);");
+    const shortFilm = await probe("p.filmBounds()");
+    ok("the current filmstrip item is on screen", shortFilm && shortFilm.currentVisible && shortFilm.outside === 0, JSON.stringify(shortFilm));
+    ok("the peeking card stack clears the action row", shortStrip && shortStrip.cardBottom <= shortStrip.actionsTop, JSON.stringify(shortStrip));
+
+    await js("p.setFilmstripHeight(200);");
+    await waitFor("p.filmBounds() && p.filmBounds().outside === 0");
     const tallStrip = await probe("p.reviewLayout()");
     const tallThumb = await probe("p.filmItemRect(0)");
     ok("the filmstrip thumbnails scale with the strip", tallThumb && tallThumb.h > 60 && tallThumb.w > tallThumb.h * 1.3, JSON.stringify(tallThumb));
-    ok("enlarging the strip shrinks the deck instead of overlapping the actions", tallStrip && shortStrip && tallStrip.stageH < shortStrip.stageH && tallStrip.cardBottom <= tallStrip.actionsTop, `${JSON.stringify(shortStrip)} -> ${JSON.stringify(tallStrip)}`);
+    ok("enlarging the strip shrinks the deck without crossing the actions", tallStrip && tallStrip.stageH < shortStrip.stageH && tallStrip.cardBottom <= tallStrip.actionsTop, `${JSON.stringify(shortStrip)} -> ${JSON.stringify(tallStrip)}`);
     await js("p.setFilmstripHeight(52);");
+    await waitFor("p.filmBounds() && p.filmBounds().outside === 0");
     const restoredThumb = await probe("p.filmItemRect(0)");
     ok("the default strip keeps the original thumbnail size", restoredThumb && Math.abs(restoredThumb.h - 42) <= 1 && Math.abs(restoredThumb.w - 60) <= 2, JSON.stringify(restoredThumb));
 
@@ -760,6 +772,26 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await waitFor("p.view() === 'months'");
     await js("p.removeOldMonths(); document.getElementById('btn-scan').click();");
     await waitFor("p.monthRows().length === 2", 3000);
+
+    // ---- a long queue renders only the filmstrip items that fit ----
+    // Three items were too few to expose the old bug: the strip rendered a
+    // fixed window and, once the thumbs grew to fill less width, the current
+    // item sat clipped off-screen. Add a month long enough to matter.
+    await js("p.addMonthShots('2026-07', 40); document.getElementById('btn-scan').click();");
+    await waitFor("document.querySelector('.month[data-month=\"2026-07\"]') !== null", 3000);
+    await probe("p.clickMonth('2026-07')");
+    await waitFor("p.hasCard()");
+    const longShort = await probe("p.filmBounds()");
+    ok("a long queue keeps the current filmstrip item on screen", longShort && longShort.currentVisible && longShort.outside === 0, JSON.stringify(longShort));
+    await js("p.setFilmstripHeight(200);");
+    await waitFor("p.filmBounds() && p.filmBounds().outside === 0");
+    const longTall = await probe("p.filmBounds()");
+    ok("a taller strip renders fewer items, all on screen", longTall && longTall.count < longShort.count && longTall.outside === 0 && longTall.currentVisible, `${JSON.stringify(longShort)} -> ${JSON.stringify(longTall)}`);
+    await js("p.setFilmstripHeight(52);");
+    await js("p.backToMonths();");
+    await waitFor("p.view() === 'months'");
+    await js("p.removeMonthShots(); document.getElementById('btn-scan').click();");
+    await waitFor("document.querySelector('.month[data-month=\"2026-07\"]') === null", 3000);
 
     // ---- folders ----
     await js("p.reset();");

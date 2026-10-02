@@ -583,6 +583,21 @@ export function resetKeyBindings(prefs) {
 }
 
 /**
+ * How many filmstrip items fit on each side of the current one. The strip does
+ * not scroll, so this bounds the rendered window; anything past it would be
+ * clipped off-screen. Returns 0 when only the current item fits.
+ *
+ * @param {number} room      the strip's inner width in px
+ * @param {number} itemWidth one item's width in px
+ * @param {number} [gap]     the gap between items in px
+ */
+export function filmItemsPerSide(room, itemWidth, gap = 6) {
+  const step = itemWidth + gap;
+  if (!(step > 0) || room <= itemWidth) return 0;
+  return Math.max(0, Math.floor((room - itemWidth) / (2 * step)));
+}
+
+/**
  * Filter a filename by substring match. Case-insensitive. Returns true if the
  * filename should be included in the filtered results.
  *
