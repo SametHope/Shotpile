@@ -193,8 +193,11 @@ h1, h2, h3 { font-family: var(--font-display); }
   top: 0;
   z-index: 20;
   background: var(--topbar);
-  backdrop-filter: blur(12px) saturate(140%);
-  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  /* No backdrop-filter here. It sat over nothing (the view scrolls below, not
+     behind) but still forced a render surface, and WebView2 presented that
+     surface uninitialised -- a black flash -- when the window was resized and
+     the library scrolled afterwards. The bar is a flex sibling, so dropping
+     the blur costs nothing visually. */
   border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
 }
@@ -270,6 +273,10 @@ main:has(> #view.reviewing) { overflow: visible; }
 #view {
   height: 100%;
   overflow-y: auto;
+  /* Opaque, so the scrolling layer paints the theme itself. Left transparent it
+     showed the WebView's base colour in tiles the compositor had not painted
+     yet, which is the black band on the first scroll after a resize. */
+  background: var(--bg);
   scrollbar-width: thin;
   scrollbar-color: var(--line-2) transparent;
 }
@@ -1249,8 +1256,8 @@ kbd {
   flex: 0 0 auto;
   border-top: 1px solid var(--line);
   background: var(--topbar);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  /* Same reason as .topbar: no backdrop-filter, or the render surface flashes
+     black on resize. */
   /* Always in the layout; expands/collapses with a transition so showing it
      never shifts the content above. */
   max-height: 0;
