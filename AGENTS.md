@@ -93,7 +93,7 @@ is always `db`, then `undo`.
 
 ```powershell
 npm run test:logic                          # 60 frontend logic tests
-npm run test:gui                            # 261 GUI assertions in headless Chrome
+npm run test:gui                            # 262 GUI assertions in headless Chrome
 cd src-tauri; cargo test                    # 78 unit + 4 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
@@ -278,9 +278,12 @@ library (`seedDemo()` in the fake), which is also what the README pictures show.
 - **The waiting cards peek below the stage.** `.deck-1`/`.deck-2` are translated
   down by up to `--deck-dy` (44px) and scaled, so the bottom card reaches past
   the stage's padding box. `.stage` reserves that room with `margin-bottom: 48px`;
-  reducing it lets the stack ride up over the action row. `reviewLayout()` in the
-  probes measures the lowest deck card, not just the top one, because measuring
-  the top card hid this.
+  reducing it lets the stack ride up over the action row (at the old 12px the
+  lowest card crossed it by 6px, and the GUI suite now fails on that).
+  `reviewLayout()` in the probes measures the lowest deck card, not just the top
+  one, because measuring the top card hid this. The `max-height: 600px` query
+  pairs a smaller `margin-bottom` with a smaller `--deck-dy`, so its 20px is
+  enough: **change the two together**, and the suite covers that size too.
 - Clicking the card opens the viewer after the double-click interval (a
   double-click zooms instead); `Space` opens it too. The viewer owns the
   keyboard while open (`viewerKeydown`), and is created on demand, so it needs

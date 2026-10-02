@@ -1704,6 +1704,8 @@ body.ready #splash { opacity: 0; visibility: hidden; }
   .filmstrip-wrapper,
   .filmstrip,
   .filmstrip-handle { display: none; }
+  /* The smaller --deck-dy below pays for the smaller margin: the stack pokes
+     ~6px past the stage box here, not the 44px it does at full height. */
   .stage { margin: 8px 0 20px; }
   .deck .deck-1 { --deck-dy: 12px; }
   .deck .deck-2 { --deck-dy: 24px; }

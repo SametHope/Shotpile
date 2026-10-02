@@ -33,9 +33,14 @@ the code, not confirmed. Status as of the last session:
   rendered. The two edges also fade with a mask now.
 - **The waiting cards, not the top card, overlapped the buttons.** `.deck-1` /
   `.deck-2` are translated below the stage; the stage only reserved 12px, so the
-  peeking stack rode up over Delete/Skip/Keep once the deck was short. `.stage`
-  now reserves 48px (`--deck-dy` tops out at 44px), and the `reviewLayout()` probe
-  measures the *lowest* card, not the top one, so the old test could not hide it.
+  peeking stack rode up over Delete/Skip/Keep. `.stage` now reserves 48px, and
+  `reviewLayout()` measures the *lowest* card, not the top one, so the old test
+  could not hide it. At the original 12px the lowest card crossed the action row
+  by 6px in the suite, so this one is reproduced headlessly — the display-scaling
+  report was not the cause. The short-window (`max-height: 600px`) branch was
+  measured too and needed no change: it cuts `--deck-dy` to 24px, so its 20px
+  margin already leaves ~14px. The two are coupled; the suite now asserts both
+  sizes.
 - **The progress-bar stripes were on the wrong part.** 1.4.0 striped the deleted
   segment; the user wanted deleted solid red and the *unsorted* remainder (the
   track) striped, which is what it does now. See the CSS gotchas in AGENTS.md.
@@ -79,8 +84,9 @@ the code, not confirmed. Status as of the last session:
    thumbnail aspect), so enlarging the strip shows bigger previews. At the
    default 52 px the item is still the original 42x60. The original "buttons
    overlap the deck" report turned out to be the *peeking* cards, not the top
-   one: the stage now reserves 48px for them (see the follow-ups above). Worth a
-   look at Windows display scaling 125%/150% by hand.
+   one: the stage now reserves 48px for them (see the follow-ups above), and the
+   overlap reproduces headlessly, so it is worth one look at 125%/150% by hand
+   only to confirm the fix looks right at your scale.
 6. **The filename filter was unstyled.** *Fixed:* `.filter-box` now uses the
    token surface/line colours, the `.btn` radius and the accent focus ring, and
    a GUI test checks the computed style and that typing actually hides

@@ -212,6 +212,17 @@ const CTRL_SHIFT = CTRL | SHIFT;
     const restoredThumb = await probe("p.filmItemRect(0)");
     ok("the default strip keeps the original thumbnail size", restoredThumb && Math.abs(restoredThumb.h - 42) <= 1 && Math.abs(restoredThumb.w - 60) <= 2, JSON.stringify(restoredThumb));
 
+    // A short window is what Windows display scaling at 125%/150% produces:
+    // the `max-height: 600px` query drops the filmstrip, shrinks --deck-dy and
+    // overrides the stage margin, so the stack cleared the buttons by accident
+    // before. Assert it at that size too.
+    await client.send("Emulation.setDeviceMetricsOverride", { width: 1200, height: 560, deviceScaleFactor: 1, mobile: false });
+    await sleep(250);
+    const shortWindow = await probe("p.reviewLayout()");
+    ok("a short window keeps the card stack clear of the buttons", shortWindow && shortWindow.cardBottom <= shortWindow.actionsTop, JSON.stringify(shortWindow));
+    await client.send("Emulation.clearDeviceMetricsOverride");
+    await sleep(250);
+
     // ---- the date-source diagnostic lives in the tooltip ----
     ok("the date explains its source on hover", /from filename/i.test(await probe("p.dateTooltip()") || ""), String(await probe("p.dateTooltip()")));
 
