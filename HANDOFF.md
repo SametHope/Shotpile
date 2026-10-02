@@ -18,9 +18,27 @@ the code, not confirmed. Status as of the last session:
 
 - **Fixed in code, still needs a manual pass on the target OS:** A1 (rebinding),
   A2 (missing command registrations), A3 (file manager), A4 (clipboard),
-  A5 (filmstrip thumbnails), A6 (unstyled filename filter), plus the GUI suite's
+  A5 (filmstrip), A6 (unstyled filename filter), plus the GUI suite's
   dependence on the host OS colour scheme.
 - **Open:** A7 (the rest of the thin coverage).
+
+### Later follow-ups from a real Windows run (this session)
+
+- **The filmstrip could select items that were off-screen.** The strip rendered
+  a fixed window (5 before, 9 after) regardless of how many items fit; once the
+  thumbnails grew with the strip, the current item — and clickable neighbours —
+  sat clipped outside it. It now derives the window from the strip width and the
+  item size (`filmItemsPerSide` in logic.js) and re-paints on the strip drag and
+  on window resize, so the current item stays centred and nothing off-screen is
+  rendered. The two edges also fade with a mask now.
+- **The waiting cards, not the top card, overlapped the buttons.** `.deck-1` /
+  `.deck-2` are translated below the stage; the stage only reserved 12px, so the
+  peeking stack rode up over Delete/Skip/Keep once the deck was short. `.stage`
+  now reserves 48px (`--deck-dy` tops out at 44px), and the `reviewLayout()` probe
+  measures the *lowest* card, not the top one, so the old test could not hide it.
+- **The progress-bar stripes were on the wrong part.** 1.4.0 striped the deleted
+  segment; the user wanted deleted solid red and the *unsorted* remainder (the
+  track) striped, which is what it does now. See the CSS gotchas in AGENTS.md.
 
 1. **Rebinding did nothing outside the review.** *Fixed:* the keydown handler
    now resolves every key through the binding table, so Options, Help, zoom, the
@@ -59,11 +77,10 @@ the code, not confirmed. Status as of the last session:
 5. **Resizable filmstrip was cosmetic.** *Fixed:* the thumbnails now scale with
    `--filmstrip-height` (`.film-item` height/width derive from it, keeping the
    thumbnail aspect), so enlarging the strip shows bigger previews. At the
-   default 52 px the item is still the original 42x60. The deck already yields
-   the space (the stage is the flex child that shrinks); a GUI test now pins
-   both the scaling and that the action row never crosses the card. The
-   original overlap report was at Windows display scaling and was not
-   reproduced in headless Chromium — worth a look at 125%/150% by hand.
+   default 52 px the item is still the original 42x60. The original "buttons
+   overlap the deck" report turned out to be the *peeking* cards, not the top
+   one: the stage now reserves 48px for them (see the follow-ups above). Worth a
+   look at Windows display scaling 125%/150% by hand.
 6. **The filename filter was unstyled.** *Fixed:* `.filter-box` now uses the
    token surface/line colours, the `.btn` radius and the accent focus ring, and
    a GUI test checks the computed style and that typing actually hides
@@ -114,11 +131,15 @@ hand on Windows. Do not mark one done on the strength of the fake backend.
    - Possible later: a grouped undo for a whole pass, near-duplicate
      detection (today only byte-identical files).
 6. **White flash on fullscreen and first scroll.** The start-up flash is handled
-   (hidden window, `#splash`, boot.js). 1.4.0 also set `backgroundColor` on the
-   window in `tauri.conf.json` (light theme colour only), but that was never
-   checked on Windows and does not cover the dark theme. Still to research:
-   the WebView2 background (dark theme), the resize-to-fullscreen repaint,
-   and compositing of the scrolling `#view`.
+   (hidden window, `#splash`, boot.js). *Addressed in code:* Tauri/WebView2 has a
+   `DefaultBackgroundColor` (the colour under all web content) that defaults to
+   white; `set_window_background` now sets it to the theme colour
+   (`syncWindowBackground()` in app.js follows `data-theme`), so a region that
+   repaints before its content should flash the page colour, not white. This
+   cannot be proven in headless Chromium — **needs a real Windows fullscreen
+   check** (F11, then scroll a full library). If it still flashes, the remaining
+   suspects are the resize-to-fullscreen surface repaint and compositing of the
+   scrolling `#view`.
 
 ## C. What 1.3/1.4 added (implemented; verified only by the fake-backend tests
 unless section A says otherwise)
@@ -132,7 +153,8 @@ unless section A says otherwise)
   later month with work, else nearest earlier, with tests).
 - Done months can be opened (`kept` scope in `queue_ids`).
 - Resizable filmstrip (fixed, A5), lighter info-bar blur limited to the corners,
-  striped "deleted" segment in the progress bar.
+  striped unsorted track in the progress bar (the deleted segment is solid red
+  again; see the follow-ups in section A).
 - A blocking progress modal for commits over 20 files (`commit-progress`
   events every 5 files) and batched rendering of the library and pile grids
   (100 per animation frame).

@@ -92,8 +92,8 @@ is always `db`, then `undo`.
 ## Verify before claiming done
 
 ```powershell
-npm run test:logic                          # 59 frontend logic tests
-npm run test:gui                            # 255 GUI assertions in headless Chrome
+npm run test:logic                          # 60 frontend logic tests
+npm run test:gui                            # 261 GUI assertions in headless Chrome
 cd src-tauri; cargo test                    # 78 unit + 4 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
@@ -181,6 +181,15 @@ library (`seedDemo()` in the fake), which is also what the README pictures show.
   flickered during swipes. The library and the pile scroll inside `#view`, which
   has a thin themed bar; `#view.reviewing` sets `overflow: visible` so a thrown
   card is never clipped. Toggle the class in `render()`.
+- The progress bar carries the stripes on the **track**, not on a segment: the
+  uncovered track is the unsorted remainder and the segments are the decided
+  statuses (kept, staged, deleted, skipped), all solid. 1.4.0 striped the
+  deleted segment, which read as if it were the unsorted part; do not restripe a
+  segment. Change `--track-line` with the theme, like the other tokens.
+- The native window background is set from JS (`set_window_background`), not just
+  `tauri.conf.json`, because WebView2's default is white and flashes through on
+  the first scroll when fullscreen. `syncWindowBackground()` in app.js follows
+  `data-theme` through a MutationObserver; keep it in step with `--bg`.
 
 ## Review view
 
@@ -260,7 +269,18 @@ library (`seedDemo()` in the fake), which is also what the README pictures show.
   expands/collapses via `max-height`, so showing it never shifts the content.
 - The filmstrip (`paintFilmstrip()`) shows a window of the queue around the
   cursor and hydrates any item it does not have yet; `jumpTo(index)` moves the
-  cursor so a pass can be walked.
+  cursor so a pass can be walked. The window is **derived from the strip's width
+  and item size** (`filmItemsPerSide()` in logic.js, called by `filmPerSide()`),
+  not a fixed count: the strip does not scroll, so a fixed window clipped the
+  current item off-screen once the strip grew taller. Re-paint on the filmstrip
+  drag and on window resize (`scheduleFilmstripPaint()`). The two edges carry a
+  mask fade; keep it in step with `.filmstrip` in style.css.
+- **The waiting cards peek below the stage.** `.deck-1`/`.deck-2` are translated
+  down by up to `--deck-dy` (44px) and scaled, so the bottom card reaches past
+  the stage's padding box. `.stage` reserves that room with `margin-bottom: 48px`;
+  reducing it lets the stack ride up over the action row. `reviewLayout()` in the
+  probes measures the lowest deck card, not just the top one, because measuring
+  the top card hid this.
 - Clicking the card opens the viewer after the double-click interval (a
   double-click zooms instead); `Space` opens it too. The viewer owns the
   keyboard while open (`viewerKeydown`), and is created on demand, so it needs
