@@ -42,7 +42,11 @@
   --seg-deleted: #b91c1c;
   --seg-skipped: #d98c2b;
   --seg-track: #d5dbe5;
-  --track-line: rgba(13, 18, 24, .07);
+  /* The stripe has to be an opaque colour mixed out of the track. A gradient is
+     composited over the page behind the bar, not stop over stop, so a
+     translucent stop washes toward --bg instead of striping the track: that is
+     why 14% (and 7% before it) read as flat grey at 6px. */
+  --track-line: color-mix(in srgb, var(--seg-track) 84%, #0d1218);
 
   --radius: 12px;
   --shadow: 0 1px 2px rgba(13, 18, 24, .06), 0 1px 3px rgba(13, 18, 24, .05);
@@ -101,7 +105,7 @@
   --seg-deleted: #d23c3c;
   --seg-skipped: #d99433;
   --seg-track: #232c39;
-  --track-line: rgba(255, 255, 255, .07);
+  --track-line: color-mix(in srgb, var(--seg-track) 78%, #ffffff);
 
   --shadow: 0 1px 2px rgba(0, 0, 0, .3);
   --shadow-md: 0 4px 14px rgba(0, 0, 0, .35);
@@ -1029,29 +1033,11 @@ kbd {
   transition: max-height .22s var(--ease), opacity .22s var(--ease), visibility 0s linear .22s;
 }
 
-/* The toggle lives on the stage, not in the row it collapses, so it stays
-   reachable once the row is gone. */
-.stage-toggle {
-  position: absolute;
-  right: 2px;
-  bottom: 2px;
-  z-index: 3;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 26px;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  transition: background .12s, color .12s, border-color .12s;
-}
-.stage-toggle:hover { background: var(--surface-3); color: var(--text-2); border-color: var(--line); }
-.stage-toggle .ico { display: inline-flex; transition: rotate .22s var(--ease); }
-.review.no-actions .stage-toggle .ico { rotate: 180deg; }
+/* The toggle that collapses the sorting row sits in the review head, as one of
+   the header's own buttons, so it needs no styling of its own beyond the
+   rotation that says which way the row will move. */
+#stage-toggle .ico { display: inline-flex; transition: rotate .22s var(--ease); }
+.review.no-actions #stage-toggle .ico { rotate: 180deg; }
 
 .act {
   display: inline-flex;
@@ -1173,8 +1159,13 @@ kbd {
   height: 100%;
   border-radius: 7px;
   overflow: hidden;
+  /* A letterboxed shot fills less than the frame, so the frame needs the same
+     backdrop the cards use for it. */
+  background: var(--letterbox);
 }
-.film-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* `contain`, like the library cards: the strip is for recognising a shot, so
+   the whole frame has to be there, letterboxed rather than cropped. */
+.film-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .film-ext { font-size: 9.5px; font-weight: 700; letter-spacing: .05em; color: var(--muted); }
 
 .film-mark {

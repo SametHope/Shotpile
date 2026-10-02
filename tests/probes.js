@@ -147,6 +147,10 @@
       return {
         hidden: review.classList.contains("no-actions"),
         pressed: btn.getAttribute("aria-pressed"),
+        // The toggle belongs to the review head, not the photo it collapses
+        // below; floating over the stage is what it used to do.
+        inHead: !!btn.closest(".review-head"),
+        onStage: !!btn.closest(".stage"),
         visibility: s.visibility,
         rowH: Math.round(actions.getBoundingClientRect().height),
         stripH: Math.round(strip.getBoundingClientRect().height),
@@ -174,8 +178,10 @@
       const n = $(".segbar");
       return n ? getComputedStyle(n).backgroundImage : null;
     },
-    // The stripe period of every bar, big and small, by the size it renders at.
-    // The month bars are 6px and need a finer period than the 10px overview.
+    // The stripe period of every bar, big and small, by the size it renders at,
+    // and how far apart its two stripe colours read. A period alone proves
+    // nothing: at 6px the old line vanished into the track, so the contrast
+    // step is the part that has to hold.
     segbarStripes: () => {
       // A computed gradient reads "repeating-linear-gradient(45deg, A 0px, A 2px,
       // B 2px, B 4px)", so the period is the last two lengths.
@@ -183,13 +189,48 @@
         const all = (img || "").match(/(\d+(?:\.\d+)?)px/g) || [];
         return all.length >= 2 ? `${all[all.length - 2].replace("px", "")}/${all[all.length - 1].replace("px", "")}` : null;
       };
+      // The two stripe colours, resolved through a throwaway element instead of
+      // parsed out of the gradient string: color-mix() is substituted at
+      // computed-value time, and this must not assume a translucent stop is
+      // composited over the track. It is not -- a gradient composites over the
+      // page behind the bar -- which is how the old probe reported a healthy
+      // step for a line that painted as flat grey.
+      const resolve = (expr) => {
+        const n = document.createElement("i");
+        n.style.display = "none";
+        n.style.backgroundColor = expr;
+        document.body.appendChild(n);
+        const c = getComputedStyle(n).backgroundColor;
+        n.remove();
+        const nums = (c.match(/[\d.]+/g) || []).map(Number);
+        // color-mix() comes back as color(srgb 0..1), plain colours as rgb(0..255).
+        const isUnit = /^color\(/.test(c);
+        const chan = isUnit ? nums.slice(0, 3).map((v) => Math.round(v * 255)) : nums.slice(0, 3);
+        return { rgb: chan, a: nums.length > 3 ? nums[3] : 1 };
+      };
+      const lum = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
       const out = {};
       for (const n of $$(".segbar")) {
         const s = getComputedStyle(n);
         const h = Math.round(n.getBoundingClientRect().height);
-        out[h] = { h, striped: /repeating-linear-gradient/.test(s.backgroundImage), period: period(s.backgroundImage) };
+        const track = resolve("var(--seg-track)");
+        const line = resolve("var(--track-line)");
+        out[h] = {
+          h,
+          striped: /repeating-linear-gradient/.test(s.backgroundImage),
+          period: period(s.backgroundImage),
+          step: Math.round(Math.abs(lum(track.rgb) - lum(line.rgb))),
+          alpha: line.a,
+          track: `rgb(${track.rgb.join(", ")})`,
+          line: `rgb(${line.rgb.join(", ")})`,
+        };
       }
       return out;
+    },
+    // The filmstrip shows whole frames, like the library cards.
+    filmThumbFit: () => {
+      const img = $(".film-thumb img");
+      return img ? getComputedStyle(img).objectFit : null;
     },
     setFilmstripHeight: (h) => {
       const r = $(".review");

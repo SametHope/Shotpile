@@ -149,10 +149,31 @@ hand on Windows. Do not mark one done on the strength of the fake backend.
        visible; it is not earning its place next to the filmstrip. Done, and
        removed outright rather than left dead: the input, `state.filter`,
        `matchesFilename()` and its CSS and tests are gone.
-     - Consistency: the overview progress bar stripes its unsorted track, but the
-       per-month stacked bars do not. Stripe the month bars the same way. Done:
-       the 6px month bars use a 4px stripe period instead of the 8px one, which
-       was flattening into grey at that size.
+      - Consistency: the overview progress bar stripes its unsorted track, but the
+        per-month stacked bars do not. Stripe the month bars the same way. Done,
+        but the first fix was wrong and shipped looking unchanged: the 6px bars
+        got a finer 4px period, which is not why they read as flat grey. The real
+        cause was `--track-line` being a *translucent* gradient stop. A gradient
+        composites over what is behind the element, not stop over stop, so
+        `rgba(255,255,255,.16)` was a wash of the page behind the bar rather than
+        a line across the track, and no amount of raising the alpha helped. It is
+        now an opaque `color-mix` out of `--seg-track`. See the `--track-line`
+        bullet in AGENTS.md, *CSS gotchas*: keep the stop opaque, and note that
+        `segbarStripes()` has to resolve the tokens rather than composite them
+        itself, or the probe passes a stripe that never paints.
+      - F11 did nothing on Windows. WebView2 consumes the key before the page
+        sees it, and Tauri's menu-accelerator route does not work either: the
+        keyboard focus is the WebView2 child window, so `TranslateAcceleratorW`
+        never matches a menu item bound to F11. Done with a `RegisterHotKey` plus
+        a `GWLP_WNDPROC` subclass in `fullscreen_key` (lib.rs), filtered on the
+        foreground window and calling the same `apply_toggle_fullscreen()` the
+        frontend uses. Verified in a real debug build: the window goes
+        1374x882 -> 1536x864 -> 1374x882 on two presses, and the log records both.
+      - Escape now leaves a review (to the pile when the scope is `staged`,
+        otherwise to the library) instead of doing nothing. Repeat events are
+        ignored and dialogs, the viewer and text inputs still take Escape first.
+      - Whole-frame filmstrip thumbnails: `.film-thumb img` is `object-fit:
+        contain` over `--letterbox`, so a tall or wide shot is no longer cropped.
 
 6. **Black flash on the first scroll after a resize.** *Root-caused and fixed in
    code.* Two rounds: `set_window_background` now sets the theme colour on the

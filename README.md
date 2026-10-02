@@ -119,7 +119,8 @@ it, the first start moves its database over and your decisions carry on.
 | `Ctrl` + `+` `-` `0` | Zoom the whole app; `Ctrl+,` opens Options (`Cmd` works for `Ctrl` on macOS) |
 | `Space` | Open the current photo full screen (and close it again) |
 | `+` `-` `0` | Zoom the card in, out, back to 100%. Arrows pan while zoomed. |
-| `Esc` | Close the viewer or a dialog |
+| `Esc` | Close the viewer or a dialog, or leave the review (back to the pile when reviewing a staged pile, otherwise to the library) |
+| `F11` | Full screen |
 | `A` / `D` | Step to the previous / next photo in the review strip |
 | Arrows, `Enter` | Move around the library and open a month |
 | `?` | Keyboard shortcuts (every review key can be rebound in Options) |
@@ -312,10 +313,12 @@ After that:
 
 - A small infographic window for the local statistics.
 
-Done in this pass: the Delete/Skip/Keep row can be collapsed (the chevron on the
-photo's bottom-right corner), giving the filmstrip that height, and the review is
-wider so the strip holds more shots at once. The filename filter is gone, and the
-per-month progress bars now carry the same stripes as the overview bar.
+Done in this pass: the Delete/Skip/Keep row can be collapsed (the chevron in the
+review header), giving the filmstrip that height, and the review is wider so the
+strip holds more shots at once. The filename filter is gone, and the per-month
+progress bars now carry the same stripes as the overview bar. `Escape` leaves a
+review, `F11` goes fullscreen on Windows, and the filmstrip thumbnails show the
+whole frame instead of cropping it.
 - Possible later: a grouped undo for a whole pass and near-duplicate
   detection (only byte-identical files are found today).
 

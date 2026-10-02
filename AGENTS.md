@@ -93,7 +93,7 @@ is always `db`, then `undo`.
 
 ```powershell
 npm run test:logic                          # 56 frontend logic tests
-npm run test:gui                            # 269 GUI assertions in headless Chrome
+npm run test:gui                            # 280 GUI assertions in headless Chrome
 cd src-tauri; cargo test                    # 78 unit + 4 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
@@ -186,6 +186,17 @@ library (`seedDemo()` in the fake), which is also what the README pictures show.
   statuses (kept, staged, deleted, skipped), all solid. 1.4.0 striped the
   deleted segment, which read as if it were the unsorted part; do not restripe a
   segment. Change `--track-line` with the theme, like the other tokens.
+- **`--track-line` must stay an opaque colour mixed out of `--seg-track`,** and
+  the gradient stops are what make the stripe. A gradient is composited over
+  what is *behind* the element, not stop over stop, so a translucent stop
+  (`rgba(255,255,255,.16)`) is a wash of the page behind the bar, not a line
+  across the track: 1.4.0 and 1.5.0 both shipped that, and at 6px it read as flat
+  grey no matter how far the alpha was raised. Use
+  `color-mix(in srgb, var(--seg-track) 78%, #fff)`. The `segbarStripes()` probe
+  resolves both tokens through a throwaway element (color-mix() is substituted at
+  computed-value time) and the suite asserts `alpha === 1`: a probe that
+  composites the two stops itself reports a healthy step for a stripe that never
+  paints, which is exactly how this one got through.
 - The native window background is set from JS (`set_window_background`), not just
   `tauri.conf.json`, because WebView2's default is white and flashes through on
   the first scroll when fullscreen. `syncWindowBackground()` in app.js follows

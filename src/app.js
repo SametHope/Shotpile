@@ -379,6 +379,16 @@ function openStaged() {
   render();
 }
 
+/**
+ * Leaves the review: back to the pile when that is where it came from, the
+ * library otherwise. Shared by the summary's Back button and Escape, so the two
+ * can never disagree about where "back" is.
+ */
+function leaveReview() {
+  if (state.scope?.scope === "staged") openStaged();
+  else backToMonths();
+}
+
 // -------------------------------------------------------------------- render
 
 function render() {
@@ -697,7 +707,7 @@ function renderReview() {
   state.pan = null;
   if (!state.card) return renderFinale();
 
-  const stage = h("div", { class: "stage", id: "stage" }, buildDeck(), stageToggle());
+  const stage = h("div", { class: "stage", id: "stage" }, buildDeck());
   const review = h("div", {
     class: `review${prefs.get().hideActions ? " no-actions" : ""}`,
     dataset: { scope: state.scope?.scope || "" },
@@ -722,13 +732,14 @@ function renderReview() {
 }
 
 /**
- * The toggle that hides the Delete/Skip/Keep row. It sits on the stage rather
- * than in the row, so it stays clickable once the row is gone.
+ * The toggle that hides the Delete/Skip/Keep row. It sits in the review head,
+ * with the rest of the chrome, so it reads as one of the header's buttons and
+ * not as something floating on the photo.
  */
 function stageToggle() {
   const hidden = prefs.get().hideActions;
-  const btn = h("button", {
-    class: "stage-toggle",
+  return h("button", {
+    class: "btn ghost icon",
     type: "button",
     id: "stage-toggle",
     title: hidden ? "Show the sorting buttons" : "Hide the sorting buttons and give the filmstrip the space",
@@ -736,7 +747,6 @@ function stageToggle() {
     "aria-pressed": String(hidden),
     onclick: () => setActionsHidden(!document.querySelector(".review")?.classList.contains("no-actions")),
   }, icon("chevron-up", { size: 16 }));
-  return btn;
 }
 
 function setActionsHidden(hidden) {
@@ -778,6 +788,7 @@ function reviewHead() {
       chip(ACTION.KEEP, "check", c.keep, "Kept in this pass"),
       chip(ACTION.DELETE, "trash", c.delete, "Marked for deletion in this pass"),
       chip(ACTION.SKIP, "skip", c.skip, "Skipped in this pass")),
+    stageToggle(),
     h("div", { class: "review-bar", "aria-hidden": "true" }, h("i", { id: "review-bar" })));
 }
 
@@ -1700,7 +1711,7 @@ function renderFinale() {
     actions.push(h("button", { class: `btn ${next ? "" : "primary lg"}`.trim(), onclick: openStaged },
       icon("trash", { size: 16 }), `Review ${countOf(staged, "file")} to delete`));
   }
-  actions.push(h("button", { class: `btn${actions.length ? "" : " primary lg"}`, id: "fin-back", onclick: reviewedPile ? openStaged : backToMonths },
+  actions.push(h("button", { class: `btn${actions.length ? "" : " primary lg"}`, id: "fin-back", onclick: leaveReview },
     reviewedPile ? "Back to the pile" : "Back to the library"));
 
   el.view.replaceChildren(h("div", { class: "page narrow" },
@@ -2565,12 +2576,14 @@ function showShortcuts() {
         row(["Space"], "Open full screen"),
         row(["+", "−"], "Zoom the card"),
         row(["0"], "Back to 100%"),
-        row(["Esc"], "Close full screen")),
+        row(["Esc"], "Close full screen"),
+        row(["Esc"], "Leave the review, back to where it started")),
       group("Window",
         row(["Ctrl", "+"], "Zoom the app in"),
         row(["Ctrl", "−"], "Zoom the app out"),
         row(["Ctrl", "0"], "Reset the app zoom"),
-        row(["Ctrl", ","], "Options")),
+        row(["Ctrl", ","], "Options"),
+        row(["F11"], "Full screen the window")),
       group("Troubleshooting",
         row(["F12"], "Developer tools"),
         row(["Ctrl", "Shift", "L"], "Show the log")),
@@ -2615,6 +2628,15 @@ document.addEventListener("keydown", (e) => {
   }
   const t = e.target;
   if (t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName || ""))) return;
+
+  // Escape leaves a review the same way the Back button does: back to the pile
+  // for the staged review, the library otherwise. Dialogs and the viewer above
+  // have already taken their own Escape, and a text field keeps its own.
+  if (e.key === "Escape" && state.view === "review") {
+    e.preventDefault();
+    if (!e.repeat) leaveReview();
+    return;
+  }
 
   // Resolve the key through the binding table once. DEFAULT_KEYS covers the
   // built-in shortcuts, so a rebind in Options replaces the default and is

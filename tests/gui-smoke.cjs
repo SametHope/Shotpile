@@ -140,6 +140,15 @@ const CTRL_SHIFT = CTRL | SHIFT;
     const small = stripes && stripes[6];
     ok("the small month bars are striped too", small && small.striped === true, JSON.stringify(stripes));
     ok("the month bars use a finer stripe than the overview bar", big && small && small.period && big.period && small.period !== big.period, JSON.stringify(stripes));
+    // The stripes have to read as stripes: a 7% line over the track vanished at
+    // 6px, which is what the user saw as "no stripes at all".
+    ok("the month bar stripes are visible, not a faint tint", small && small.step >= 20, JSON.stringify(stripes));
+    ok("the overview bar stripes are visible too", big && big.step >= 20, JSON.stringify(stripes));
+    // And the stripe must be an opaque colour. A translucent gradient stop is
+    // composited over the page behind the bar, not over the track, so it washes
+    // toward the background instead of striping: that is what hid the old line,
+    // and a step computed with the wrong compositing model would not catch it.
+    ok("the stripe is opaque, not a translucent wash", small && big && small.alpha === 1 && big.alpha === 1, JSON.stringify(stripes));
     const delColor = await probe("p.segTokenColor('seg-deleted')");
     const dnum = (delColor.match(/\d+/g) || []).map(Number);
     ok("the deleted segment is red", dnum[0] > 120 && dnum[1] < 110 && dnum[2] < 110, delColor);
@@ -193,6 +202,10 @@ const CTRL_SHIFT = CTRL | SHIFT;
     // ---- collapsing the sorting buttons gives the filmstrip the room ----
     const shown = await probe("p.actionRowState()");
     ok("the sorting row starts visible", shown && shown.hidden === false && shown.visibility === "visible" && shown.pressed === "false", JSON.stringify(shown));
+    // The toggle lives in the review head with the rest of the chrome, not
+    // floating on the photo: one set of buttons in one place.
+    ok("the toggle sits in the review head, not on the stage", shown && shown.inHead === true && shown.onStage === false, JSON.stringify(shown));
+    ok("filmstrip thumbnails show the whole frame", (await probe("p.filmThumbFit()")) === "contain", String(await probe("p.filmThumbFit()")));
     const cardShown = shown ? shown.cardH : 0;
     await js("p.clickStageToggle();");
     // The row stays visible through the collapse transition, then flips to
@@ -498,6 +511,17 @@ const CTRL_SHIFT = CTRL | SHIFT;
     ok("undo of a skip brings the card back from above", (await waitFor("p.topAnimateName() === 'fromTop'", 600)) === true, await probe("p.topAnimateName()"));
     await sleep(500);
 
+    // ---- Escape leaves the review, like the Back button does ----
+    await js("p.reset();");
+    const wasReviewing = await probe("p.view()");
+    await press("Escape");
+    await waitFor("p.view() === 'months'");
+    ok("Escape leaves the review for the library", (await probe("p.view()")) === "months" && wasReviewing === "review", `${wasReviewing} -> ${await probe("p.view()")}`);
+    ok("leaving the review decides nothing", (await probe("p.logFilter('decide:').length")) === 0, JSON.stringify(await probe("p.logFilter('decide:')")));
+    await probe("p.clickMonth('2026-09')");
+    await waitFor("p.hasCard()");
+    ok("the queue reopens where it was left", (await probe("p.progress()")) === "1 of 3", await probe("p.progress()"));
+
     // ---- holding a key down decides once ----
     await js("p.reset();");
     await press("ArrowRight", 0, { autoRepeat: true });
@@ -750,6 +774,15 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await js("[...document.querySelectorAll('.pile-actions .btn')].find((b) => /one by one/.test(b.textContent)).click();");
     await waitFor("p.hasCard()");
     ok("checking the pile stays in this folder", (await probe("p.progress()")) === "1 of 2" && (await probe("p.cardName()")) === FIRST, `${await probe("p.progress()")} ${await probe("p.cardName()")}`);
+    // Escape leaves the pile review for the pile, not for the library: it goes
+    // back where the review came from, same as the summary's Back button.
+    await press("Escape");
+    await waitFor("p.view() === 'staged'");
+    ok("Escape returns the pile review to the pile", (await probe("p.view()")) === "staged", await probe("p.view()"));
+    ok("Escape decided nothing", (await probe("p.logFilter('decide:').length")) === 0, JSON.stringify(await probe("p.logFilter('decide:')")));
+    await js("[...document.querySelectorAll('.pile-actions .btn')].find((b) => /one by one/.test(b.textContent)).click();");
+    await waitFor("p.hasCard()");
+    ok("the pile review reopens where it was left", (await probe("p.progress()")) === "1 of 2", `${await probe("p.progress()")} ${await probe("p.cardName()")}`);
     // A skip would write "skipped" and silently take the file off the pile.
     ok("checking the pile offers no skip", (await probe("p.hasSel('.act-skip')")) === false);
     await press("ArrowUp");
