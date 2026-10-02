@@ -302,15 +302,21 @@ Tracked but not previewable, shown as a placeholder you can still decide on:
 
 ## Planned
 
-Not built yet:
+Version 1.4.0 shipped several features that a real Windows run found broken
+or unfinished. `HANDOFF.md` section A is the current list: shortcut
+rebinding does not take effect, "Show in file manager" does not select the
+file, "Copy image" opens a console window and cannot be pasted into other
+apps, the resizable filmstrip does not scale its thumbnails and overlaps the
+buttons, the filename filter is unstyled, and a statistics command is not
+registered (console errors). Those come first.
 
-- A small infographic window for the local statistics (the counters
-  themselves, including swipes by direction, launches and review time, are
-  viewable and resettable in Options).
-- Check on Windows that the window background colour fully removes the white
-  flash when going fullscreen and on the first scroll.
-- Smarter duplicate detection (near-duplicates); today only byte-identical
-  files are found.
+After that:
+
+- A small infographic window for the local statistics.
+- Check on Windows that the window background colour removes the white flash
+  when going fullscreen and on the first scroll (and cover the dark theme).
+- Possible later: a grouped undo for a whole pass and near-duplicate
+  detection (only byte-identical files are found today).
 
 ## License
 
