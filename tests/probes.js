@@ -85,6 +85,68 @@
       const s = getComputedStyle(n);
       return { border: s.borderTopColor, shadow: s.boxShadow !== "none", aria: n.getAttribute("aria-current"), status: n.dataset.status };
     },
+    // The filter hides non-matching items with the `hidden` attribute, so count
+    // what is actually on screen rather than every `.film-item`.
+    filmVisibleCount: () => $$(".film-item").filter((n) => !n.hidden).length,
+    filmItemRect: (i = 0) => {
+      const r = $$(".film-item")[i]?.getBoundingClientRect();
+      return r ? { w: Math.round(r.width), h: Math.round(r.height) } : null;
+    },
+    // The review's vertical chain: the top card, the stage, the action row and
+    // the filmstrip. Used to check that enlarging the strip shrinks the deck
+    // instead of letting the action row ride up over it.
+    reviewLayout: () => {
+      const top = document.querySelector("#stage .deck .card.deck-top");
+      const stage = $("#stage");
+      const actions = $("#review-actions");
+      const strip = $("#filmstrip");
+      if (!top || !stage || !actions || !strip) return null;
+      const t = top.getBoundingClientRect();
+      const s = stage.getBoundingClientRect();
+      const a = actions.getBoundingClientRect();
+      const f = strip.getBoundingClientRect();
+      return {
+        stageH: Math.round(s.height),
+        cardH: Math.round(t.height),
+        cardBottom: Math.round(t.bottom),
+        actionsTop: Math.round(a.top),
+        stripH: Math.round(f.height),
+      };
+    },
+    setFilmstripHeight: (h) => {
+      const r = $(".review");
+      if (r) r.style.setProperty("--filmstrip-height", `${h}px`);
+      return !!r;
+    },
+    setFilter: (v) => {
+      const n = $("#filter-input");
+      if (!n) return false;
+      n.value = v;
+      n.dispatchEvent(new Event("input", { bubbles: true }));
+      return true;
+    },
+    filterStyle: () => {
+      const n = $("#filter-input");
+      if (!n) return null;
+      const s = getComputedStyle(n);
+      return {
+        borderWidth: s.borderTopWidth,
+        borderColor: s.borderTopColor,
+        radius: s.borderRadius,
+        background: s.backgroundColor,
+        color: s.color,
+        fontFamily: s.fontFamily,
+        shadow: s.boxShadow,
+        width: Math.round(n.getBoundingClientRect().width),
+        focused: document.activeElement === n,
+      };
+    },
+    focusFilter: () => {
+      const n = $("#filter-input");
+      if (!n) return false;
+      n.focus();
+      return document.activeElement === n;
+    },
     dateTooltip: () => top()?.querySelector(".fmeta span")?.getAttribute("title") || null,
     actionFlashed: (action) => $(`.act[data-action="${action}"]`)?.classList.contains("flash") || false,
     finaleText: () => text($(".finale")),

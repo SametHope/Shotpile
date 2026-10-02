@@ -60,6 +60,10 @@ const CTRL_SHIFT = CTRL | SHIFT;
 
   await client.send("Runtime.enable");
   await client.send("Page.enable");
+  // The colour assertions below are written against the light theme. Pin it so
+  // a host OS (or CI image) set to dark cannot change the result; the dark-theme
+  // section near the end emulates dark explicitly.
+  await client.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] });
   await client.send("Page.navigate", { url: `http://127.0.0.1:${PORT}/src/index.html` });
 
   const js = async (body) => {
@@ -169,6 +173,31 @@ const CTRL_SHIFT = CTRL | SHIFT;
     ok("the jump still lands", (await probe("p.cardName()")) === SECOND && (await probe("p.progress()")) === "2 of 3", `${await probe("p.cardName()")} ${await probe("p.progress()")}`);
     await js("p.clickFilm(0);");
     await waitFor(`p.cardName() === ${JSON.stringify(first)}`);
+
+    // ---- the filename filter is themed and actually filters ----
+    const fs = await probe("p.filterStyle()");
+    ok("the filename filter is styled, not a bare input", fs && fs.borderWidth !== "0px" && parseFloat(fs.radius) >= 8 && fs.background !== "rgba(0, 0, 0, 0)", JSON.stringify(fs));
+    ok("the filter sits inside the review head", await probe("p.hasSel('.review-head #filter-input')"));
+    await js("p.focusFilter();");
+    const ff = await probe("p.filterStyle()");
+    ok("focusing the filter shows the accent ring", ff && ff.focused && ff.shadow !== "none", JSON.stringify(ff));
+    await js("p.setFilter('xyzzy');");
+    await waitFor("p.filmVisibleCount() < 3");
+    ok("filtering hides non-matching filmstrip items", (await probe("p.filmVisibleCount()")) === 1, String(await probe("p.filmVisibleCount()")));
+    await js("p.setFilter('');");
+    await waitFor("p.filmVisibleCount() === 3");
+    ok("clearing the filter restores the filmstrip", (await probe("p.filmVisibleCount()")) === 3, String(await probe("p.filmVisibleCount()")));
+
+    // ---- filmstrip resizing: thumbnails scale, the deck yields the space ----
+    const shortStrip = await probe("p.reviewLayout()");
+    await js("p.setFilmstripHeight(140);");
+    const tallStrip = await probe("p.reviewLayout()");
+    const tallThumb = await probe("p.filmItemRect(0)");
+    ok("the filmstrip thumbnails scale with the strip", tallThumb && tallThumb.h > 60 && tallThumb.w > tallThumb.h * 1.3, JSON.stringify(tallThumb));
+    ok("enlarging the strip shrinks the deck instead of overlapping the actions", tallStrip && shortStrip && tallStrip.stageH < shortStrip.stageH && tallStrip.cardBottom <= tallStrip.actionsTop, `${JSON.stringify(shortStrip)} -> ${JSON.stringify(tallStrip)}`);
+    await js("p.setFilmstripHeight(52);");
+    const restoredThumb = await probe("p.filmItemRect(0)");
+    ok("the default strip keeps the original thumbnail size", restoredThumb && Math.abs(restoredThumb.h - 42) <= 1 && Math.abs(restoredThumb.w - 60) <= 2, JSON.stringify(restoredThumb));
 
     // ---- the date-source diagnostic lives in the tooltip ----
     ok("the date explains its source on hover", /from filename/i.test(await probe("p.dateTooltip()") || ""), String(await probe("p.dateTooltip()")));
