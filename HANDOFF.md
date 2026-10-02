@@ -136,16 +136,29 @@ hand on Windows. Do not mark one done on the strength of the fake backend.
      `apply_decision`).
    - Possible later: a grouped undo for a whole pass, near-duplicate
      detection (today only byte-identical files).
-6. **White flash on fullscreen and first scroll.** The start-up flash is handled
-   (hidden window, `#splash`, boot.js). *Addressed in code:* Tauri/WebView2 has a
-   `DefaultBackgroundColor` (the colour under all web content) that defaults to
-   white; `set_window_background` now sets it to the theme colour
-   (`syncWindowBackground()` in app.js follows `data-theme`), so a region that
-   repaints before its content should flash the page colour, not white. This
-   cannot be proven in headless Chromium — **needs a real Windows fullscreen
-   check** (F11, then scroll a full library). If it still flashes, the remaining
-   suspects are the resize-to-fullscreen surface repaint and compositing of the
-   scrolling `#view`.
+   - Requested on a real run, not started yet:
+     - A toggle to hide the Delete/Skip/Keep row (it sits between the card deck
+       and the filmstrip) so the filmstrip can be made much taller.
+     - More horizontal room for the filmstrip, so it holds more items — wider
+       default window, and/or a taller-than-wide default.
+     - Hide the filename filter in the review. Nobody remembers why it was made
+       visible; it is not earning its place next to the filmstrip.
+     - Consistency: the overview progress bar stripes its unsorted track, but the
+       per-month stacked bars do not. Stripe the month bars the same way.
+6. **Black flash on the first scroll after a resize.** *Root-caused and fixed in
+   code.* Two rounds: `set_window_background` now sets the theme colour on the
+   window and the webview (`syncWindowBackground()` in app.js follows
+   `data-theme`), because WebView2's `DefaultBackgroundColor` defaults to white.
+   On a real run that changed the flash from **white to black** and did not stop
+   it — which proved the flash *is* the webview base colour showing through, not
+   the page. The cause was `backdrop-filter` on `.topbar` (and `.footbar`): it
+   sat over nothing, but still forced a render surface, and WebView2 presented
+   that surface uninitialised (black) when the window was resized and the
+   library was scrolled afterwards. Both filters are gone and `#view` (the
+   scroll container) now paints `var(--bg)` instead of being transparent.
+   **Needs a real Windows re-check** (maximise or F11, then scroll the grid).
+   Still open and explicitly out of scope for now: small black flashes while
+   *moving* a non-fullscreen window.
 
 ## C. What 1.3/1.4 added (implemented; verified only by the fake-backend tests
 unless section A says otherwise)

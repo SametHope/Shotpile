@@ -93,7 +93,7 @@ is always `db`, then `undo`.
 
 ```powershell
 npm run test:logic                          # 60 frontend logic tests
-npm run test:gui                            # 262 GUI assertions in headless Chrome
+npm run test:gui                            # 265 GUI assertions in headless Chrome
 cd src-tauri; cargo test                    # 78 unit + 4 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
@@ -190,6 +190,17 @@ library (`seedDemo()` in the fake), which is also what the README pictures show.
   `tauri.conf.json`, because WebView2's default is white and flashes through on
   the first scroll when fullscreen. `syncWindowBackground()` in app.js follows
   `data-theme` through a MutationObserver; keep it in step with `--bg`.
+- **No `backdrop-filter` on the shell bars.** `.topbar` and `.footbar` used to
+  carry one for a frosted look they did not need (they are flex siblings, so
+  nothing scrolls behind them). The filter still forces a WebView2 render
+  surface, and that surface is presented uninitialised — a black band — when the
+  window is resized and the library is scrolled afterwards. The same applies to
+  `#view`: keep its `background: var(--bg)`, never leave the scrolling layer
+  transparent. The blur on `.backdrop` (a dialog) and `.card .foot` is fine,
+  because those genuinely sit over content.
+- F11 is a real action (`ACTIONS.FULLSCREEN`, default binding `F11`) handled in
+  the global keydown, and `toggle_fullscreen` flips the window and returns the
+  new state so the frontend cannot drift. WebView2 has no F11 of its own.
 
 ## Review view
 

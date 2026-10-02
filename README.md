@@ -302,19 +302,21 @@ Tracked but not previewable, shown as a placeholder you can still decide on:
 
 ## Planned
 
-Version 1.4.0 shipped several features that a real Windows run found broken
-or unfinished. `HANDOFF.md` section A is the current list: shortcut
-rebinding does not take effect, "Show in file manager" does not select the
-file, "Copy image" opens a console window and cannot be pasted into other
-apps, the resizable filmstrip does not scale its thumbnails and overlaps the
-buttons, the filename filter is unstyled, and a statistics command is not
-registered (console errors). Those come first.
+A real Windows run of 1.4.0 found several things broken. Those are fixed now —
+shortcut rebinding, "Show in file manager", "Copy image", the resizable
+filmstrip, the unstyled filename filter, the unregistered statistics command,
+and the black flash on the first scroll after a resize. `HANDOFF.md` has the
+detail, including what still needs checking by hand on Windows.
 
 After that:
 
 - A small infographic window for the local statistics.
-- Check on Windows that the window background colour removes the white flash
-  when going fullscreen and on the first scroll (and cover the dark theme).
+- A toggle to hide the Delete/Skip/Keep row, so the filmstrip can be made much
+  taller than the window currently allows.
+- More horizontal room for the filmstrip, so it holds more items at once.
+- Hide the filename filter in the review; it is not earning its place.
+- Stripe the unsorted part of the per-month progress bars, so they match the
+  overview bar.
 - Possible later: a grouped undo for a whole pass and near-duplicate
   detection (only byte-identical files are found today).
 
