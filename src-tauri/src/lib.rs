@@ -188,6 +188,7 @@ pub fn run() {
             commands::open_devtools,
             commands::reveal,
             commands::set_zoom,
+            commands::set_window_background,
             commands::app_ready,
         ])
         .run(tauri::generate_context!())

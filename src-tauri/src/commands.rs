@@ -471,6 +471,24 @@ pub fn set_zoom(app: tauri::AppHandle, factor: f64) -> Result<(), String> {
         .map_err(|e| format!("couldn't set the zoom: {e}"))
 }
 
+/// Sets the window and webview background to the current theme's colour,
+/// as `#rrggbb`. WebView2's default background is white and shows through
+/// before the page repaints — the flash on the first scroll in a fullscreen
+/// window. `tauri.conf.json` only pins the light colour at creation; the
+/// frontend calls this again when the theme changes.
+#[tauri::command]
+pub fn set_window_background(app: tauri::AppHandle, color: String) -> Result<(), String> {
+    let color = color
+        .parse::<tauri::window::Color>()
+        .map_err(|_| format!("invalid colour: {color}"))?;
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    window
+        .set_background_color(Some(color))
+        .map_err(|e| format!("couldn't set the background: {e}"))
+}
+
 /// Returns the tail of the file log, for diagnosing a release build from inside
 /// the app. `max_lines` is clamped so a caller cannot ask for the world.
 #[tauri::command]
