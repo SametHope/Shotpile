@@ -565,6 +565,11 @@ kbd {
   gap: 2px;
 }
 .segbar.lg { height: 10px; gap: 3px; }
+/* The month bars are 6px, where an 8px stripe period flattens into grey. Same
+   meaning as the big bar, finer period so it actually reads. */
+.segbar:not(.lg) {
+  background: repeating-linear-gradient(45deg, var(--seg-track) 0 2px, var(--track-line) 2px 4px);
+}
 .seg { display: block; height: 100%; min-width: 3px; transition: width .4s var(--ease-out); }
 .seg:first-child { border-radius: 999px 0 0 999px; }
 .seg-kept { background: var(--seg-kept); }
@@ -676,11 +681,18 @@ kbd {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  max-width: 1120px;
+  /* Wider than the library's measure: the filmstrip holds one thumbnail per
+     item, so every extra pixel is another screenshot in the queue. */
+  max-width: 1600px;
   margin: 0 auto;
   padding: 12px 16px 10px;
   --filmstrip-height: 52px;
+  /* Height the strip gets back when the action row is hidden. It cannot simply
+     go to the stage instead: the deck's height chain needs .stage to be the
+     flexible item, or the card collapses. */
+  --filmstrip-grow: 0px;
 }
+.review.no-actions { --filmstrip-grow: 62px; }
 
 .review-head {
   display: flex;
@@ -737,30 +749,6 @@ kbd {
   transition: opacity .12s;
 }
 .zoom-readout.on { opacity: 1; background: var(--accent-soft); color: var(--accent-text); font-weight: 650; }
-
-/* The filename filter sits in the review head. It is the only text input in the
-   app, so it borrows the `.btn` shape: themed surface, the same 9px radius, and
-   the accent ring on focus. Filtering hides non-matching filmstrip items (the
-   current card is always shown), see paintFilmstrip(). */
-.review-filter { display: inline-flex; align-items: center; gap: 4px; }
-.filter-box {
-  width: clamp(150px, 22vw, 230px);
-  padding: 6px 10px;
-  font-size: 12.5px;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--line-2);
-  border-radius: 9px;
-  transition: border-color .12s, box-shadow .12s;
-}
-.filter-box::placeholder { color: var(--muted); }
-.filter-box:hover { border-color: var(--muted); }
-.filter-box:focus,
-.filter-box:focus-visible {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
 
 .stage {
   position: relative;
@@ -1027,7 +1015,43 @@ kbd {
   justify-content: center;
   align-items: center;
   padding: 2px 0 12px;
+  /* Same collapse trick as .footbar: the row leaves the layout entirely, so
+     hidden buttons take no space and cannot take focus. */
+  max-height: 80px;
+  overflow: hidden;
+  transition: max-height .22s var(--ease), opacity .22s var(--ease), visibility 0s linear 0s;
 }
+.review.no-actions .actions {
+  max-height: 0;
+  padding-block: 0;
+  opacity: 0;
+  visibility: hidden;
+  transition: max-height .22s var(--ease), opacity .22s var(--ease), visibility 0s linear .22s;
+}
+
+/* The toggle lives on the stage, not in the row it collapses, so it stays
+   reachable once the row is gone. */
+.stage-toggle {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.stage-toggle:hover { background: var(--surface-3); color: var(--text-2); border-color: var(--line); }
+.stage-toggle .ico { display: inline-flex; transition: rotate .22s var(--ease); }
+.review.no-actions .stage-toggle .ico { rotate: 180deg; }
 
 .act {
   display: inline-flex;
@@ -1106,7 +1130,7 @@ kbd {
   gap: 6px;
   flex: 0 0 auto;
   padding: 4px 2px 2px;
-  height: var(--filmstrip-height);
+  height: calc(var(--filmstrip-height) + var(--filmstrip-grow, 0px));
   overflow: hidden;
   /* The first and last items fade into the edges instead of being cut off. */
   -webkit-mask-image: linear-gradient(to right, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
@@ -1119,7 +1143,7 @@ kbd {
   /* Scale with the strip so enlarging it shows bigger thumbnails instead of
      empty space. At the default 52px height this is the original 42x60 item;
      the aspect ratio keeps the thumbnail shape. */
-  height: calc(var(--filmstrip-height) - 10px);
+  height: calc(var(--filmstrip-height) + var(--filmstrip-grow, 0px) - 10px);
   aspect-ratio: 60 / 42;
   padding: 0;
   border: 2px solid transparent;

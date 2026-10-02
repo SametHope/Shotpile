@@ -134,6 +134,33 @@
         stripW: Math.round(sr.width),
       };
     },
+    // State of the sorting-button collapse: the row leaves the layout (so it
+    // takes no space and cannot take focus) while the strip grows to fill it.
+    actionRowState: () => {
+      const review = $(".review");
+      const actions = $("#review-actions");
+      const strip = $("#filmstrip");
+      const btn = $("#stage-toggle");
+      if (!review || !actions || !strip || !btn) return null;
+      const s = getComputedStyle(actions);
+      const item = $(".film-item");
+      return {
+        hidden: review.classList.contains("no-actions"),
+        pressed: btn.getAttribute("aria-pressed"),
+        visibility: s.visibility,
+        rowH: Math.round(actions.getBoundingClientRect().height),
+        stripH: Math.round(strip.getBoundingClientRect().height),
+        itemH: item ? Math.round(item.getBoundingClientRect().height) : 0,
+        cardH: Math.round($("#stage .deck .card:not(.leaving)")?.getBoundingClientRect().height || 0),
+        pref: window.shotpilePrefs?.get().hideActions ?? null,
+      };
+    },
+    clickStageToggle: () => {
+      const btn = $("#stage-toggle");
+      if (!btn) return false;
+      btn.click();
+      return true;
+    },
     // The rendered segment colours of the big progress bar, by status.
     segbarColors: () => {
       const out = {};
@@ -146,6 +173,23 @@
     segbarTrack: () => {
       const n = $(".segbar");
       return n ? getComputedStyle(n).backgroundImage : null;
+    },
+    // The stripe period of every bar, big and small, by the size it renders at.
+    // The month bars are 6px and need a finer period than the 10px overview.
+    segbarStripes: () => {
+      // A computed gradient reads "repeating-linear-gradient(45deg, A 0px, A 2px,
+      // B 2px, B 4px)", so the period is the last two lengths.
+      const period = (img) => {
+        const all = (img || "").match(/(\d+(?:\.\d+)?)px/g) || [];
+        return all.length >= 2 ? `${all[all.length - 2].replace("px", "")}/${all[all.length - 1].replace("px", "")}` : null;
+      };
+      const out = {};
+      for (const n of $$(".segbar")) {
+        const s = getComputedStyle(n);
+        const h = Math.round(n.getBoundingClientRect().height);
+        out[h] = { h, striped: /repeating-linear-gradient/.test(s.backgroundImage), period: period(s.backgroundImage) };
+      }
+      return out;
     },
     setFilmstripHeight: (h) => {
       const r = $(".review");
@@ -164,35 +208,6 @@
       const c = getComputedStyle(n).backgroundColor;
       n.remove();
       return c;
-    },
-    setFilter: (v) => {
-      const n = $("#filter-input");
-      if (!n) return false;
-      n.value = v;
-      n.dispatchEvent(new Event("input", { bubbles: true }));
-      return true;
-    },
-    filterStyle: () => {
-      const n = $("#filter-input");
-      if (!n) return null;
-      const s = getComputedStyle(n);
-      return {
-        borderWidth: s.borderTopWidth,
-        borderColor: s.borderTopColor,
-        radius: s.borderRadius,
-        background: s.backgroundColor,
-        color: s.color,
-        fontFamily: s.fontFamily,
-        shadow: s.boxShadow,
-        width: Math.round(n.getBoundingClientRect().width),
-        focused: document.activeElement === n,
-      };
-    },
-    focusFilter: () => {
-      const n = $("#filter-input");
-      if (!n) return false;
-      n.focus();
-      return document.activeElement === n;
     },
     dateTooltip: () => top()?.querySelector(".fmeta span")?.getAttribute("title") || null,
     actionFlashed: (action) => $(`.act[data-action="${action}"]`)?.classList.contains("flash") || false,

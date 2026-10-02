@@ -600,15 +600,3 @@ export function filmItemsPerSide(room, itemWidth, gap = 6) {
   if (!(step > 0) || room <= itemWidth) return 0;
   return Math.max(0, Math.floor((room - itemWidth) / (2 * step)));
 }
-
-/**
- * Filter a filename by substring match. Case-insensitive. Returns true if the
- * filename should be included in the filtered results.
- *
- * Empty filter string includes everything. Filters on the filename only,
- * not the full path.
- */
-export function matchesFilename(filename, filter) {
-  if (!filter || !String(filter).trim()) return true;
-  return String(filename || "").toLowerCase().includes(String(filter).toLowerCase());
-}

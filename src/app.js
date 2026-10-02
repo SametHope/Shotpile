@@ -34,7 +34,6 @@ import {
   getKeysForAction,
   gestureVisual,
   groupByYear,
-  matchesFilename,
   monthLabel,
   nextMonthWithWork,
   panLimit,
@@ -309,7 +308,6 @@ async function openQueue(scope, month = null, label = "") {
   state.cache.clear();
   state.queue = new ReviewQueue(ids);
   state.pass = new PassTally();
-  state.filter = "";
   state.scope = { scope, month, label };
   state.view = "review";
   state.reviewStartMs = Date.now();
@@ -699,8 +697,11 @@ function renderReview() {
   state.pan = null;
   if (!state.card) return renderFinale();
 
-  const stage = h("div", { class: "stage", id: "stage" }, buildDeck());
-  const review = h("div", { class: "review", dataset: { scope: state.scope?.scope || "" } },
+  const stage = h("div", { class: "stage", id: "stage" }, buildDeck(), stageToggle());
+  const review = h("div", {
+    class: `review${prefs.get().hideActions ? " no-actions" : ""}`,
+    dataset: { scope: state.scope?.scope || "" },
+  },
     reviewHead(),
     stage,
     reviewActions(),
@@ -718,6 +719,39 @@ function renderReview() {
   const enter = state.enter;
   state.enter = null;
   if (top && enter) playEnter(top, enter);
+}
+
+/**
+ * The toggle that hides the Delete/Skip/Keep row. It sits on the stage rather
+ * than in the row, so it stays clickable once the row is gone.
+ */
+function stageToggle() {
+  const hidden = prefs.get().hideActions;
+  const btn = h("button", {
+    class: "stage-toggle",
+    type: "button",
+    id: "stage-toggle",
+    title: hidden ? "Show the sorting buttons" : "Hide the sorting buttons and give the filmstrip the space",
+    "aria-label": "Toggle the sorting buttons",
+    "aria-pressed": String(hidden),
+    onclick: () => setActionsHidden(!document.querySelector(".review")?.classList.contains("no-actions")),
+  }, icon("chevron-up", { size: 16 }));
+  return btn;
+}
+
+function setActionsHidden(hidden) {
+  const review = document.querySelector(".review");
+  if (!review) return;
+  review.classList.toggle("no-actions", hidden);
+  const btn = document.getElementById("stage-toggle");
+  if (btn) {
+    btn.setAttribute("aria-pressed", String(hidden));
+    btn.title = hidden ? "Show the sorting buttons" : "Hide the sorting buttons and give the filmstrip the space";
+  }
+  prefs.set({ hideActions: hidden });
+  log.info("review", `sorting buttons ${hidden ? "hidden" : "shown"}`);
+  // The strip just changed height, so the fitted window has to be recomputed.
+  scheduleFilmstripPaint();
 }
 
 function playEnter(card, enter) {
@@ -744,35 +778,6 @@ function reviewHead() {
       chip(ACTION.KEEP, "check", c.keep, "Kept in this pass"),
       chip(ACTION.DELETE, "trash", c.delete, "Marked for deletion in this pass"),
       chip(ACTION.SKIP, "skip", c.skip, "Skipped in this pass")),
-    h("div", { class: "review-filter" },
-      h("input", {
-        id: "filter-input",
-        type: "text",
-        class: "filter-box",
-        placeholder: "Filter by filename",
-        value: state.filter,
-        onkeydown: (e) => {
-          if (e.key === "Escape") {
-            state.filter = "";
-            e.currentTarget.value = "";
-            renderReviewChrome();
-          }
-        },
-        oninput: (e) => {
-          state.filter = e.currentTarget.value;
-          renderReviewChrome();
-        },
-      }),
-      state.filter ? h("button", {
-        class: "btn sm",
-        title: "Clear filter",
-        onclick: () => {
-          state.filter = "";
-          const inp = document.getElementById("filter-input");
-          if (inp) inp.value = "";
-          renderReviewChrome();
-        },
-      }, icon("x", { size: 14 })) : null),
     h("div", { class: "review-bar", "aria-hidden": "true" }, h("i", { id: "review-bar" })));
 }
 
@@ -847,14 +852,11 @@ function paintFilmstrip() {
     if (!shot) missing.push(ids[i]);
     const status = shot?.status || "pending";
     const current = i === q.cursor;
-    const matches = matchesFilename(shot?.name, state.filter);
-    const hidden = state.filter && !matches && !current;
     items.push(h("button", {
-      class: `film-item${current ? " current" : ""}${hidden ? " hidden" : ""}`,
+      class: `film-item${current ? " current" : ""}`,
       dataset: { status, index: String(i), id: String(ids[i]) },
       title: shot ? `${shot.name}${status !== "pending" ? ` — ${STATUS_LABEL[status] || status}` : ""}` : `#${ids[i]}`,
       "aria-current": current ? "true" : null,
-      hidden: hidden ? true : undefined,
       onclick: () => jumpTo(i),
     },
       h("span", { class: "film-thumb" },

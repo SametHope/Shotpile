@@ -304,19 +304,18 @@ Tracked but not previewable, shown as a placeholder you can still decide on:
 
 A real Windows run of 1.4.0 found several things broken. Those are fixed now —
 shortcut rebinding, "Show in file manager", "Copy image", the resizable
-filmstrip, the unstyled filename filter, the unregistered statistics command,
+filmstrip, the unregistered statistics command,
 and the black flash on the first scroll after a resize. `HANDOFF.md` has the
 detail, including what still needs checking by hand on Windows.
 
 After that:
 
 - A small infographic window for the local statistics.
-- A toggle to hide the Delete/Skip/Keep row, so the filmstrip can be made much
-  taller than the window currently allows.
-- More horizontal room for the filmstrip, so it holds more items at once.
-- Hide the filename filter in the review; it is not earning its place.
-- Stripe the unsorted part of the per-month progress bars, so they match the
-  overview bar.
+
+Done in this pass: the Delete/Skip/Keep row can be collapsed (the chevron on the
+photo's bottom-right corner), giving the filmstrip that height, and the review is
+wider so the strip holds more shots at once. The filename filter is gone, and the
+per-month progress bars now carry the same stripes as the overview bar.
 - Possible later: a grouped undo for a whole pass and near-duplicate
   detection (only byte-identical files are found today).
 

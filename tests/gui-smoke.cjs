@@ -135,6 +135,11 @@ const CTRL_SHIFT = CTRL | SHIFT;
     // The progress bar: the unsorted remainder is the striped track; deleted is
     // a solid red, not a stripe.
     ok("the unsorted progress track is striped", /repeating-linear-gradient/.test(await probe("p.segbarTrack()") || ""), await probe("p.segbarTrack()"));
+    const stripes = await probe("p.segbarStripes()");
+    const big = stripes && stripes[10];
+    const small = stripes && stripes[6];
+    ok("the small month bars are striped too", small && small.striped === true, JSON.stringify(stripes));
+    ok("the month bars use a finer stripe than the overview bar", big && small && small.period && big.period && small.period !== big.period, JSON.stringify(stripes));
     const delColor = await probe("p.segTokenColor('seg-deleted')");
     const dnum = (delColor.match(/\d+/g) || []).map(Number);
     ok("the deleted segment is red", dnum[0] > 120 && dnum[1] < 110 && dnum[2] < 110, delColor);
@@ -182,19 +187,26 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await js("p.clickFilm(0);");
     await waitFor(`p.cardName() === ${JSON.stringify(first)}`);
 
-    // ---- the filename filter is themed and actually filters ----
-    const fs = await probe("p.filterStyle()");
-    ok("the filename filter is styled, not a bare input", fs && fs.borderWidth !== "0px" && parseFloat(fs.radius) >= 8 && fs.background !== "rgba(0, 0, 0, 0)", JSON.stringify(fs));
-    ok("the filter sits inside the review head", await probe("p.hasSel('.review-head #filter-input')"));
-    await js("p.focusFilter();");
-    const ff = await probe("p.filterStyle()");
-    ok("focusing the filter shows the accent ring", ff && ff.focused && ff.shadow !== "none", JSON.stringify(ff));
-    await js("p.setFilter('xyzzy');");
-    await waitFor("p.filmVisibleCount() < 3");
-    ok("filtering hides non-matching filmstrip items", (await probe("p.filmVisibleCount()")) === 1, String(await probe("p.filmVisibleCount()")));
-    await js("p.setFilter('');");
-    await waitFor("p.filmVisibleCount() === 3");
-    ok("clearing the filter restores the filmstrip", (await probe("p.filmVisibleCount()")) === 3, String(await probe("p.filmVisibleCount()")));
+    // ---- the filename filter is gone; the sorting-button toggle replaces it ----
+    ok("the filename filter is no longer offered", (await probe("p.hasSel('#filter-input')")) === false);
+
+    // ---- collapsing the sorting buttons gives the filmstrip the room ----
+    const shown = await probe("p.actionRowState()");
+    ok("the sorting row starts visible", shown && shown.hidden === false && shown.visibility === "visible" && shown.pressed === "false", JSON.stringify(shown));
+    const cardShown = shown ? shown.cardH : 0;
+    await js("p.clickStageToggle();");
+    // The row stays visible through the collapse transition, then flips to
+    // hidden, so the test waits for both halves.
+    await waitFor("p.actionRowState() && p.actionRowState().rowH === 0 && p.actionRowState().visibility === 'hidden'");
+    const hidden = await probe("p.actionRowState()");
+    ok("collapsing the row hides it from the layout and from focus", hidden && hidden.hidden === true && hidden.visibility === "hidden" && hidden.rowH === 0 && hidden.pressed === "true", JSON.stringify(hidden));
+    ok("the filmstrip takes the row's height", hidden && hidden.stripH > shown.stripH + 40 && hidden.itemH > shown.itemH + 40, `${shown && shown.stripH}->${hidden && hidden.stripH}`);
+    ok("the deck still fills the stage (the card did not collapse)", hidden && hidden.cardH >= Math.round(cardShown * 0.8), `${cardShown}->${hidden && hidden.cardH}`);
+    ok("the choice is saved", hidden && hidden.pref === true, String(hidden && hidden.pref));
+    await js("p.clickStageToggle();");
+    await waitFor("p.actionRowState() && p.actionRowState().hidden === false");
+    const reshown = await probe("p.actionRowState()");
+    ok("the row comes back and gives the space up again", reshown && reshown.hidden === false && reshown.visibility === "visible" && reshown.stripH === shown.stripH, JSON.stringify(reshown));
 
     // ---- filmstrip resizing: thumbnails scale, the deck yields the space ----
     const shortStrip = await probe("p.reviewLayout()");

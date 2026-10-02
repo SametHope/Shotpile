@@ -92,8 +92,8 @@ is always `db`, then `undo`.
 ## Verify before claiming done
 
 ```powershell
-npm run test:logic                          # 60 frontend logic tests
-npm run test:gui                            # 265 GUI assertions in headless Chrome
+npm run test:logic                          # 56 frontend logic tests
+npm run test:gui                            # 269 GUI assertions in headless Chrome
 cd src-tauri; cargo test                    # 78 unit + 4 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
@@ -299,6 +299,27 @@ library (`seedDemo()` in the fake), which is also what the README pictures show.
   double-click zooms instead); `Space` opens it too. The viewer owns the
   keyboard while open (`viewerKeydown`), and is created on demand, so it needs
   no markup in `index.html`.
+- **The sorting-button row collapses, but the freed height goes to the
+  filmstrip, never to the stage.** `.review.no-actions` sets
+  `--filmstrip-grow: 62px`, which `.filmstrip` and `.film-item` add to their
+  `--filmstrip-height`. Do not give the space to `.stage` by making the strip a
+  flexible item instead: `.deck .card` is `height: 100%`, so the deck loses its
+  definite height and the card collapses to its border. `.actions` leaves the
+  layout the same way `.footbar` does — `max-height: 0` plus
+  `visibility: hidden` — so the hidden buttons take no space and cannot take
+  focus, and the visibility change is delayed by the transition so the row is
+  still visible while it folds away. The toggle (`stageToggle()`) is a child of
+  `.stage`, not of the row, or it would hide itself; the choice is persisted as
+  the `hideActions` pref and `setActionsHidden()` re-runs
+  `scheduleFilmstripPaint()` so the fitted window is recomputed.
+- The review is capped at `1600px`, wider than the library's measure, because
+  `filmItemsPerSide()` is derived from the strip's width: every extra pixel is
+  another item in the queue. The default window is 1360 wide for the same
+  reason. The filename filter was removed entirely (UI, `matchesFilename()`,
+  `state.filter`); the sorted-month *Filter* modal is unrelated and stays.
+- Small `.segbar`s (the 6px month bars) need a finer stripe than `.segbar.lg`:
+  the 8px period flattens into grey at that size, so `.segbar:not(.lg)` uses a
+  4px period. Keep the meaning identical to the big bar.
 
 ## Environment notes
 

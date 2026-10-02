@@ -87,14 +87,14 @@ the code, not confirmed. Status as of the last session:
    one: the stage now reserves 48px for them (see the follow-ups above), and the
    overlap reproduces headlessly, so it is worth one look at 125%/150% by hand
    only to confirm the fix looks right at your scale.
-6. **The filename filter was unstyled.** *Fixed:* `.filter-box` now uses the
-   token surface/line colours, the `.btn` radius and the accent focus ring, and
-   a GUI test checks the computed style and that typing actually hides
-   non-matching filmstrip items.
-7. **Test coverage of the 1.3/1.4 features is thin.** *Partly fixed:* command
-   registration, the filename filter, filmstrip resizing and global rebinding are
-   now covered. Still thin: library keyboard navigation, batched grids, "Restore
-   all", the duplicates dialog, the progress modal and the statistics section.
+ 6. **The filename filter was unstyled.** *Superseded:* it was styled in the
+    meantime, and then removed outright on request (the review has no text input
+    any more), so the styling work went with it.
+ 7. **Test coverage of the 1.3/1.4 features is thin.** *Partly fixed:* command
+    registration, the filmstrip resizing and global rebinding are now covered.
+    Still thin: library keyboard navigation, batched grids, "Restore
+    all", the duplicates dialog, the progress modal and the statistics section.
+
    A3/A4 have unit tests only for what can be tested off-device (the explorer
    argument, the image decode), which is the honest ceiling for OS-level work.
 
@@ -136,15 +136,24 @@ hand on Windows. Do not mark one done on the strength of the fake backend.
      `apply_decision`).
    - Possible later: a grouped undo for a whole pass, near-duplicate
      detection (today only byte-identical files).
-   - Requested on a real run, not started yet:
+   - Requested on a real run, all four now implemented (see AGENTS.md, *Review
+     view*, for the mechanics):
      - A toggle to hide the Delete/Skip/Keep row (it sits between the card deck
-       and the filmstrip) so the filmstrip can be made much taller.
-     - More horizontal room for the filmstrip, so it holds more items — wider
-       default window, and/or a taller-than-wide default.
+       and the filmstrip) so the filmstrip can be made much taller. Done: a
+       chevron on the stage's bottom-right corner collapses the row and hands
+       its ~62px to the strip, saved as the `hideActions` pref.
+     - More horizontal room for the filmstrip, so it holds more items at once.
+       Done: `.review` 1120 -> 1600px, default window 1180 -> 1360 wide. The
+       fitted item count follows the width, so it just takes more shots.
      - Hide the filename filter in the review. Nobody remembers why it was made
-       visible; it is not earning its place next to the filmstrip.
+       visible; it is not earning its place next to the filmstrip. Done, and
+       removed outright rather than left dead: the input, `state.filter`,
+       `matchesFilename()` and its CSS and tests are gone.
      - Consistency: the overview progress bar stripes its unsorted track, but the
-       per-month stacked bars do not. Stripe the month bars the same way.
+       per-month stacked bars do not. Stripe the month bars the same way. Done:
+       the 6px month bars use a 4px stripe period instead of the 8px one, which
+       was flattening into grey at that size.
+
 6. **Black flash on the first scroll after a resize.** *Root-caused and fixed in
    code.* Two rounds: `set_window_background` now sets the theme colour on the
    window and the webview (`syncWindowBackground()` in app.js follows
@@ -180,7 +189,8 @@ unless section A says otherwise)
 - Local statistics: `counters` table, `get_counters` / `reset_counters` /
   `incr_counter` commands, an Options section (registration fixed, A2).
 - Library keyboard navigation (arrows, Enter), a filename filter in a review
-  (styled and tested, A6), "Restore all" in the pile (`unstage_multiple`),
+  (added and styled in 1.3, then removed again; it is gone now), "Restore all"
+  in the pile (`unstage_multiple`),
   Linux file selection through the FileManager1 DBus call with an `xdg-open`
   fallback.
 - Exact duplicate detection (`dupes.rs`: size, hash, then a byte compare;

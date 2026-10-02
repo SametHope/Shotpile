@@ -23,6 +23,7 @@ const P = {
   "folder-plus":
     '<path d="M3.5 7.2A1.7 1.7 0 0 1 5.2 5.5h3.9l2 2.1h7.7a1.7 1.7 0 0 1 1.7 1.7v8.5a1.7 1.7 0 0 1-1.7 1.7H5.2a1.7 1.7 0 0 1-1.7-1.7z"/><path d="M12 11v5M9.5 13.5h5"/>',
   "chevron-down": '<path d="M6.5 9.5l5.5 5.5 5.5-5.5"/>',
+  "chevron-up": '<path d="M6.5 14.5l5.5-5.5 5.5 5.5"/>',
   "chevron-left": '<path d="M14.5 6l-6 6 6 6"/>',
   "chevron-right": '<path d="M9.5 6l6 6-6 6"/>',
   refresh: '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4.8h-4.8"/>',
