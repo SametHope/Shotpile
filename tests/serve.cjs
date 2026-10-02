@@ -23,8 +23,22 @@ const MIME = {
   ".json": "application/json",
 };
 
+// The app has exactly one version: src-tauri/Cargo.toml, which the Rust build
+// reads through env!("CARGO_PKG_VERSION"). The fake backend has to report that
+// same string, so it is read here and handed to the page. It used to hardcode
+// "1.0.0", which put a stale number in the About panel of Options and in the
+// README pictures without anything failing.
+function appVersion() {
+  const toml = fs.readFileSync(path.join(ROOT, "src-tauri", "Cargo.toml"), "utf8");
+  const pkg = toml.slice(toml.indexOf("[package]"));
+  const m = pkg && pkg.match(/^version\s*=\s*"([^"]+)"/m);
+  if (!m) throw new Error("no version in src-tauri/Cargo.toml [package]; update tests/serve.cjs");
+  return m[1];
+}
+
 // Classic scripts, so they run before the app's module script.
 const INJECT = [
+  `<script>window.__SHOTPILE_VERSION__ = ${JSON.stringify(appVersion())};</script>`,
   '<script src="/tests/fake-backend.js"></script>',
   '<script src="/tests/probes.js"></script>',
 ].join("\n  ");

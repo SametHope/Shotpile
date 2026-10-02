@@ -933,6 +933,13 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await press(",", CTRL);
     ok("Ctrl+, opens the options", (await waitFor("document.querySelector('.options-sheet') !== null")) === true);
     ok("the options show the versions", /2\.11\.6/.test(await probe("document.querySelector('.about-list').textContent")), await probe("document.querySelector('.about-list')?.textContent"));
+    // The app's version has one source: Cargo.toml, read by the Rust
+    // build and handed to the fake backend by tests/serve.cjs. It used
+    // to be hardcoded "1.0.0" here.
+    ok("the About panel carries the app's own version", /v1\.6\.0/.test(await probe("document.querySelector('.about-list').textContent")), await probe("document.querySelector('.about-list')?.textContent"));
+    const resetRow = await probe("p.resetShortcutRow()");
+    ok("the shortcut reset is on one line in the existing style", resetRow && resetRow.sameLine && resetRow.ghost, JSON.stringify(resetRow));
+    ok("the shortcut reset sits in the last shortcut group, not a group of its own", resetRow && resetRow.lastShortcutsGroup && resetRow.noLoneButton, JSON.stringify(resetRow));
     await js("document.querySelector('.segmented [data-theme=light]').click();");
     ok("choosing Light overrides a dark system", (await probe("document.documentElement.dataset.theme")) === "light", await probe("document.documentElement.dataset.theme"));
     ok("the choice is saved", /"theme":"light"/.test(await probe("localStorage.getItem('shotpile.prefs')")), await probe("localStorage.getItem('shotpile.prefs')"));

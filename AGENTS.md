@@ -93,8 +93,8 @@ is always `db`, then `undo`.
 
 ```powershell
 npm run test:logic                          # 56 frontend logic tests
-npm run test:gui                            # 280 GUI assertions in headless Chrome
-cd src-tauri; cargo test                    # 78 unit + 4 end-to-end tests
+npm run test:gui                            # 283 GUI assertions in headless Chrome
+cd src-tauri; cargo test                    # 79 unit + 4 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
 ```

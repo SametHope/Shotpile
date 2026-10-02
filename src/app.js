@@ -2428,6 +2428,29 @@ function showOptions() {
           );
         }))));
 
+  // The shortcut reset belongs at the end of the shortcut groups, on
+  // one line like the Zoom row: a heading, a paragraph and a lone
+  // button in a group of its own put two divider lines around a
+  // single control.
+  const resetShortcutsRow = h("div", { class: "opt-row" },
+    h("div", { class: "opt-label" },
+      "Restore every shortcut to its default",
+      h("small", { text: "Any key you rebound goes back to the one it started on" })),
+    h("button", {
+      class: "btn sm ghost",
+      title: "Restore all keyboard shortcuts to their defaults",
+      onclick: () => {
+        resetKeyBindings(prefs);
+        toast("Shortcuts reset to defaults", { duration: 2000 });
+        log.info("shortcuts", "reset to defaults");
+        closeModal();
+        showOptions();
+      },
+      text: "Reset",
+    }));
+  if (shortcutsSections.length) shortcutsSections[shortcutsSections.length - 1].appendChild(resetShortcutsRow);
+  else shortcutsSections.push(h("section", { class: "opt-group" }, resetShortcutsRow));
+
   modal({
     title: "Options",
     cls: "options-sheet",
@@ -2444,16 +2467,6 @@ function showOptions() {
           h("button", { class: "btn sm icon", "aria-label": "Zoom in", title: "Zoom in (Ctrl and +)", onclick: () => zoomApp(1) }, icon("zoom-in", { size: 15 })),
           h("button", { class: "btn sm ghost", title: "Reset the zoom to 100% (Ctrl and 0)", onclick: () => zoomApp(0), text: "Reset" }))),
       ...shortcutsSections,
-      h("section", { class: "opt-group" },
-        h("h3", { text: "Reset shortcuts" }),
-        h("p", { class: "about-note", text: "Restore all keyboard shortcuts to their defaults." }),
-        h("button", { class: "btn sm ghost", onclick: () => {
-          resetKeyBindings(prefs);
-          toast("Shortcuts reset to defaults", { duration: 2000 });
-          log.info("shortcuts", "reset to defaults");
-          closeModal();
-          showOptions();
-        }, text: "Reset to defaults" })),
       h("section", { class: "opt-group" },
         h("h3", { text: "Your data" }),
         h("p", { class: "about-note", text: "Decisions live in one database file on this computer. Your screenshots are never copied or uploaded." }),

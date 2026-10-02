@@ -415,8 +415,32 @@
       if (btn) btn.click();
       return !!btn;
     },
+    // The reset is an .opt-row .btn.sm.ghost at the end of the shortcut
+    // groups: same line as its label, in the style the Zoom row uses. A
+    // section of its own put two divider lines around a lone button.
+    resetShortcutRow: () => {
+      const sections = [...document.querySelectorAll(".options-sheet .opt-group")];
+      const row = [...document.querySelectorAll(".options-sheet .opt-row")].find((r) =>
+        r.querySelector(".opt-label")?.textContent.includes("shortcut")
+      );
+      if (!row) return null;
+      const section = sections.find((s) => s.contains(row));
+      const label = row.querySelector(".opt-label");
+      const btn = [...row.querySelectorAll(".btn")].find((b) => b.classList.contains("ghost"));
+      return {
+        sameLine: !!label && label.textContent.includes("Restore every shortcut"),
+        ghost: btn?.textContent === "Reset",
+        // The last shortcut group carries it, and the group still heads
+        // with a title rather than being the reset itself.
+        lastShortcutsGroup: !!(section && section.querySelector("h3") && !/reset/i.test(section.querySelector("h3").textContent)),
+        noLoneButton: !sections.some((s) => !s.querySelector(".opt-row") && [...s.querySelectorAll(".btn")].length === 1),
+      };
+    },
     clickResetShortcuts: () => {
-      const btn = $$(".btn").find((b) => b.textContent.includes("Reset to defaults"));
+      const row = [...document.querySelectorAll(".options-sheet .opt-row")].find((r) =>
+        r.querySelector(".opt-label")?.textContent.includes("shortcut")
+      );
+      const btn = row && [...row.querySelectorAll(".btn")].find((b) => b.textContent === "Reset");
       if (btn) btn.click();
       return !!btn;
     },

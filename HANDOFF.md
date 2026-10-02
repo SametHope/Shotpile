@@ -172,8 +172,19 @@ hand on Windows. Do not mark one done on the strength of the fake backend.
       - Escape now leaves a review (to the pile when the scope is `staged`,
         otherwise to the library) instead of doing nothing. Repeat events are
         ignored and dialogs, the viewer and text inputs still take Escape first.
+      - The shortcut reset in Options sat in a group of its own — a heading,
+        a paragraph and a lone button under two divider lines. It is now an
+        `.opt-row` with a label, in the same `.btn.sm.ghost` style as the
+        Zoom row's Reset, appended to the last shortcut group.
       - Whole-frame filmstrip thumbnails: `.film-thumb img` is `object-fit:
         contain` over `--letterbox`, so a tall or wide shot is no longer cropped.
+    - The fake backend reported a hardcoded `app_version: "1.0.0"`, so the
+      About panel in Options (and the README pictures) showed a version that
+      had not matched the build for releases. `tests/serve.cjs` now reads the
+      one source — the `version` in `src-tauri/Cargo.toml`, which the Rust
+      build reads through `env!("CARGO_PKG_VERSION")` — and hands it to the
+      page as `window.__SHOTPILE_VERSION__`. The fake reports that. Bump the
+      version in `Cargo.toml` only; everything else follows.
 
 6. **Black flash on the first scroll after a resize.** *Root-caused and fixed in
    code.* Two rounds: `set_window_background` now sets the theme colour on the

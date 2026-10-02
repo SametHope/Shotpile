@@ -177,7 +177,9 @@
   const handlers = {
     app_info: () => ({
       data_dir: "C:/fake", db_path: "C:/fake/shotpile.db", log_path: "C:/fake/logs/shotpile.log",
-      schema_version: 1, app_version: "1.0.0", image_exts: ["png"], unviewable_exts: ["heic"],
+      // The real one is env!("CARGO_PKG_VERSION"); tests/serve.cjs reads that
+      // same Cargo.toml and hands it over, so nothing here is hardcoded.
+      schema_version: 1, app_version: window.__SHOTPILE_VERSION__ || "0.0.0", image_exts: ["png"], unviewable_exts: ["heic"],
       tauri_version: "2.11.6", webview_version: "131.0.2903.70", sqlite_version: "3.50.4",
       trash_name: "Recycle Bin", file_manager: "File Explorer",
     }),
