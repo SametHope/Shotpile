@@ -145,7 +145,7 @@ fn adopt_legacy_db(dir: &std::path::Path) -> std::io::Result<Option<String>> {
 mod fullscreen_key {
     use std::ffi::c_void;
     use std::ptr;
-    use std::sync::atomic::{AtomicPtr, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
     use std::sync::Mutex;
 
     use tauri::AppHandle;
@@ -165,6 +165,7 @@ mod fullscreen_key {
             wparam: usize,
             lparam: isize,
         ) -> isize;
+        fn DefWindowProcW(hwnd: *mut c_void, msg: u32, wparam: usize, lparam: isize) -> isize;
         fn RegisterHotKey(hwnd: *mut c_void, id: i32, mods: u32, vk: u32) -> i32;
         fn GetForegroundWindow() -> *mut c_void;
     }
@@ -172,6 +173,17 @@ mod fullscreen_key {
     /// tao's window proc, kept so every message we do not want still reaches it.
     static PREV_PROC: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
     static APP: Mutex<Option<AppHandle>> = Mutex::new(None);
+    /// Subclassing twice would make our own proc the "previous" one, and every
+    /// message would recurse until the stack ran out. `setup` runs once, so this
+    /// only guards a future second caller.
+    static INSTALLED: AtomicBool = AtomicBool::new(false);
+
+    /// A registered hotkey is delivered to this window whatever has the focus,
+    /// so toggling Shotpile out of sight would be a surprise. Only our own
+    /// foreground window counts.
+    fn hotkey_is_ours(foreground: *mut c_void, hwnd: *mut c_void) -> bool {
+        !hwnd.is_null() && foreground == hwnd
+    }
 
     unsafe extern "system" fn wnd_proc(
         hwnd: *mut c_void,
@@ -179,48 +191,51 @@ mod fullscreen_key {
         wparam: usize,
         lparam: isize,
     ) -> isize {
-        if msg == WM_HOTKEY && wparam == HOTKEY_ID {
-            // A system-wide hotkey arrives even when another app has the focus.
-            // Toggling Shotpile out of sight would be a surprise, so only our
-            // own foreground counts.
-            if GetForegroundWindow() == hwnd {
-                let app = APP.lock().ok().and_then(|app| app.clone());
-                if let Some(app) = app {
-                    match crate::commands::apply_toggle_fullscreen(&app) {
-                        Ok(on) => crate::log::info(
-                            "fullscreen",
-                            &format!("F11: {}", if on { "on" } else { "off" }),
-                        ),
-                        Err(e) => crate::log::warn("fullscreen", &format!("F11 failed: {e}")),
-                    }
-                    return 0;
+        if msg == WM_HOTKEY && wparam == HOTKEY_ID && hotkey_is_ours(GetForegroundWindow(), hwnd) {
+            // Clone out of the lock and drop it before calling in: the toggle
+            // runs on this thread and can re-enter the window proc.
+            let app = APP.lock().ok().and_then(|app| app.clone());
+            if let Some(app) = app {
+                match crate::commands::apply_toggle_fullscreen(&app) {
+                    Ok(on) => crate::log::info(
+                        "fullscreen",
+                        &format!("F11: {}", if on { "on" } else { "off" }),
+                    ),
+                    Err(e) => crate::log::warn("fullscreen", &format!("F11 failed: {e}")),
                 }
+                return 0;
             }
         }
-        CallWindowProcW(
-            PREV_PROC.load(Ordering::Relaxed) as *const c_void,
-            hwnd,
-            msg,
-            wparam,
-            lparam,
-        )
+        let prev = PREV_PROC.load(Ordering::Relaxed);
+        if prev.is_null() {
+            // Only reachable if the subclass was removed behind our back; call
+            // the default rather than a null window proc.
+            return DefWindowProcW(hwnd, msg, wparam, lparam);
+        }
+        CallWindowProcW(prev as *const c_void, hwnd, msg, wparam, lparam)
     }
 
     /// Installs the subclass and registers F11. Called on the UI thread while
     /// the window is still hidden.
     pub fn install(app: &AppHandle, hwnd: *mut c_void) {
+        if hwnd.is_null() {
+            crate::log::warn("fullscreen", "no window handle; F11 not bound");
+            return;
+        }
+        if INSTALLED.swap(true, Ordering::SeqCst) {
+            crate::log::warn("fullscreen", "F11 hook already installed; ignoring");
+            return;
+        }
         // The subclass goes in first, so no WM_HOTKEY can land before we can
         // see it.
-        unsafe {
-            PREV_PROC.store(
-                SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wnd_proc as *mut c_void),
-                Ordering::Relaxed,
-            );
-        }
-        if PREV_PROC.load(Ordering::Relaxed).is_null() {
+        let prev = unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wnd_proc as *mut c_void) };
+        PREV_PROC.store(prev, Ordering::Relaxed);
+        if prev.is_null() {
+            // Nothing was subclassed, so let a later attempt try again.
+            INSTALLED.store(false, Ordering::SeqCst);
             crate::log::warn(
                 "fullscreen",
-                "couldn't subclass the window; F11 stays a menu-less no-op",
+                "couldn't subclass the window; F11 will not reach the app",
             );
             return;
         }
@@ -239,6 +254,21 @@ mod fullscreen_key {
                 "F11 hotkey unavailable (already registered elsewhere)"
             },
         );
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::hotkey_is_ours;
+
+        #[test]
+        fn only_our_own_foreground_toggles_fullscreen() {
+            let ours = 0x1234 as *mut _;
+            assert!(hotkey_is_ours(ours, ours));
+            // Some other app in front, and the "no window yet" case.
+            assert!(!hotkey_is_ours(0x5678 as *mut _, ours));
+            assert!(!hotkey_is_ours(std::ptr::null_mut(), ours));
+            assert!(!hotkey_is_ours(ours, std::ptr::null_mut()));
+        }
     }
 }
 
