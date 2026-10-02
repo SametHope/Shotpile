@@ -91,17 +91,19 @@ is always `db`, then `undo`.
 ## Verify before claiming done
 
 ```powershell
-npm run test:logic                          # 45 frontend logic tests
-npm run test:gui                            # 235 GUI assertions in headless Chrome
-cd src-tauri; cargo test                    # 71 unit + 4 end-to-end tests
+npm run test:logic                          # 57 frontend logic tests
+npm run test:gui                            # 242 GUI assertions in headless Chrome
+cd src-tauri; cargo test                    # 76 unit + 4 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
 ```
 
 CI runs all of them (`.github/workflows/ci.yml`), Rust on Linux and Windows.
 
-`HANDOFF.md` lists the open items. Read it first in a
-fresh session.
+`HANDOFF.md` lists the open items, including known problems in the latest
+release that the tests did not catch. Read it first in a fresh session. A green
+run against the fake backend does not prove a Tauri command is registered or
+that an OS-level feature (clipboard, file manager, window) works.
 
 `npm run test:gui` serves the real `src/index.html` with `tests/fake-backend.js`
 and `tests/probes.js` injected, then drives `src/app.js` with real Chrome key
