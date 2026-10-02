@@ -178,13 +178,15 @@ hand on Windows. Do not mark one done on the strength of the fake backend.
         Zoom row's Reset, appended to the last shortcut group.
       - Whole-frame filmstrip thumbnails: `.film-thumb img` is `object-fit:
         contain` over `--letterbox`, so a tall or wide shot is no longer cropped.
-    - The fake backend reported a hardcoded `app_version: "1.0.0"`, so the
-      About panel in Options (and the README pictures) showed a version that
-      had not matched the build for releases. `tests/serve.cjs` now reads the
-      one source — the `version` in `src-tauri/Cargo.toml`, which the Rust
-      build reads through `env!("CARGO_PKG_VERSION")` — and hands it to the
-      page as `window.__SHOTPILE_VERSION__`. The fake reports that. Bump the
-      version in `Cargo.toml` only; everything else follows.
+    - The fake backend reported a hardcoded `app_version: "1.0.0"` where the
+      real one reads `env!("CARGO_PKG_VERSION")`. A shipped build was never
+      wrong — it showed its real version — but `npm run preview` and the GUI
+      tests ran against that stale string, so a test could have passed on a
+      wrong About panel, and the two versions could drift unnoticed.
+      `tests/serve.cjs` now reads the one source, the `version` in
+      `src-tauri/Cargo.toml`, and hands it to the page as
+      `window.__SHOTPILE_VERSION__`; the fake reports that. Bump `Cargo.toml`
+      only. No README picture shows Options, so none of them were affected.
 
 6. **Black flash on the first scroll after a resize.** *Root-caused and fixed in
    code.* Two rounds: `set_window_background` now sets the theme colour on the
