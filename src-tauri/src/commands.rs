@@ -286,54 +286,32 @@ pub fn copy_image(state: State<'_, AppState>, id: i64) -> Result<(), String> {
 }
 
 fn copy_image_file_to_clipboard(path: &Path) -> Result<(), String> {
-    if cfg!(windows) {
-        // On Windows, copy the file path to clipboard so it can be pasted as a file
-        let path_str = path.to_string_lossy();
-        let cmd = format!(
-            "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Clipboard]::SetFileDropList((New-Object System.Collections.Specialized.StringCollection).Add('{}'))",
-            path_str.replace('\'', "''")
-        );
-        std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", &cmd])
-            .spawn()
-            .map_err(|e| format!("couldn't open PowerShell: {e}"))?
-            .wait()
-            .map_err(|e| format!("PowerShell failed: {e}"))?;
-        Ok(())
-    } else if cfg!(target_os = "macos") {
-        // On macOS, use pbcopy to copy the image file
-        let image_data =
-            std::fs::read(path).map_err(|e| format!("couldn't read the image: {e}"))?;
-        let mut child = std::process::Command::new("pbcopy")
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("couldn't run pbcopy: {e}"))?;
-        if let Some(mut stdin) = child.stdin.take() {
-            use std::io::Write;
-            stdin
-                .write_all(&image_data)
-                .map_err(|e| format!("couldn't write to pbcopy: {e}"))?;
-        }
-        child.wait().map_err(|e| format!("pbcopy failed: {e}"))?;
-        Ok(())
-    } else {
-        // On Linux, use xclip if available, otherwise just copy the path
-        let image_data =
-            std::fs::read(path).map_err(|e| format!("couldn't read the image: {e}"))?;
-        let mut child = std::process::Command::new("xclip")
-            .args(["-selection", "clipboard", "-t", "image/png", "-i"])
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("couldn't run xclip: {e}"))?;
-        if let Some(mut stdin) = child.stdin.take() {
-            use std::io::Write;
-            stdin
-                .write_all(&image_data)
-                .map_err(|e| format!("couldn't write to xclip: {e}"))?;
-        }
-        child.wait().map_err(|e| format!("xclip failed: {e}"))?;
-        Ok(())
-    }
+    let (width, height, bytes) = load_rgba(path)?;
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|e| format!("couldn't reach the clipboard: {e}"))?;
+    clipboard
+        .set_image(arboard::ImageData {
+            width,
+            height,
+            bytes: bytes.into(),
+        })
+        .map_err(|e| format!("couldn't put the image on the clipboard: {e}"))?;
+    Ok(())
+}
+
+/// Decodes an image file to straight RGBA, plus its size. Kept apart from the
+/// clipboard so it can be tested without a display or a real clipboard.
+fn load_rgba(path: &Path) -> Result<(usize, usize, Vec<u8>), String> {
+    let reader = image::ImageReader::open(path)
+        .map_err(|e| format!("couldn't open the image: {e}"))?
+        .with_guessed_format()
+        .map_err(|e| format!("couldn't read the image format: {e}"))?;
+    let img = reader
+        .decode()
+        .map_err(|e| format!("couldn't decode the image: {e}"))?;
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    Ok((w as usize, h as usize, rgba.into_raw()))
 }
 
 fn open_url(url: &str) -> Result<(), String> {
@@ -360,42 +338,71 @@ fn open_in_file_manager(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Err(format!("{} no longer exists", path.display()));
     }
-    let spawned = if cfg!(windows) {
-        let mut cmd = std::process::Command::new("explorer");
-        if path.is_file() {
-            cmd.arg(format!("/select,{}", path.display()));
-        } else {
-            cmd.arg(path);
-        }
-        cmd.spawn()
-    } else if cfg!(target_os = "macos") {
-        let mut cmd = std::process::Command::new("open");
-        if path.is_file() {
-            cmd.arg("-R");
-        }
-        cmd.arg(path);
-        cmd.spawn()
+    spawn_in_file_manager(path)
+}
+
+/// Opens the OS file manager at `path`, selecting the file when it is one.
+///
+/// Windows is separate because explorer.exe parses its own command line: it
+/// wants the *path* quoted inside `/select,...`, not the whole token. Rust's
+/// `arg` wraps the whole token once it contains a space (`"/select,C:\some
+/// path\a.png"`), which explorer rejects and answers by opening Documents.
+/// `raw_arg` passes the quoting built here through untouched. Forward slashes
+/// are normalised too; explorer mishandles them in the file part.
+#[cfg(windows)]
+fn spawn_in_file_manager(path: &Path) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    let mut cmd = std::process::Command::new("explorer");
+    if path.is_file() {
+        cmd.raw_arg(explorer_select_arg(path));
     } else {
-        // On Linux, try the freedesktop FileManager1 DBus interface for file selection,
-        // falling back to xdg-open on the parent directory.
-        if path.is_file() {
-            if let Ok(uri) = path_to_file_uri(path) {
-                if try_show_items_dbus(&uri).is_ok() {
-                    return Ok(());
-                }
+        cmd.raw_arg(format!("\"{}\"", path.display()));
+    }
+    cmd.spawn()
+        .map(|_| ())
+        .map_err(|e| format!("couldn't open the file manager: {e}"))
+}
+
+/// The one argument explorer.exe needs to reveal `path` in its folder:
+/// `/select,"C:\dir\file.png"`. Pure so it is unit tested.
+#[cfg(windows)]
+fn explorer_select_arg(path: &Path) -> String {
+    format!("/select,\"{}\"", path.to_string_lossy().replace('/', "\\"))
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_in_file_manager(path: &Path) -> Result<(), String> {
+    let mut cmd = std::process::Command::new("open");
+    if path.is_file() {
+        cmd.arg("-R");
+    }
+    cmd.arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("couldn't open the file manager: {e}"))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn spawn_in_file_manager(path: &Path) -> Result<(), String> {
+    // Try the freedesktop FileManager1 DBus interface to select the file,
+    // falling back to xdg-open on the parent directory.
+    let spawned = if path.is_file() {
+        if let Ok(uri) = path_to_file_uri(path) {
+            if try_show_items_dbus(&uri).is_ok() {
+                return Ok(());
             }
-            // Fallback: open the parent directory
-            let dir = path.parent().unwrap_or(path);
-            std::process::Command::new("xdg-open").arg(dir).spawn()
-        } else {
-            std::process::Command::new("xdg-open").arg(path).spawn()
         }
+        let dir = path.parent().unwrap_or(path);
+        std::process::Command::new("xdg-open").arg(dir).spawn()
+    } else {
+        std::process::Command::new("xdg-open").arg(path).spawn()
     };
     spawned
         .map(|_| ())
         .map_err(|e| format!("couldn't open the file manager: {e}"))
 }
 
+#[cfg(all(unix, not(target_os = "macos")))]
 fn path_to_file_uri(path: &Path) -> Result<String, String> {
     // Convert an absolute path to a file:// URI.
     let abs =
@@ -404,6 +411,7 @@ fn path_to_file_uri(path: &Path) -> Result<String, String> {
     Ok(format!("file://{}", path_str.replace("\\", "/")))
 }
 
+#[cfg(all(unix, not(target_os = "macos")))]
 fn try_show_items_dbus(uri: &str) -> Result<(), String> {
     // Try to select the file using org.freedesktop.FileManager1.ShowItems via DBus.
     // This uses gdbus call, which is usually available on freedesktop systems.
@@ -1107,6 +1115,44 @@ mod tests {
             moved: db.staged_rows(None).unwrap(),
             failed: Vec::new(),
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn explorer_select_quotes_only_the_path() {
+        // The whole `/select,...` token must stay unquoted: with a space in the
+        // path, `"/select,C:\a b\c.png"` makes explorer open Documents instead.
+        let arg = explorer_select_arg(Path::new(r"C:\Users\a b\shot.png"));
+        assert_eq!(arg, r#"/select,"C:\Users\a b\shot.png""#);
+        assert!(
+            !arg.starts_with('"'),
+            "the /select, prefix must not be quoted"
+        );
+        // Forward slashes are normalised so a stored non-Windows separator
+        // still resolves.
+        assert_eq!(
+            explorer_select_arg(Path::new("C:/Users/a b/shot.png")),
+            r#"/select,"C:\Users\a b\shot.png""#
+        );
+    }
+
+    #[test]
+    fn load_rgba_decodes_an_image_to_straight_rgba() {
+        let dir = std::env::temp_dir().join(format!("shotpile-rgba-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tiny.png");
+        // 2x1: a red pixel and a translucent blue one.
+        let mut img = image::RgbaImage::new(2, 1);
+        img.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
+        img.put_pixel(1, 0, image::Rgba([0, 0, 255, 128]));
+        img.save(&path).unwrap();
+
+        let (w, h, bytes) = load_rgba(&path).unwrap();
+        assert_eq!((w, h), (2, 1));
+        assert_eq!(bytes, vec![255, 0, 0, 255, 0, 0, 255, 128]);
+
+        // Tests may clean up the temp folders they create themselves.
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
