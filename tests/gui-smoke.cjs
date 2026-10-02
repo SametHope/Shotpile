@@ -29,6 +29,7 @@ const KEYS = {
   "0": { vk: 48, code: "Digit0", text: "0" },
   ",": { vk: 188, code: "Comma", text: "," },
   i: { vk: 73, code: "KeyI" },
+  p: { vk: 80, code: "KeyP", text: "p" },
   l: { vk: 76, code: "KeyL" },
   "?": { vk: 191, code: "Slash", text: "?" },
   F12: { vk: 123, code: "F12" },
@@ -861,6 +862,23 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await press("i");
     ok("pressing a key rebinds the shortcut", (await waitFor("p.shortcutKey('keep') === 'i'")) === true, await probe("p.shortcutKey('keep')"));
     ok("rebinding is persisted", /"keyBindings":\{[^}]*"i":"keep"[^}]*\}/.test(await probe("localStorage.getItem('shotpile.prefs')")), await probe("localStorage.getItem('shotpile.prefs')"));
+    // A rebind must be honoured in every view, not only the review. Options was
+    // the reported failure: the global handler ignored the binding table.
+    ok("Help shows its default key", (await probe("p.shortcutKey('help')")) === "?", await probe("p.shortcutKey('help')"));
+    ok("Options names its default chord", (await probe("p.shortcutKey('openOptions')")) === "Ctrl+,", await probe("p.shortcutKey('openOptions')"));
+    await probe("p.clickRebindButton('openOptions')");
+    await waitFor("p.shortcutKeyBusyWaiting('openOptions')");
+    await press("p");
+    ok("a key rebinds a global action", (await waitFor("p.shortcutKey('openOptions') === 'p'")) === true, await probe("p.shortcutKey('openOptions')"));
+    // Escape is a cancel, not a key that can be captured.
+    await probe("p.clickRebindButton('openOptions')");
+    await waitFor("p.shortcutKeyBusyWaiting('openOptions')");
+    await press("Escape");
+    ok("Escape cancels a rebind capture", (await probe("p.shortcutKeyBusyWaiting('openOptions')")) === false && (await probe("p.shortcutKey('openOptions')")) === "p", `${await probe("p.shortcutKeyBusyWaiting('openOptions')")} / ${await probe("p.shortcutKey('openOptions')")}`);
+    await press("Escape");
+    await waitFor("!document.querySelector('.options-sheet')");
+    await press("p");
+    ok("the rebound key opens Options from the library", (await waitFor("document.querySelector('.options-sheet') !== null")) === true);
     await probe("p.clickResetShortcuts()");
     await waitFor("!document.querySelector('.options-sheet')");
     await press(",", CTRL);

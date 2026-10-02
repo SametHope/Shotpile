@@ -2258,7 +2258,9 @@ function showOptions() {
       h("div", { class: "shortcuts-list" },
         actions.map((action) => {
           const keys = getKeysForAction(action.id, keyBindings);
-          const displayKey = keys.length > 0 ? keys[0] : "—";
+          // Options has no entry in the binding map (Ctrl+, is a modifier chord
+          // the map cannot hold), so name the real default rather than a dash.
+          const displayKey = keys.length > 0 ? keys[0] : action.id === ACTIONS.OPEN_OPTIONS.id ? "Ctrl+," : "—";
           return h("div", { class: "shortcut-row", "data-action": action.id },
             h("div", { class: "shortcut-label", text: action.label }),
             h("button", {
@@ -2268,6 +2270,13 @@ function showOptions() {
               "aria-label": `Rebind ${action.label}, currently ${displayKey}`,
               onclick: (e) => {
                 const btn = e.currentTarget;
+                // Restore whatever is actually bound now (not the label the
+                // sheet was built with): a second rebind in the same sheet, or
+                // a conflicted attempt that changed nothing, must revert right.
+                const liveLabel = () => {
+                  const keys = getKeysForAction(action.id, getKeyBindings(prefs));
+                  return keys.length > 0 ? keys[0] : action.id === ACTIONS.OPEN_OPTIONS.id ? "Ctrl+," : "—";
+                };
                 rebindingState.actionId = action.id;
                 rebindingState.conflict = null;
                 btn.classList.add("waiting");
@@ -2275,12 +2284,23 @@ function showOptions() {
                 const handleKey = (ke) => {
                   ke.preventDefault();
                   ke.stopPropagation();
+                  // A lone modifier is not a shortcut; keep waiting for a real key.
+                  if (["Shift", "Control", "Alt", "Meta"].includes(ke.key)) return;
                   document.removeEventListener("keydown", handleKey, true);
                   if (!document.body.contains(btn)) {
                     rebindingState.actionId = null;
                     return;
                   }
-                  const newKeyBindings = { ...keyBindings };
+                  if (ke.key === "Escape") {
+                    btn.textContent = liveLabel();
+                    btn.classList.remove("waiting");
+                    btn.classList.remove("conflict");
+                    rebindingState.actionId = null;
+                    return;
+                  }
+                  // Read the map fresh: a second rebind in the same sheet must
+                  // build on the first, not on the map captured when it opened.
+                  const newKeyBindings = { ...getKeyBindings(prefs) };
                   const conflict = detectKeyConflict(ke.key, action.id, newKeyBindings);
                   if (conflict) {
                     rebindingState.conflict = conflict;
@@ -2308,7 +2328,7 @@ function showOptions() {
                 setTimeout(() => {
                   if (rebindingState.actionId === action.id && document.body.contains(btn)) {
                     document.removeEventListener("keydown", handleKey, true);
-                    btn.textContent = displayKey;
+                    btn.textContent = liveLabel();
                     btn.classList.remove("waiting");
                     rebindingState.actionId = null;
                   }
@@ -2517,11 +2537,26 @@ document.addEventListener("keydown", (e) => {
   const t = e.target;
   if (t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName || ""))) return;
 
-  if (e.key === "?") {
+  // Resolve the key through the binding table once. DEFAULT_KEYS covers the
+  // built-in shortcuts, so a rebind in Options replaces the default and is
+  // honoured in every view, not just the review.
+  const bindings = getKeyBindings(prefs);
+  const action = bindings[e.key];
+
+  // Options and Help are global: handle them before the library's own key
+  // handling, which would otherwise swallow the key.
+  if (action === ACTIONS.OPEN_OPTIONS.id) {
     e.preventDefault();
-    showShortcuts();
+    if (!e.repeat) showOptions();
     return;
   }
+  if (action === ACTIONS.HELP.id) {
+    e.preventDefault();
+    if (!e.repeat) showShortcuts();
+    return;
+  }
+  // Ctrl+, stays a permanent alias for Options: the binding table is keyed on
+  // e.key alone, so it cannot represent a modifier chord.
   const ctrl = e.ctrlKey || e.metaKey;
   if (ctrl && e.key === ",") {
     e.preventDefault();
@@ -2577,12 +2612,15 @@ document.addEventListener("keydown", (e) => {
   }
 
   if (state.view !== "review") return;
-  if (e.key === "z" || e.key === "Z" || e.key === "Backspace") {
+
+  // The whole review resolves through the binding table: undo and redo work
+  // even on the end-of-pass summary.
+  if (action === ACTIONS.UNDO.id) {
     e.preventDefault();
     if (!e.repeat) undo();
     return;
   }
-  if (e.key === "y" || e.key === "Y") {
+  if (action === ACTIONS.REDO.id) {
     e.preventDefault();
     if (!e.repeat) redo();
     return;
@@ -2591,6 +2629,29 @@ document.addEventListener("keydown", (e) => {
   if (!state.card) return;
 
   const zoom = zoomOf(topCard());
+
+  // Zoom and the viewer work whether or not the card is panned.
+  if (action === ACTIONS.ZOOM_IN.id) {
+    e.preventDefault();
+    zoom?.zoomBy(1.25);
+    return;
+  }
+  if (action === ACTIONS.ZOOM_OUT.id) {
+    e.preventDefault();
+    zoom?.zoomBy(1 / 1.25);
+    return;
+  }
+  if (action === ACTIONS.ZOOM_RESET.id) {
+    e.preventDefault();
+    zoom?.reset();
+    return;
+  }
+  if (action === ACTIONS.OPEN_VIEWER.id) {
+    e.preventDefault();
+    if (!e.repeat) openShotViewer(state.card, topCard());
+    return;
+  }
+
   // While the card is zoomed in, the arrows pan the image instead of deciding.
   if (zoom?.panning()) {
     const pan = 60;
@@ -2600,10 +2661,6 @@ document.addEventListener("keydown", (e) => {
       case "ArrowRight": z.x -= pan; break;
       case "ArrowUp": z.y += pan; break;
       case "ArrowDown": z.y -= pan; break;
-      case "0": zoom.reset(); e.preventDefault(); return;
-      case "+": case "=": zoom.zoomBy(1.25); e.preventDefault(); return;
-      case "-": case "_": zoom.zoomBy(1 / 1.25); e.preventDefault(); return;
-      case " ": e.preventDefault(); openShotViewer(state.card, topCard()); return;
       default: return;
     }
     e.preventDefault();
@@ -2611,10 +2668,6 @@ document.addEventListener("keydown", (e) => {
     zoom.apply();
     return;
   }
-
-  // Get current key bindings for action lookup
-  const keyBindings = getKeyBindings(prefs);
-  const action = keyBindings[e.key];
 
   // Filmstrip navigation (one press, one move, ignore repeat)
   if (action === ACTIONS.PREV_IMAGE.id) {
@@ -2641,25 +2694,6 @@ document.addEventListener("keydown", (e) => {
     // release would then decide the next one with the drag's direction.
     if (!e.repeat && !state.drag) decide(decisionKey, { via: "key" });
     return;
-  }
-  switch (e.key) {
-    case " ":
-      e.preventDefault();
-      openShotViewer(state.card, topCard());
-      break;
-    case "+": case "=":
-      e.preventDefault();
-      zoom?.zoomBy(1.25);
-      break;
-    case "-": case "_":
-      e.preventDefault();
-      zoom?.zoomBy(1 / 1.25);
-      break;
-    case "0":
-      zoom?.reset();
-      break;
-    default:
-      break;
   }
 });
 

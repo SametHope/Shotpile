@@ -449,6 +449,9 @@ test("DEFAULT_KEYS maps keys to action ids", () => {
   assert.equal(DEFAULT_KEYS.ArrowLeft, ACTIONS.DELETE.id);
   assert.equal(DEFAULT_KEYS.ArrowRight, ACTIONS.KEEP.id);
   assert.equal(DEFAULT_KEYS.ArrowUp, ACTIONS.SKIP.id);
+  // Help is a real action with a default, so the handler can resolve it through
+  // the binding table (and a rebind replaces it).
+  assert.equal(DEFAULT_KEYS["?"], ACTIONS.HELP.id);
 });
 
 test("getKeyBindings returns defaults when no custom bindings exist", () => {

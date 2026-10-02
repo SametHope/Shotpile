@@ -535,6 +535,7 @@ export const DEFAULT_KEYS = {
   "_": ACTIONS.ZOOM_OUT.id,
   0: ACTIONS.ZOOM_RESET.id,
   " ": ACTIONS.OPEN_VIEWER.id,
+  "?": ACTIONS.HELP.id,
 };
 
 /**
