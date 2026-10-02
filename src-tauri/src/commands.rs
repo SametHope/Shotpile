@@ -489,11 +489,21 @@ pub fn set_window_background(app: tauri::AppHandle, color: String) -> Result<(),
         .map_err(|e| format!("couldn't set the background: {e}"))
 }
 
-/// Toggle real fullscreen and report the new state. WebView2 has no built-in
-/// F11, so the key has to reach the window itself; the state lives on the window
-/// rather than the frontend so it cannot drift after an OS-level change.
+/// Toggle real fullscreen and report the new state.
+///
+/// F11 never reaches the page: WebView2 treats it as one of its own browser
+/// keys and swallows it, so the key is bound natively instead (see
+/// `install_fullscreen_key` in lib.rs). This command is the fallback for other
+/// platforms, and for a rebound key that the webview does pass on.
 #[tauri::command]
 pub fn toggle_fullscreen(app: tauri::AppHandle) -> Result<bool, String> {
+    apply_toggle_fullscreen(&app)
+}
+
+/// The fullscreen flip itself, shared by the command and the F11 accelerator.
+/// The state lives on the window rather than the frontend so it cannot drift
+/// after an OS-level change.
+pub fn apply_toggle_fullscreen(app: &tauri::AppHandle) -> Result<bool, String> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;

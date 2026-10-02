@@ -117,6 +117,149 @@ fn adopt_legacy_db(dir: &std::path::Path) -> std::io::Result<Option<String>> {
     Ok(Some(old_dir.display().to_string()))
 }
 
+/// Binds F11 to the window's own fullscreen, on Windows.
+///
+/// WebView2 keeps F11 for itself: Chromium's browser process handles it as
+/// "enter browser fullscreen", so the key never reaches the page and a JS
+/// keydown listener cannot see it. A menu accelerator does not get round that
+/// either, and it is worth saying why, because it looks like it should: Tauri
+/// runs a message hook that calls `TranslateAcceleratorW` with the accelerator
+/// tables of its stashed menus before the webview is offered the key, so an
+/// F11 menu item is caught first. But the hook translates against
+/// `MSG.hwnd`, which is the window with keyboard focus -- WebView2's
+/// `Chrome_WidgetWin_1` child, not ours -- so the `WM_COMMAND` is delivered to
+/// a window that has no menu on it, the item never fires, and the keypress is
+/// swallowed on the way. (Verified: the item's accelerator is in the table, the
+/// hook runs, F11 and Alt+F11 both go nowhere, and clicking the same item does
+/// reach `on_menu_event`.)
+///
+/// `RegisterHotKey` posts `WM_HOTKEY` to the window we name, whatever has the
+/// focus, so the main window gets it either way. A window-proc subclass
+/// (installed while the window is still hidden) turns that into the same
+/// `apply_toggle_fullscreen` the command uses, so the window state cannot
+/// drift between the two paths.
+///
+/// F11 reaches the page on macOS and Linux, so the frontend binding is the path
+/// there and this only covers Windows.
+#[cfg(target_os = "windows")]
+mod fullscreen_key {
+    use std::ffi::c_void;
+    use std::ptr;
+    use std::sync::atomic::{AtomicPtr, Ordering};
+    use std::sync::Mutex;
+
+    use tauri::AppHandle;
+
+    /// Any unused id; the window proc only acts on this one.
+    const HOTKEY_ID: usize = 0xF011;
+    const WM_HOTKEY: u32 = 0x0312;
+    const GWLP_WNDPROC: i32 = -4;
+    const VK_F11: u32 = 0x7A;
+
+    extern "system" {
+        fn SetWindowLongPtrW(hwnd: *mut c_void, index: i32, value: *mut c_void) -> *mut c_void;
+        fn CallWindowProcW(
+            prev: *const c_void,
+            hwnd: *mut c_void,
+            msg: u32,
+            wparam: usize,
+            lparam: isize,
+        ) -> isize;
+        fn RegisterHotKey(hwnd: *mut c_void, id: i32, mods: u32, vk: u32) -> i32;
+        fn GetForegroundWindow() -> *mut c_void;
+    }
+
+    /// tao's window proc, kept so every message we do not want still reaches it.
+    static PREV_PROC: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+    static APP: Mutex<Option<AppHandle>> = Mutex::new(None);
+
+    unsafe extern "system" fn wnd_proc(
+        hwnd: *mut c_void,
+        msg: u32,
+        wparam: usize,
+        lparam: isize,
+    ) -> isize {
+        if msg == WM_HOTKEY && wparam == HOTKEY_ID {
+            // A system-wide hotkey arrives even when another app has the focus.
+            // Toggling Shotpile out of sight would be a surprise, so only our
+            // own foreground counts.
+            if GetForegroundWindow() == hwnd {
+                let app = APP.lock().ok().and_then(|app| app.clone());
+                if let Some(app) = app {
+                    match crate::commands::apply_toggle_fullscreen(&app) {
+                        Ok(on) => crate::log::info(
+                            "fullscreen",
+                            &format!("F11: {}", if on { "on" } else { "off" }),
+                        ),
+                        Err(e) => crate::log::warn("fullscreen", &format!("F11 failed: {e}")),
+                    }
+                    return 0;
+                }
+            }
+        }
+        CallWindowProcW(
+            PREV_PROC.load(Ordering::Relaxed) as *const c_void,
+            hwnd,
+            msg,
+            wparam,
+            lparam,
+        )
+    }
+
+    /// Installs the subclass and registers F11. Called on the UI thread while
+    /// the window is still hidden.
+    pub fn install(app: &AppHandle, hwnd: *mut c_void) {
+        // The subclass goes in first, so no WM_HOTKEY can land before we can
+        // see it.
+        unsafe {
+            PREV_PROC.store(
+                SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wnd_proc as *mut c_void),
+                Ordering::Relaxed,
+            );
+        }
+        if PREV_PROC.load(Ordering::Relaxed).is_null() {
+            crate::log::warn(
+                "fullscreen",
+                "couldn't subclass the window; F11 stays a menu-less no-op",
+            );
+            return;
+        }
+        if let Ok(mut slot) = APP.lock() {
+            *slot = Some(app.clone());
+        }
+        // 0 is ERROR_SUCCESS; anything else means F11 is taken (usually by
+        // another app with a system-wide hotkey) and the frontend binding is
+        // the only path left.
+        let ok = unsafe { RegisterHotKey(hwnd, HOTKEY_ID as i32, 0, VK_F11) } != 0;
+        crate::log::info(
+            "fullscreen",
+            if ok {
+                "F11 hotkey registered"
+            } else {
+                "F11 hotkey unavailable (already registered elsewhere)"
+            },
+        );
+    }
+}
+
+/// Binds F11 on Windows; nothing to do elsewhere, where the key reaches the
+/// page and the frontend binding handles it.
+#[cfg(target_os = "windows")]
+fn install_fullscreen_key(app: &tauri::AppHandle) {
+    use tauri::Manager;
+
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+    fullscreen_key::install(app, hwnd.0);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn install_fullscreen_key(_app: &tauri::AppHandle) {}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -154,6 +297,7 @@ pub fn run() {
                 std::thread::sleep(std::time::Duration::from_secs(4));
                 let _ = commands::show_main_window(&handle);
             });
+            install_fullscreen_key(&app.handle().clone());
             app.manage(AppState {
                 db: Mutex::new(db),
                 undo: Mutex::new(UndoStack::new(UNDO_LIMIT)),
