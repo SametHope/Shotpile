@@ -167,6 +167,21 @@ new MutationObserver(syncWindowBackground).observe(document.documentElement, {
 });
 syncWindowBackground();
 
+/**
+ * Toggle the window's real fullscreen (F11). WebView2 has no F11 of its own, so
+ * the key has to be turned into a window call. The state is read back from the
+ * window rather than tracked here, so it cannot drift.
+ */
+async function toggleFullscreen() {
+  try {
+    const on = await api("toggle_fullscreen");
+    log.info("window", on ? "fullscreen on" : "fullscreen off");
+  } catch (err) {
+    log.warn("window", `couldn't toggle fullscreen: ${err}`);
+    toast("Could not switch fullscreen");
+  }
+}
+
 function tzArgs() {
   return { rootId: state.rootId ?? null, tz: tzOffsetMinutes() };
 }
@@ -2172,6 +2187,7 @@ function showFilters() {
     "aria-pressed": String(prefs.get().showDone === value),
     dataset: { showDone: String(value) },
     text: label,
+    title: value ? "Show months with nothing left to sort" : "Hide months with nothing left to sort",
     onclick: (e) => {
       prefs.set({ showDone: value });
       log.info("filter", `sorted months ${label.toLowerCase()}`);
@@ -2261,6 +2277,7 @@ function showOptions() {
     "aria-pressed": String(current.theme === t),
     dataset: { theme: t },
     text: THEME_LABEL[t],
+    title: t === "system" ? "Follow the operating system's light or dark setting" : t === "light" ? "Always use the light theme" : "Always use the dark theme",
     onclick: (e) => {
       prefs.set({ theme: t });
       log.info("options", `theme ${t}`);
@@ -2270,7 +2287,7 @@ function showOptions() {
   const place = (label, path, target) => h("div", { class: "opt-row" },
     h("div", { class: "opt-label" }, label, h("small", { class: "opt-path", text: path || "unknown" })),
     h("button", { class: "btn sm", title: "Copy the path", "aria-label": `Copy the ${label.toLowerCase()} path`, onclick: () => copyText(path, "the path") }, icon("copy", { size: 15 })),
-    h("button", { class: "btn sm", onclick: () => reveal(target) }, icon("folder", { size: 15 }), "Open"));
+    h("button", { class: "btn sm", title: `Open the ${target} folder`, onclick: () => reveal(target) }, icon("folder", { size: 15 }), "Open"));
   const fact = (k, v) => [h("dt", { text: k }), h("dd", { text: v || "unknown" })];
 
   // Helper to refresh statistics section
@@ -2282,7 +2299,8 @@ function showOptions() {
           h("div", { class: "stats-group" },
             h("div", { class: "stats-header" },
               h("h4", { text: group.label }),
-              h("button", { class: "btn sm ghost", onclick: () => {
+        h("button", { class: "btn sm ghost", title: "Put every keyboard shortcut back the way it was", onclick: () => {
+
                 api("reset_counters", { group: group.name }).then(() => {
                   log.info("stats", `Reset ${group.name}`);
                   refreshStats();
@@ -2325,6 +2343,7 @@ function showOptions() {
               class: "btn sm shortcut-key",
               type: "button",
               text: displayKey,
+              title: `Change the key for ${action.label} (currently ${displayKey})`,
               "aria-label": `Rebind ${action.label}, currently ${displayKey}`,
               onclick: (e) => {
                 const btn = e.currentTarget;
@@ -2407,10 +2426,10 @@ function showOptions() {
           h("div", { class: "segmented", role: "group", "aria-label": "Theme" }, themeButtons)),
         h("div", { class: "opt-row" },
           h("div", { class: "opt-label" }, "Zoom", h("small", { text: "Ctrl and + or −, or Ctrl and the mouse wheel" })),
-          h("button", { class: "btn sm icon", "aria-label": "Zoom out", onclick: () => zoomApp(-1) }, icon("zoom-out", { size: 15 })),
+          h("button", { class: "btn sm icon", "aria-label": "Zoom out", title: "Zoom out (Ctrl and −)", onclick: () => zoomApp(-1) }, icon("zoom-out", { size: 15 })),
           h("span", { class: "zoom-value", text: `${Math.round(current.zoom * 100)}%` }),
-          h("button", { class: "btn sm icon", "aria-label": "Zoom in", onclick: () => zoomApp(1) }, icon("zoom-in", { size: 15 })),
-          h("button", { class: "btn sm ghost", onclick: () => zoomApp(0), text: "Reset" }))),
+          h("button", { class: "btn sm icon", "aria-label": "Zoom in", title: "Zoom in (Ctrl and +)", onclick: () => zoomApp(1) }, icon("zoom-in", { size: 15 })),
+          h("button", { class: "btn sm ghost", title: "Reset the zoom to 100% (Ctrl and 0)", onclick: () => zoomApp(0), text: "Reset" }))),
       ...shortcutsSections,
       h("section", { class: "opt-group" },
         h("h3", { text: "Reset shortcuts" }),
@@ -2428,8 +2447,8 @@ function showOptions() {
         place("Data folder", info.data_dir, "data"),
         place("Logs", info.log_path, "logs"),
         h("div", { class: "opt-row" },
-          h("button", { class: "btn sm", onclick: () => { closeModal(); showLog(); } }, icon("log", { size: 15 }), "View the log"),
-          h("button", { class: "btn sm", onclick: () => { closeModal(); showShortcuts(); } }, icon("keyboard", { size: 15 }), "Keyboard shortcuts"))),
+          h("button", { class: "btn sm", title: "Read the app's own log file, to diagnose a problem", onclick: () => { closeModal(); showLog(); } }, icon("log", { size: 15 }), "View the log"),
+          h("button", { class: "btn sm", title: "Show every keyboard shortcut and its key", onclick: () => { closeModal(); showShortcuts(); } }, icon("keyboard", { size: 15 }), "Keyboard shortcuts"))),
       h("section", { class: "opt-group" },
         h("h3", { text: "Statistics" }),
         h("p", { class: "about-note", text: "Local statistics about your use of Shotpile. Nothing is sent anywhere." }),
@@ -2445,7 +2464,7 @@ function showOptions() {
         h("p", { class: "about-note", text: "Made by SametHope. Free for any noncommercial use under the PolyForm Noncommercial License 1.0.0; selling it or using it to make money is not allowed." }),
         h("p", { class: "about-note", text: "Built on Tauri and Microsoft Edge WebView2, with rusqlite, SQLite (public domain), trash, walkdir, chrono, regex, serde and rfd, all under MIT, Apache-2.0 or similar permissive licences. Every release lists them in full in THIRD-PARTY-LICENSES.html." }),
         h("div", { class: "opt-row" },
-          h("button", { class: "btn sm", onclick: () => reveal("repo") }, icon("expand", { size: 15 }), "Open on GitHub"))),
+          h("button", { class: "btn sm", title: "Open the Shotpile page on GitHub", onclick: () => reveal("repo") }, icon("expand", { size: 15 }), "Open on GitHub"))),
     ],
     actions: [{ label: "Close" }],
   });
@@ -2611,6 +2630,11 @@ document.addEventListener("keydown", (e) => {
   if (action === ACTIONS.HELP.id) {
     e.preventDefault();
     if (!e.repeat) showShortcuts();
+    return;
+  }
+  if (action === ACTIONS.FULLSCREEN.id) {
+    e.preventDefault();
+    if (!e.repeat) toggleFullscreen();
     return;
   }
   // Ctrl+, stays a permanent alias for Options: the binding table is keyed on

@@ -489,6 +489,23 @@ pub fn set_window_background(app: tauri::AppHandle, color: String) -> Result<(),
         .map_err(|e| format!("couldn't set the background: {e}"))
 }
 
+/// Toggle real fullscreen and report the new state. WebView2 has no built-in
+/// F11, so the key has to reach the window itself; the state lives on the window
+/// rather than the frontend so it cannot drift after an OS-level change.
+#[tauri::command]
+pub fn toggle_fullscreen(app: tauri::AppHandle) -> Result<bool, String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    let next = !window
+        .is_fullscreen()
+        .map_err(|e| format!("couldn't read the fullscreen state: {e}"))?;
+    window
+        .set_fullscreen(next)
+        .map_err(|e| format!("couldn't set fullscreen: {e}"))?;
+    Ok(next)
+}
+
 /// Returns the tail of the file log, for diagnosing a release build from inside
 /// the app. `max_lines` is clamped so a caller cannot ask for the world.
 #[tauri::command]

@@ -24,6 +24,7 @@
   const redoStack = [];
   const UNDO_LIMIT = 200;
   const counters = {}; // Local statistics counters
+  const WINDOW = { fullscreen: false, background: "" }; // window state the frontend sets
 
   // Fault injection, for the edge cases the logic tests cannot reach.
   const faults = { decide: false, summary: false, undoOutOfScope: false, scanDelayMs: 0, itemsDelayMs: 0, commitDelayMs: 0 };
@@ -338,7 +339,10 @@
     copy_image: (a) => { LOG.push("copy-image:" + a.id); return null; },
     // The real command zooms the WebView; CSS zoom is the closest stand-in.
     set_zoom: (a) => { document.documentElement.style.zoom = String(a.factor); LOG.push("zoom:" + a.factor); return null; },
-    app_ready: () => { LOG.push("ready"); return null; },
+          app_ready: () => { LOG.push("ready"); return null; },
+          toggle_fullscreen: () => { WINDOW.fullscreen = !WINDOW.fullscreen; LOG.push("fullscreen:" + WINDOW.fullscreen); return WINDOW.fullscreen; },
+          set_window_background: (a) => { WINDOW.background = String(a.color || ""); return null; },
+
     unstage: (a) => {
       const s = shots.get(a.id);
       if (!s) throw new Error("no such screenshot: " + a.id);
@@ -477,6 +481,7 @@
   window.__UI_LOG = UI_LOG;
   window.__shots = shots;
   window.__faults = faults;
+  window.__windowState = () => WINDOW;
   window.addEventListener("error", (e) => FAILS.push("window error: " + e.message));
   window.addEventListener("unhandledrejection", (e) => FAILS.push("unhandled rejection: " + ((e.reason && e.reason.message) || e.reason)));
 

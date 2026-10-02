@@ -509,9 +509,11 @@ export const ACTIONS = {
   ZOOM_IN: { id: "zoomIn", label: "Zoom in", group: "Looking closer" },
   ZOOM_OUT: { id: "zoomOut", label: "Zoom out", group: "Looking closer" },
   ZOOM_RESET: { id: "zoomReset", label: "Reset zoom to 100%", group: "Looking closer" },
-  OPEN_VIEWER: { id: "openViewer", label: "Open full screen", group: "Looking closer" },
-  OPEN_OPTIONS: { id: "openOptions", label: "Options", group: "Window" },
-  HELP: { id: "help", label: "Keyboard shortcuts", group: "Window" },
+        OPEN_VIEWER: { id: "openViewer", label: "Open full screen", group: "Looking closer" },
+        OPEN_OPTIONS: { id: "openOptions", label: "Options", group: "Window" },
+        FULLSCREEN: { id: "fullscreen", label: "Toggle fullscreen window", group: "Window" },
+        HELP: { id: "help", label: "Keyboard shortcuts", group: "Window" },
+
 };
 
 /** Default key bindings: key -> action id. */
@@ -534,8 +536,10 @@ export const DEFAULT_KEYS = {
   "-": ACTIONS.ZOOM_OUT.id,
   "_": ACTIONS.ZOOM_OUT.id,
   0: ACTIONS.ZOOM_RESET.id,
-  " ": ACTIONS.OPEN_VIEWER.id,
-  "?": ACTIONS.HELP.id,
+        " ": ACTIONS.OPEN_VIEWER.id,
+        F11: ACTIONS.FULLSCREEN.id,
+        "?": ACTIONS.HELP.id,
+
 };
 
 /**

@@ -32,6 +32,7 @@ const KEYS = {
   p: { vk: 80, code: "KeyP", text: "p" },
   l: { vk: 76, code: "KeyL" },
   "?": { vk: 191, code: "Slash", text: "?" },
+  F11: { vk: 112, code: "F11" },
   F12: { vk: 123, code: "F12" },
 };
 // CDP modifier bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8.
@@ -641,6 +642,14 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await press("Escape");
     ok("Escape closes any dialog", (await waitFor("p.modalHidden()")) === true);
 
+    // ---- F11 toggles the real window ----
+    // WebView2 has no F11 of its own, so this is our window command; the fake
+    // flips its own flag the same way the window would.
+    await press("F11");
+    ok("F11 puts the window into fullscreen", (await waitFor("p.windowState().fullscreen === true")) === true, JSON.stringify(await probe("p.windowState()")));
+    await press("F11");
+    ok("F11 leaves fullscreen again", (await waitFor("p.windowState().fullscreen === false")) === true, JSON.stringify(await probe("p.windowState()")));
+
     // ---- actually commit ----
     await js("p.clickPileCommit();");
     await waitFor("!p.modalHidden()");
@@ -869,6 +878,10 @@ const CTRL_SHIFT = CTRL | SHIFT;
     const bg = await probe("p.bodyBg()");
     const lum = (bg.match(/\d+/g) || []).slice(0, 3).reduce((n, v) => n + Number(v), 0);
     ok("the app follows a dark system theme", lum < 120, bg);
+    // The window background is what WebView2 shows before the page paints, so it
+    // has to follow the theme too (this is what the fullscreen flash showed).
+    await waitFor("p.windowState().background.toLowerCase() === '#0c1017'");
+    ok("the native window background follows the dark theme", (await probe("p.windowState().background")).toLowerCase() === "#0c1017", JSON.stringify(await probe("p.windowState()")));
     ok("the splash is gone once the app is up", (await probe("getComputedStyle(document.getElementById('splash')).visibility")) === "hidden", await probe("getComputedStyle(document.getElementById('splash')).visibility"));
 
     // ---- options: a theme choice beats the system setting ----

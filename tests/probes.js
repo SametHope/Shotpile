@@ -441,7 +441,9 @@
     hasSel: (sel) => !!$(sel),
     attr: (sel, name) => $(sel)?.getAttribute(name) ?? null,
     dropCache: () => window.__shotpileTest.dropCache(),
-    viewScroll: () => document.getElementById("view").scrollTop,
-    setViewScroll: (y) => { document.getElementById("view").scrollTop = y; },
+  viewScroll: () => document.getElementById("view").scrollTop,
+  setViewScroll: (y) => { document.getElementById("view").scrollTop = y; },
+  windowState: () => ({ ...window.__windowState() }),
+
   };
 })();

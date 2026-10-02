@@ -189,6 +189,7 @@ pub fn run() {
             commands::reveal,
             commands::set_zoom,
             commands::set_window_background,
+            commands::toggle_fullscreen,
             commands::app_ready,
         ])
         .run(tauri::generate_context!())

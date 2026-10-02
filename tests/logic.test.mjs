@@ -450,10 +450,13 @@ test("DEFAULT_KEYS maps keys to action ids", () => {
   assert.equal(DEFAULT_KEYS.ArrowLeft, ACTIONS.DELETE.id);
   assert.equal(DEFAULT_KEYS.ArrowRight, ACTIONS.KEEP.id);
   assert.equal(DEFAULT_KEYS.ArrowUp, ACTIONS.SKIP.id);
-  // Help is a real action with a default, so the handler can resolve it through
-  // the binding table (and a rebind replaces it).
-  assert.equal(DEFAULT_KEYS["?"], ACTIONS.HELP.id);
-});
+        // Help is a real action with a default, so the handler can resolve it through
+        // the binding table (and a rebind replaces it).
+        assert.equal(DEFAULT_KEYS["?"], ACTIONS.HELP.id);
+        // F11 is the window's fullscreen toggle; WebView2 does not provide one.
+        assert.equal(DEFAULT_KEYS.F11, ACTIONS.FULLSCREEN.id);
+      });
+
 
 test("getKeyBindings returns defaults when no custom bindings exist", () => {
   const mockPrefs = {
