@@ -92,8 +92,8 @@ is always `db`, then `undo`.
 ## Verify before claiming done
 
 ```powershell
-npm run test:logic                          # 62 frontend logic tests
-npm run test:gui                            # 296 GUI assertions in headless Chrome
+npm run test:logic                          # 67 frontend logic tests
+npm run test:gui                            # 328 GUI assertions in headless Chrome
 cd src-tauri; cargo test                    # 72 unit + 4 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
@@ -359,4 +359,10 @@ library (`seedDemo()` in the fake), which is also what the README pictures show.
 - Avoid generic dashboard furniture (rows of identical stat tiles, an icon in
   a tinted circle on every element): say the number in a sentence, or show it
   where it is used, as the library's overview line and stacked bar do.
+- **One source for shortcuts.** `ACTIONS` + `DEFAULT_KEYS` (rebindable) and
+  `FIXED_SHORTCUTS` (not) in logic.js feed Options, the help sheet and every
+  key hint; never write a key name into UI text by hand, use `hintKey()`.
+- **Tooltips are `title` attributes**, rendered by `initTooltips()` (dom.js).
+  Do not style or build a second tooltip; icon-only buttons need a title and
+  an aria-label.
 - Keep diffs minimal. No drive-by refactors.

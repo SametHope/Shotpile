@@ -32,6 +32,8 @@ import {
   formatDateTime,
   getKeyBindings,
   getKeysForAction,
+  keyLabel,
+  shortcutHelp,
   gestureVisual,
   groupByYear,
   sortMonths,
@@ -56,6 +58,7 @@ import {
   icon,
   initModal,
   kbd,
+  initTooltips,
   menuOpen,
   modal,
   modalOpen,
@@ -466,21 +469,27 @@ function renderSetup() {
     h("h1", { text: "Sort a pile of screenshots in minutes" }),
     h("p", { class: "onboard-lead", text: "Point it at the folder your screenshots pile up in. They get grouped by month and dealt out one at a time." }),
     gestureLegend(),
-    h("button", { class: "btn primary lg", onclick: addFolder }, icon("folder-plus"), "Choose a folder"),
+    h("button", { class: "btn primary lg", title: "Open a folder picker to find your screenshots", onclick: addFolder }, icon("folder-plus"), "Choose a folder"),
     h("p", { class: "onboard-fine", text: `Everything stays on this computer. A swipe only marks a file; nothing leaves the disk until you confirm, and then it goes to the ${binName()}.` })
   );
   el.view.replaceChildren(h("div", { class: "page narrow" }, hero));
+}
+
+/** The key an action currently has, as the UI names it ("" when unbound). */
+function hintKey(actionId) {
+  const [first] = getKeysForAction(actionId, getKeyBindings(prefs));
+  return first === undefined ? "" : keyLabel(first);
 }
 
 function gestureLegend() {
   const item = (cls, ico, stamp, caption, key) => h("div", { class: `legend-item ${cls}`, role: "listitem" },
     h("div", { class: "legend-card", "aria-hidden": "true" },
       h("span", { class: "mini-stamp" }, icon(ico, { size: 15 }), stamp)),
-    h("div", { class: "legend-caption" }, kbd(key), h("span", { text: caption })));
+    h("div", { class: "legend-caption" }, hintKey(key) ? kbd(hintKey(key)) : null, h("span", { text: caption })));
   return h("div", { class: "gesture-legend", role: "list", "aria-label": "How sorting works" },
-    item("is-delete", "trash", "Delete", "Swipe left", "←"),
-    item("is-skip", "skip", "Skip", "Swipe up", "↑"),
-    item("is-keep", "check", "Keep", "Swipe right", "→"));
+    item("is-delete", "trash", "Delete", "Swipe left", ACTIONS.DELETE.id),
+    item("is-skip", "skip", "Skip", "Swipe up", ACTIONS.SKIP.id),
+    item("is-keep", "check", "Keep", "Swipe right", ACTIONS.KEEP.id));
 }
 
 function renderScanning() {
@@ -564,8 +573,8 @@ function renderLibrary() {
       h("h2", { text: "No screenshots in this folder" }),
       h("p", { text: "Image files in it and in its subfolders show up here after a scan." }),
       h("div", { class: "row center" },
-        h("button", { class: "btn primary", onclick: rescan }, icon("refresh", { size: 16 }), "Scan again"),
-        h("button", { class: "btn", onclick: addFolder }, icon("folder-plus", { size: 16 }), "Choose another folder")))));
+        h("button", { class: "btn primary", title: "Look for new screenshots in this folder", onclick: rescan }, icon("refresh", { size: 16 }), "Scan again"),
+        h("button", { class: "btn", title: "Pick a different folder", onclick: addFolder }, icon("folder-plus", { size: 16 }), "Choose another folder")))));
     return;
   }
 
@@ -587,7 +596,7 @@ function renderLibrary() {
         h("button", { class: "btn", id: "btn-filter", title: "Choose which months show and how they are ordered", onclick: showFilters },
           icon("filter", { size: 16 }), "View"),
         pending
-          ? h("button", { class: "btn primary lg", id: "btn-sort-all", onclick: () => openQueue("unreviewed", null, "All unsorted") },
+          ? h("button", { class: "btn primary lg", id: "btn-sort-all", title: "Review all unsorted screenshots", onclick: () => openQueue("unreviewed", null, "All unsorted") },
               icon("play", { size: 16 }), decided ? "Continue sorting" : "Start sorting", h("span", { class: "btn-count", text: formatCount(pending) }))
           : null,
         pending > 1
@@ -660,6 +669,7 @@ function monthRow(m) {
     class: `month${p.done ? " is-done" : ""}`,
     dataset: { month: m.month },
     tabindex: 0,
+    title: `${parts.join(", ") || "No decisions yet"}`,
     "aria-label": `${label}: ${countOf(p.total, "screenshot")}, ${p.done ? "sorted" : `${formatCount(p.remaining)} left`}`,
     onclick: () => (p.done ? openQueue("kept", m.month, `Kept from ${label}`) : openQueue("month", m.month, label)),
   },
@@ -849,13 +859,13 @@ function reviewActions() {
     dataset: { action },
     title,
     onclick: () => decide(action, { via: "button" }),
-  }, icon(ico, { size: 18 }), h("span", { class: "act-label", text: label }), kbd(key));
+  }, icon(ico, { size: 18 }), h("span", { class: "act-label", text: label }), hintKey(key) ? kbd(hintKey(key)) : null);
   return h("div", { class: "actions", id: "review-actions" },
-    btn(ACTION.DELETE, "act-delete", "trash", "Delete", "←", "Mark for deletion (←)"),
-    state.scope?.scope === "staged" ? null : btn(ACTION.SKIP, "act-skip", "skip", "Skip", "↑", "Skip for now; it comes back once at the end (↑)"),
-    btn(ACTION.KEEP, "act-keep", "check", "Keep", "→", "Keep (→)"),
-    h("button", { class: "act act-undo", title: "Undo the last decision (Z)", "aria-label": "Undo", onclick: () => undo() },
-      icon("undo", { size: 18 }), kbd("Z")));
+    btn(ACTION.DELETE, "act-delete", "trash", "Delete", ACTIONS.DELETE.id, `Mark for deletion (${hintKey(ACTIONS.DELETE.id)})`),
+    state.scope?.scope === "staged" ? null : btn(ACTION.SKIP, "act-skip", "skip", "Skip", ACTIONS.SKIP.id, `Skip for now; it comes back once at the end (${hintKey(ACTIONS.SKIP.id)})`),
+    btn(ACTION.KEEP, "act-keep", "check", "Keep", ACTIONS.KEEP.id, `Keep (${hintKey(ACTIONS.KEEP.id)})`),
+    h("button", { class: "act act-undo", title: `Undo the last decision (${hintKey(ACTIONS.UNDO.id)})`, "aria-label": "Undo", onclick: () => undo() },
+      icon("undo", { size: 18 }), hintKey(ACTIONS.UNDO.id) ? kbd(hintKey(ACTIONS.UNDO.id)) : null));
 }
 
 /**
@@ -918,6 +928,7 @@ function paintFilmstrip() {
       class: `film-item${current ? " current" : ""}`,
       dataset: { status, index: String(i), id: String(ids[i]) },
       title: shot ? `${shot.name}${status !== "pending" ? ` — ${STATUS_LABEL[status] || status}` : ""}` : `#${ids[i]}`,
+      "aria-label": shot ? `${shot.name}${status !== "pending" ? ` — ${STATUS_LABEL[status] || status}` : ""}` : `Item ${i}`,
       "aria-current": current ? "true" : null,
       onclick: () => jumpTo(i),
     },
@@ -1755,14 +1766,14 @@ function renderFinale() {
       : "That's the end of this pass";
   const actions = [];
   if (next) {
-    actions.push(h("button", { class: "btn primary lg", id: "fin-next", onclick: () => openQueue("month", next, monthLabel(next)) },
+    actions.push(h("button", { class: "btn primary lg", id: "fin-next", title: `Review the ${monthLabel(next)} screenshots`, onclick: () => openQueue("month", next, monthLabel(next)) },
       `Next: ${monthLabel(next)}`, icon("chevron-right", { size: 16 })));
   }
   if (staged && !reviewedPile) {
-    actions.push(h("button", { class: `btn ${next ? "" : "primary lg"}`.trim(), onclick: openStaged },
+    actions.push(h("button", { class: `btn ${next ? "" : "primary lg"}`.trim(), title: `Review the ${countOf(staged, "file")} marked for deletion`, onclick: openStaged },
       icon("trash", { size: 16 }), `Review ${countOf(staged, "file")} to delete`));
   }
-  actions.push(h("button", { class: `btn${actions.length ? "" : " primary lg"}`, id: "fin-back", onclick: leaveReview },
+  actions.push(h("button", { class: `btn${actions.length ? "" : " primary lg"}`, id: "fin-back", title: reviewedPile ? "Return to the deletion pile" : "Return to the library", onclick: leaveReview },
     reviewedPile ? "Back to the pile" : "Back to the library"));
 
   el.view.replaceChildren(h("div", { class: "page narrow" },
@@ -1805,7 +1816,7 @@ async function renderStaged() {
       h("div", { class: "empty-glyph ok" }, icon("check", { size: 26 })),
       h("h2", { text: "Nothing marked for deletion" }),
       h("p", { text: `Swipe a card left, or press ←, to put it here. Files stay on disk until you move them to the ${binName()} from this page.` }),
-      h("button", { class: "btn primary", onclick: backToMonths }, "Back to the library"))));
+      h("button", { class: "btn primary", title: "Return to the library", onclick: backToMonths }, "Back to the library"))));
     return;
   }
 
@@ -1820,7 +1831,7 @@ async function renderStaged() {
           icon("play", { size: 16 }), "Check one by one"),
         h("button", { class: "btn", title: "Take all of them off the pile at once", onclick: () => restoreAll(rows) },
           icon("undo", { size: 16 }), "Restore all"),
-        h("button", { class: "btn danger solid", id: "btn-pile-commit", onclick: commit },
+        h("button", { class: "btn danger solid", id: "btn-pile-commit", title: `Move the marked screenshots to the ${binName()}`, onclick: commit },
           icon("trash", { size: 16 }), `Move to ${binName()}`))),
     h("div", { class: "pile-grid", role: "list" }));
   el.view.replaceChildren(page);
@@ -1857,7 +1868,7 @@ function thumb(shot) {
 
 function pileTile(shot) {
   return h("figure", { class: "tile", role: "listitem", dataset: { id: String(shot.id) } },
-    h("button", { class: "tile-photo", title: `Open ${shot.name}`, onclick: () => openShotViewer(shot) }, thumb(shot)),
+    h("button", { class: "tile-photo", title: `Open ${shot.name}`, "aria-label": `Open ${shot.name}`, onclick: () => openShotViewer(shot) }, thumb(shot)),
     h("figcaption", {},
       h("span", { class: "tile-name", text: shot.name, title: shot.name }),
       h("span", { class: "tile-meta", text: `${formatBytes(shot.size)} · ${formatDateTime(shot.taken_ms).slice(0, 10)}` })),
@@ -2211,7 +2222,6 @@ function zoomApp(step) {
   applyZoom(saved.zoom);
   log.info("zoom", `${Math.round(saved.zoom * 100)}%`);
   document.querySelectorAll(".zoom-value").forEach((n) => { n.textContent = `${Math.round(saved.zoom * 100)}%`; });
-  if (step || now !== 1) toast(`Zoom ${Math.round(saved.zoom * 100)}%`, { ms: 1200 });
 }
 
 /** Opens a known place (the data or logs folder, or a screenshot) in the file manager. */
@@ -2363,102 +2373,84 @@ function showOptions() {
 
   // Load statistics
   refreshStats();
-  // Build shortcuts section by grouping actions
-  const keyBindings = getKeyBindings(prefs);
-  const shortcutsGroups = {};
-  for (const action of Object.values(ACTIONS)) {
-    if (!shortcutsGroups[action.group]) shortcutsGroups[action.group] = [];
-    shortcutsGroups[action.group].push(action);
+  // The shortcut rows live in one host that repaints itself, so a rebind or a
+  // reset updates the sheet in place instead of closing and reopening it.
+  const shortcutsHost = h("div", { class: "shortcuts-host" });
+  let rebinding = null;
+  // Options has no entry in the binding map (Ctrl+, is a modifier chord the map
+  // cannot hold), so an unbound Options row names its real default.
+  const liveLabel = (action) => {
+    const [first] = getKeysForAction(action.id, getKeyBindings(prefs));
+    if (first !== undefined) return keyLabel(first);
+    return action.id === ACTIONS.OPEN_OPTIONS.id ? "Ctrl+," : "—";
+  };
+
+  function beginRebind(action, btn) {
+    if (rebinding) {
+      // Repainting replaces every button, so look the clicked one up again.
+      rebinding.cancel();
+      btn = shortcutsHost.querySelector(`[data-action="${action.id}"] .shortcut-key`);
+    }
+    btn.classList.add("waiting");
+    btn.textContent = "Press a key…";
+    const stop = () => {
+      document.removeEventListener("keydown", onKey, true);
+      clearTimeout(timer);
+      rebinding = null;
+    };
+    const cancel = () => { stop(); if (btn.isConnected) paintShortcuts(); };
+    const onKey = (ke) => {
+      ke.preventDefault();
+      ke.stopPropagation();
+      // A lone modifier is not a shortcut; keep waiting for a real key.
+      if (["Shift", "Control", "Alt", "Meta"].includes(ke.key)) return;
+      stop();
+      if (!btn.isConnected) return;
+      // One letter binds both cases, so Caps Lock or Shift cannot hide it.
+      const keys = ke.key.length === 1 && ke.key.toLowerCase() !== ke.key.toUpperCase()
+        ? [ke.key.toLowerCase(), ke.key.toUpperCase()] : [ke.key];
+      const map = { ...getKeyBindings(prefs) };
+      const conflict = keys.map((k) => detectKeyConflict(k, action.id, map)).find(Boolean);
+      if (conflict) {
+        const other = Object.values(ACTIONS).find((a) => a.id === conflict);
+        paintShortcuts();
+        toast(`${keyLabel(ke.key)} is already bound to ${other?.label || "another action"}`, { duration: 3000 });
+        return;
+      }
+      for (const k of Object.keys(map)) if (map[k] === action.id) delete map[k];
+      for (const k of keys) map[k] = action.id;
+      setKeyBindings(prefs, map);
+      log.info("shortcuts", `bound ${action.id} to ${ke.key}`);
+      paintShortcuts();
+      toast(`Bound ${action.label} to ${keyLabel(ke.key)}`, { duration: 2000 });
+    };
+    const timer = setTimeout(cancel, 5000);
+    rebinding = { cancel };
+    document.addEventListener("keydown", onKey, true);
   }
 
-  let rebindingState = { actionId: null, conflict: null };
-  const shortcutsSections = Object.entries(shortcutsGroups).map(([group, actions]) =>
-    h("section", { class: "opt-group" },
-      h("h3", { text: group }),
-      h("div", { class: "shortcuts-list" },
-        actions.map((action) => {
-          const keys = getKeysForAction(action.id, keyBindings);
-          // Options has no entry in the binding map (Ctrl+, is a modifier chord
-          // the map cannot hold), so name the real default rather than a dash.
-          const displayKey = keys.length > 0 ? keys[0] : action.id === ACTIONS.OPEN_OPTIONS.id ? "Ctrl+," : "—";
-          return h("div", { class: "shortcut-row", "data-action": action.id },
-            h("div", { class: "shortcut-label", text: action.label }),
-            h("button", {
-              class: "btn sm shortcut-key",
-              type: "button",
-              text: displayKey,
-              title: `Change the key for ${action.label} (currently ${displayKey})`,
-              "aria-label": `Rebind ${action.label}, currently ${displayKey}`,
-              onclick: (e) => {
-                const btn = e.currentTarget;
-                // Restore whatever is actually bound now (not the label the
-                // sheet was built with): a second rebind in the same sheet, or
-                // a conflicted attempt that changed nothing, must revert right.
-                const liveLabel = () => {
-                  const keys = getKeysForAction(action.id, getKeyBindings(prefs));
-                  return keys.length > 0 ? keys[0] : action.id === ACTIONS.OPEN_OPTIONS.id ? "Ctrl+," : "—";
-                };
-                rebindingState.actionId = action.id;
-                rebindingState.conflict = null;
-                btn.classList.add("waiting");
-                btn.textContent = "Press a key…";
-                const handleKey = (ke) => {
-                  ke.preventDefault();
-                  ke.stopPropagation();
-                  // A lone modifier is not a shortcut; keep waiting for a real key.
-                  if (["Shift", "Control", "Alt", "Meta"].includes(ke.key)) return;
-                  document.removeEventListener("keydown", handleKey, true);
-                  if (!document.body.contains(btn)) {
-                    rebindingState.actionId = null;
-                    return;
-                  }
-                  if (ke.key === "Escape") {
-                    btn.textContent = liveLabel();
-                    btn.classList.remove("waiting");
-                    btn.classList.remove("conflict");
-                    rebindingState.actionId = null;
-                    return;
-                  }
-                  // Read the map fresh: a second rebind in the same sheet must
-                  // build on the first, not on the map captured when it opened.
-                  const newKeyBindings = { ...getKeyBindings(prefs) };
-                  const conflict = detectKeyConflict(ke.key, action.id, newKeyBindings);
-                  if (conflict) {
-                    rebindingState.conflict = conflict;
-                    const conflictAction = Object.values(ACTIONS).find((a) => a.id === conflict);
-                    btn.textContent = "Conflict! Click to try again.";
-                    btn.classList.remove("waiting");
-                    btn.classList.add("conflict");
-                    toast(`${ke.key} is already bound to ${conflictAction?.label || "another action"}`, { duration: 3000 });
-                  } else {
-                    // Remove this key from any other actions, then bind it to this action
-                    Object.keys(newKeyBindings).forEach((k) => {
-                      if (newKeyBindings[k] === action.id) delete newKeyBindings[k];
-                    });
-                    newKeyBindings[ke.key] = action.id;
-                    setKeyBindings(prefs, newKeyBindings);
-                    btn.textContent = ke.key;
-                    btn.classList.remove("waiting");
-                    btn.classList.remove("conflict");
-                    toast(`Bound ${action.label} to ${ke.key}`, { duration: 2000 });
-                    log.info("shortcuts", `bound ${action.id} to ${ke.key}`);
-                  }
-                  rebindingState.actionId = null;
-                };
-                document.addEventListener("keydown", handleKey, true);
-                setTimeout(() => {
-                  if (rebindingState.actionId === action.id && document.body.contains(btn)) {
-                    document.removeEventListener("keydown", handleKey, true);
-                    btn.textContent = liveLabel();
-                    btn.classList.remove("waiting");
-                    rebindingState.actionId = null;
-                  }
-                }, 5000);
-              },
-            }),
-          );
-        }))));
-
+  function paintShortcuts() {
+    const groups = {};
+    for (const action of Object.values(ACTIONS)) (groups[action.group] ||= []).push(action);
+    shortcutsHost.replaceChildren(...Object.entries(groups).map(([group, actions]) =>
+      h("section", { class: "opt-group" },
+        h("h3", { text: group }),
+        h("div", { class: "shortcuts-list" },
+          actions.map((action) => {
+            const label = liveLabel(action);
+            return h("div", { class: "shortcut-row", "data-action": action.id },
+              h("div", { class: "shortcut-label", text: action.label }),
+              h("button", {
+                class: "btn sm shortcut-key",
+                type: "button",
+                text: label,
+                title: `Change the key for ${action.label} (currently ${label})`,
+                "aria-label": `Rebind ${action.label}, currently ${label}`,
+                onclick: (e) => beginRebind(action, e.currentTarget),
+              }));
+          })))));
+    shortcutsHost.lastElementChild?.appendChild(resetShortcutsRow);
+  }
   // The shortcut reset belongs at the end of the shortcut groups, on
   // one line like the Zoom row: a heading, a paragraph and a lone
   // button in a group of its own put two divider lines around a
@@ -2474,13 +2466,12 @@ function showOptions() {
         resetKeyBindings(prefs);
         toast("Shortcuts reset to defaults", { duration: 2000 });
         log.info("shortcuts", "reset to defaults");
-        closeModal();
-        showOptions();
+        paintShortcuts();
       },
       text: "Reset",
     }));
-  if (shortcutsSections.length) shortcutsSections[shortcutsSections.length - 1].appendChild(resetShortcutsRow);
-  else shortcutsSections.push(h("section", { class: "opt-group" }, resetShortcutsRow));
+  paintShortcuts();
+  const shortcutsSections = [shortcutsHost];
 
   modal({
     title: "Options",
@@ -2492,7 +2483,7 @@ function showOptions() {
           h("div", { class: "opt-label" }, "Theme", h("small", { text: "System follows the operating system" })),
           h("div", { class: "segmented", role: "group", "aria-label": "Theme" }, themeButtons)),
         h("div", { class: "opt-row" },
-          h("div", { class: "opt-label" }, "Zoom", h("small", { text: "Ctrl and + or −, or Ctrl and the mouse wheel" })),
+          h("div", { class: "opt-label" }, "App zoom", h("small", { text: "Ctrl and + − 0, or Ctrl and the mouse wheel. Fixed keys; the card zoom below is separate" })),
           h("button", { class: "btn sm icon", "aria-label": "Zoom out", title: "Zoom out (Ctrl and −)", onclick: () => zoomApp(-1) }, icon("zoom-out", { size: 15 })),
           h("span", { class: "zoom-value", text: `${Math.round(current.zoom * 100)}%` }),
           h("button", { class: "btn sm icon", "aria-label": "Zoom in", title: "Zoom in (Ctrl and +)", onclick: () => zoomApp(1) }, icon("zoom-in", { size: 15 })),
@@ -2504,8 +2495,8 @@ function showOptions() {
         place("Data folder", info.data_dir, "data"),
         place("Logs", info.log_path, "logs"),
         h("div", { class: "opt-row" },
-          h("button", { class: "btn sm", title: "Read the app's own log file, to diagnose a problem", onclick: () => { closeModal(); showLog(); } }, icon("log", { size: 15 }), "View the log"),
-          h("button", { class: "btn sm", title: "Show every keyboard shortcut and its key", onclick: () => { closeModal(); showShortcuts(); } }, icon("keyboard", { size: 15 }), "Keyboard shortcuts"))),
+          h("button", { class: "btn sm", title: "Read the app's own log file, to diagnose a problem", onclick: () => showLog() }, icon("log", { size: 15 }), "View the log"),
+          h("button", { class: "btn sm", title: "Show every keyboard shortcut and its key", onclick: () => showShortcuts() }, icon("keyboard", { size: 15 }), "Keyboard shortcuts"))),
       h("section", { class: "opt-group" },
         h("h3", { text: "Statistics" }),
         h("p", { class: "about-note", text: "Local statistics about your use of Shotpile. Nothing is sent anywhere." }),
@@ -2601,37 +2592,15 @@ async function showLog() {
 }
 
 function showShortcuts() {
-  const row = (keys, what) => h("div", { class: "keys-row" },
-    h("span", { class: "keys" }, keys.map((k) => kbd(k))),
-    h("span", { text: what }));
-  const group = (title, ...rows) => h("div", { class: "keys-group" }, h("h3", { text: title }), rows);
+  const chordEl = (chord) => h("span", { class: "chord" }, chord.map((k) => kbd(k)));
   modal({
     title: "Keyboard shortcuts",
     cls: "keys-sheet",
-    body: [
-      group("Sorting",
-        row(["←"], "Mark for deletion"),
-        row(["→"], "Keep"),
-        row(["↑"], "Skip for now (comes back once, at the end)"),
-        row(["Z"], "Undo the last decision"),
-        row(["Ctrl", "Z"], "Undo, from any page"),
-        row(["Ctrl", "Y"], "Redo (also Ctrl+Shift+Z, or Y while sorting)")),
-      group("Looking closer",
-        row(["Space"], "Open full screen"),
-        row(["+", "−"], "Zoom the card"),
-        row(["0"], "Back to 100%"),
-        row(["Esc"], "Close full screen"),
-        row(["Esc"], "Leave the review, back to where it started")),
-      group("Window",
-        row(["Ctrl", "+"], "Zoom the app in"),
-        row(["Ctrl", "−"], "Zoom the app out"),
-        row(["Ctrl", "0"], "Reset the app zoom"),
-        row(["Ctrl", ","], "Options"),
-        row(["F11"], "Full screen the window")),
-      group("Troubleshooting",
-        row(["F12"], "Developer tools"),
-        row(["Ctrl", "Shift", "L"], "Show the log")),
-    ],
+    body: shortcutHelp(getKeyBindings(prefs)).map((g) =>
+      h("div", { class: "keys-group" }, h("h3", { text: g.title }),
+        g.rows.map((r) => h("div", { class: "keys-row" },
+          h("span", { class: "keys" }, r.chords.length ? r.chords.map(chordEl) : h("span", { class: "muted", text: "Not bound" })),
+          h("span", { text: r.what }))))),
     actions: [{ label: "Close" }],
   });
 }
@@ -2854,6 +2823,7 @@ window.__shotpileTest = {
   openViewer: () => openShotViewer(state.card, topCard()),
   closeViewer,
   resetCardZoom: () => zoomOf(topCard())?.reset(),
+  helpRows: () => shortcutHelp(getKeyBindings(prefs)).flatMap((g) => g.rows.map((r) => r.what)),
   snapshot: () => ({ view: state.view, deciding: state.deciding, cursor: state.queue.cursor, ids: state.queue.ids.slice() }),
   dropCache: () => state.cache.clear(),
   resetToSetup() {
@@ -2869,6 +2839,7 @@ window.__shotpileTest = {
 // --------------------------------------------------------------------- wiring
 
 initModal();
+initTooltips();
 el.back.addEventListener("click", backToMonths);
 el.folderBtn.addEventListener("click", folderMenu);
 el.scan.addEventListener("click", rescan);

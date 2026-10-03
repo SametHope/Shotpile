@@ -335,3 +335,80 @@ export function closeMenu() {
   anchor?.setAttribute("aria-expanded", "false");
   list.remove();
 }
+
+// ------------------------------------------------------------------ tooltips
+
+/**
+ * Replaces the WebView's own hover tips with one themed bubble. Any element
+ * with a `title` gets it: on hover or keyboard focus the attribute is lifted
+ * off (so the native tip never shows) and put back when the pointer leaves, so
+ * the DOM and `aria-label` fallbacks stay as authored. Call once at boot.
+ */
+export function initTooltips() {
+  const tip = h("div", { id: "tooltip", role: "tooltip", hidden: true });
+  document.body.appendChild(tip);
+  let target = null;
+  let saved = "";
+  let timer = 0;
+
+  const restore = () => {
+    if (target && saved && !target.hasAttribute("title")) target.setAttribute("title", saved);
+    target = null;
+    saved = "";
+  };
+  const hide = () => {
+    clearTimeout(timer);
+    tip.hidden = true;
+    restore();
+  };
+  const place = () => {
+    const r = target.getBoundingClientRect();
+    const margin = 8;
+    const w = tip.offsetWidth;
+    const hgt = tip.offsetHeight;
+    let x = r.left + r.width / 2 - w / 2;
+    x = Math.max(margin, Math.min(x, window.innerWidth - w - margin));
+    let y = r.bottom + 8;
+    let below = true;
+    if (y + hgt > window.innerHeight - margin) { y = r.top - hgt - 8; below = false; }
+    tip.style.left = `${Math.round(x)}px`;
+    tip.style.top = `${Math.round(Math.max(margin, y))}px`;
+    tip.dataset.side = below ? "below" : "above";
+  };
+  const show = (el, delay) => {
+    const text = el.getAttribute("title");
+    if (!text || !text.trim()) return;
+    hide();
+    target = el;
+    saved = text;
+    if (!el.hasAttribute("aria-label") && !el.textContent.trim()) el.setAttribute("aria-label", text);
+    el.removeAttribute("title");
+    timer = setTimeout(() => {
+      if (!target || !target.isConnected) return hide();
+      tip.textContent = saved;
+      tip.hidden = false;
+      place();
+    }, delay);
+  };
+  const find = (n) => (n instanceof Element ? n.closest("[title]") : null);
+
+  document.addEventListener("pointerover", (e) => {
+    if (e.pointerType === "touch") return;
+    const el = find(e.target);
+    if (el && el !== target) show(el, 450);
+    else if (!el && target && !target.contains(e.target)) hide();
+  });
+  document.addEventListener("pointerout", (e) => {
+    if (target && !target.contains(e.relatedTarget)) hide();
+  });
+  document.addEventListener("focusin", (e) => {
+    const el = find(e.target);
+    if (el && e.target.matches?.(":focus-visible")) show(el, 200);
+  });
+  document.addEventListener("focusout", hide);
+  document.addEventListener("pointerdown", hide, true);
+  document.addEventListener("keydown", hide, true);
+  document.addEventListener("scroll", hide, true);
+  window.addEventListener("blur", hide);
+  window.addEventListener("resize", hide);
+}

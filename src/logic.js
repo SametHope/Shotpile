@@ -506,9 +506,9 @@ export const ACTIONS = {
   REDO: { id: "redo", label: "Redo", group: "Sorting" },
   PREV_IMAGE: { id: "prevImage", label: "Previous image in filmstrip", group: "Sorting" },
   NEXT_IMAGE: { id: "nextImage", label: "Next image in filmstrip", group: "Sorting" },
-  ZOOM_IN: { id: "zoomIn", label: "Zoom in", group: "Looking closer" },
-  ZOOM_OUT: { id: "zoomOut", label: "Zoom out", group: "Looking closer" },
-  ZOOM_RESET: { id: "zoomReset", label: "Reset zoom to 100%", group: "Looking closer" },
+  ZOOM_IN: { id: "zoomIn", label: "Zoom the card in", group: "Looking closer" },
+  ZOOM_OUT: { id: "zoomOut", label: "Zoom the card out", group: "Looking closer" },
+  ZOOM_RESET: { id: "zoomReset", label: "Reset the card zoom to 100%", group: "Looking closer" },
   OPEN_VIEWER: { id: "openViewer", label: "Open full screen", group: "Looking closer" },
   OPEN_OPTIONS: { id: "openOptions", label: "Options", group: "Window" },
   FULLSCREEN: { id: "fullscreen", label: "Toggle fullscreen window", group: "Window" },
@@ -557,6 +557,50 @@ export function getKeyBindings(prefs) {
     if (!known.has(id) && !(key in out)) out[key] = id;
   }
   return out;
+}
+
+/** A key as the UI names it: one letter in capitals, arrows as arrows, Space spelled out. */
+export function keyLabel(key) {
+  const names = { " ": "Space", ArrowLeft: "←", ArrowRight: "→", ArrowUp: "↑", ArrowDown: "↓", Escape: "Esc", Backspace: "Backspace", Enter: "Enter" };
+  if (names[key]) return names[key];
+  return key.length === 1 ? key.toUpperCase() : key;
+}
+
+/** The keys that cannot be rebound (modifier chords, Esc, mouse-free navigation). */
+export const FIXED_SHORTCUTS = [
+  { group: "Sorting", chords: [["Ctrl", "Z"]], what: "Undo, from any page" },
+  { group: "Sorting", chords: [["Ctrl", "Y"], ["Ctrl", "Shift", "Z"]], what: "Redo, from any page" },
+  { group: "Sorting", chords: [["Esc"]], what: "Leave the review, back to where it started" },
+  { group: "Looking closer", chords: [["←"], ["→"], ["↑"], ["↓"]], what: "Pan a zoomed card" },
+  { group: "Looking closer", chords: [["Esc"]], what: "Close full screen" },
+  { group: "Library", chords: [["←"], ["→"], ["↑"], ["↓"]], what: "Move between months" },
+  { group: "Library", chords: [["Enter"]], what: "Open the focused month" },
+  { group: "Window", chords: [["Ctrl", "+"]], what: "Zoom the whole app in" },
+  { group: "Window", chords: [["Ctrl", "−"]], what: "Zoom the whole app out" },
+  { group: "Window", chords: [["Ctrl", "0"]], what: "Reset the whole app zoom" },
+  { group: "Window", chords: [["Ctrl", ","]], what: "Options" },
+  { group: "Troubleshooting", chords: [["F12"], ["Ctrl", "Shift", "I"]], what: "Developer tools" },
+  { group: "Troubleshooting", chords: [["Ctrl", "Shift", "L"]], what: "Show the log" },
+];
+
+const HELP_GROUPS = ["Sorting", "Looking closer", "Library", "Window", "Troubleshooting"];
+
+/**
+ * Everything the help sheet lists, derived from ACTIONS, the live bindings and
+ * FIXED_SHORTCUTS: the one place a shortcut is described, so the sheet cannot
+ * drift from what the keyboard handler does.
+ */
+export function shortcutHelp(bindings) {
+  return HELP_GROUPS.map((title) => {
+    const rows = [];
+    for (const action of Object.values(ACTIONS)) {
+      if (action.group !== title) continue;
+      const labels = [...new Set(getKeysForAction(action.id, bindings).map(keyLabel))];
+      rows.push({ id: action.id, what: action.label, chords: labels.map((l) => [l]) });
+    }
+    for (const f of FIXED_SHORTCUTS) if (f.group === title) rows.push({ what: f.what, chords: f.chords });
+    return { title, rows };
+  }).filter((g) => g.rows.length);
 }
 
 /**

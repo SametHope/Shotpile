@@ -512,5 +512,86 @@
   setViewScroll: (y) => { document.getElementById("view").scrollTop = y; },
   windowState: () => ({ ...window.__windowState() }),
 
+  // ---- help sheet / keyboard shortcuts dialog ----
+  helpSheetOpen: () => !!$("#help-sheet"),
+  clickHelpButton: () => {
+    const btn = $(".options-sheet")?.querySelector("button:has-text('Keyboard shortcuts')") ||
+                [...$$(".options-sheet button")].find(b => b.textContent.includes("Keyboard shortcuts"));
+    if (btn) btn.click();
+    return !!btn;
+  },
+  helpSheetRows: () => {
+    const sheet = $("#help-sheet");
+    if (!sheet) return [];
+    return $$(".help-group", sheet).flatMap(group =>
+      $$(".help-row", group).map(row => ({
+        id: row.dataset.actionId || row.dataset.id,
+        label: text(row.querySelector(".help-label")),
+        keys: [...row.querySelectorAll(".shortcut-key, .chord")].map(k => k.textContent).join(" "),
+      }))
+    );
+  },
+  // For backdrop visibility monitoring: record all hidden attribute changes
+  recordBackdropChanges: () => {
+    const backdrop = $("#modal");
+    if (!backdrop) return null;
+    window.__backdropHiddenChanges = [];
+    const observer = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.attributeName === "hidden") {
+          window.__backdropHiddenChanges.push({
+            timestamp: Date.now(),
+            hidden: backdrop.hidden,
+          });
+        }
+      }
+    });
+    observer.observe(backdrop, { attributes: true, attributeFilter: ["hidden"] });
+    return { observing: true };
+  },
+  getBackdropChanges: () => (window.__backdropHiddenChanges || []).filter(c => c.hidden === true),
+  stopBackdropMonitor: () => {
+    // MutationObservers can't be easily stopped without keeping a ref, so we just clear the array
+    window.__backdropHiddenChanges = [];
+  },
+
+  // ---- zoom and options display ----
+  zoomValue: () => {
+    const span = $(".options-sheet .zoom-value");
+    return span ? span.textContent : null;
+  },
+  shortcutKeyHeight: (actionId) => {
+    const btn = $$(`.shortcut-row[data-action="${actionId}"] .shortcut-key`)[0];
+    return btn ? Math.round(btn.getBoundingClientRect().height) : null;
+  },
+  // Check that all buttons without visible text have both title and aria-label
+  checkTooltips: () => {
+    const buttons = $$("button");
+    const issues = [];
+    for (const btn of buttons) {
+      // Skip buttons with visible text (including text nodes and icon labels)
+      const text = btn.textContent?.trim() || "";
+      if (text) continue;
+
+      // This is an icon-only button - check for title and aria-label
+      const hasTitle = btn.hasAttribute("title") && btn.getAttribute("title")?.trim();
+      const hasAriaLabel = btn.hasAttribute("aria-label") && btn.getAttribute("aria-label")?.trim();
+
+      if (!hasTitle || !hasAriaLabel) {
+        const id = btn.id || `[class="${btn.className}"]`;
+        issues.push({
+          element: id,
+          hasTitle,
+          hasAriaLabel,
+        });
+      }
+    }
+    return {
+      total: buttons.length,
+      iconOnlyCount: buttons.filter(b => !b.textContent?.trim()).length,
+      issues,
+    };
+  },
+
   };
 })();

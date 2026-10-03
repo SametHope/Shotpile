@@ -35,6 +35,7 @@ const KEYS = {
   F11: { vk: 112, code: "F11" },
   F12: { vk: 123, code: "F12" },
 };
+for (const c of "abcdefghijklmnopqrstuvwxyz") if (!KEYS[c]) KEYS[c] = { vk: c.toUpperCase().charCodeAt(0), code: `Key${c.toUpperCase()}`, text: c };
 // CDP modifier bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8.
 const CTRL = 2;
 const SHIFT = 8;
@@ -154,6 +155,10 @@ const CTRL_SHIFT = CTRL | SHIFT;
     const dnum = (delColor.match(/\d+/g) || []).map(Number);
     ok("the deleted segment is red", dnum[0] > 120 && dnum[1] < 110 && dnum[2] < 110, delColor);
 
+    // ---- tooltips in library view ----
+    const libTooltips = await probe("p.checkTooltips()");
+    ok("all icon-only buttons in the library have tooltips", libTooltips.issues.length === 0, JSON.stringify(libTooltips.issues));
+
     // ---- open the September queue ----
     await probe("p.clickMonth('2026-09')");
     await waitFor("p.hasCard()");
@@ -176,6 +181,11 @@ const CTRL_SHIFT = CTRL | SHIFT;
     // screen reader as controls.
     const filmRoles = `${await probe("p.attr('#filmstrip', 'role')")} / ${await probe("p.attr('.film-item', 'role')")}`;
     ok("the filmstrip is a group of plain buttons", filmRoles === "group / null", filmRoles);
+
+    // ---- tooltips in review view ----
+    const reviewTooltips = await probe("p.checkTooltips()");
+    ok("all icon-only buttons in the review have tooltips", reviewTooltips.issues.length === 0, JSON.stringify(reviewTooltips.issues));
+
     // Collapsed is not enough: an invisible "Move to Recycle Bin" must not be
     // reachable with Tab and Enter.
     ok("the collapsed footer bar is out of the tab order", (await waitFor("p.visibility('#footbar') === 'hidden'", 800)) === true, String(await probe("p.visibility('#footbar')")));
@@ -199,6 +209,49 @@ const CTRL_SHIFT = CTRL | SHIFT;
 
     // ---- the filename filter is gone; the sorting-button toggle replaces it ----
     ok("the filename filter is no longer offered", (await probe("p.hasSel('#filter-input')")) === false);
+
+    // ---- custom tooltips replace the native ones ----
+    await js("window.__tipEl = document.querySelector('#btn-options'); window.__tipTitle = window.__tipEl.getAttribute('title'); window.__tipEl.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' }));");
+    ok("the tooltip bubble shows the element's title", (await waitFor("(document.getElementById('tooltip') || {}).hidden === false", 1500)) === true);
+    ok("the bubble carries exactly that text", (await probe("document.getElementById('tooltip').textContent")) === (await probe("window.__tipTitle")) && (await probe("window.__tipTitle")).length > 3);
+    ok("the native title is lifted off while the bubble shows", (await probe("window.__tipEl.hasAttribute('title')")) === false);
+    ok("the bubble stays inside the window", await probe("(() => { const r = document.getElementById('tooltip').getBoundingClientRect(); return r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight; })()"));
+    await js("window.__tipEl.dispatchEvent(new PointerEvent('pointerout', { bubbles: true, pointerType: 'mouse', relatedTarget: document.body }));");
+    ok("leaving hides the bubble and restores the title", (await probe("document.getElementById('tooltip').hidden")) === true && (await probe("window.__tipEl.getAttribute('title')")) === (await probe("window.__tipTitle")));
+
+    // ---- rebound navigation and card-zoom keys, on a three-card queue ----
+    await press(",", CTRL);
+    await waitFor("document.querySelector('.options-sheet') !== null");
+    for (const [id, key] of Object.entries({ zoomIn: "q", zoomReset: "e", prevImage: "r", nextImage: "t" })) {
+      await probe(`p.clickRebindButton('${id}')`);
+      await waitFor(`p.shortcutKeyBusyWaiting('${id}')`);
+      await press(key);
+      await waitFor(`p.shortcutKey('${id}') === '${key.toUpperCase()}'`);
+    }
+    await press("Escape");
+    await waitFor("!document.querySelector('.options-sheet')");
+    const cur = () => probe("window.__shotpileTest.snapshot().cursor");
+    const cur0 = await cur();
+    await press("t");
+    ok("the rebound Next image key moves the filmstrip", (await waitFor(`window.__shotpileTest.snapshot().cursor === ${cur0 + 1}`)) === true, String(await cur()));
+    await press("r");
+    ok("the rebound Previous image key moves it back", (await waitFor(`window.__shotpileTest.snapshot().cursor === ${cur0}`)) === true, String(await cur()));
+    await press("t");
+    await waitFor(`window.__shotpileTest.snapshot().cursor === ${cur0 + 1}`);
+    await press("d");
+    await sleep(200);
+    ok("the old Next image key does nothing", (await cur()) === cur0 + 1);
+    await press("r");
+    await waitFor(`window.__shotpileTest.snapshot().cursor === ${cur0}`);
+    await press("q");
+    ok("the rebound card zoom-in key zooms the card", (await waitFor("p.cardZoomScale() > 1")) === true, String(await probe("p.cardZoomScale()")));
+    await press("e");
+    ok("the rebound card zoom-reset key resets it", (await waitFor("p.cardZoomScale() === 1")) === true, String(await probe("p.cardZoomScale()")));
+    await press(",", CTRL);
+    await waitFor("document.querySelector('.options-sheet') !== null");
+    await probe("p.clickResetShortcuts()");
+    await press("Escape");
+    await waitFor("!document.querySelector('.options-sheet')");
 
     // ---- collapsing the sorting buttons gives the filmstrip the room ----
     const shown = await probe("p.actionRowState()");
@@ -637,6 +690,10 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await probe("p.clickStagedBtn()");
     await waitFor("p.pileNames().length === 2");
     ok("the pile shows every staged file", (await probe("p.pileNames().length")) === 2, JSON.stringify(await probe("p.pileNames()")));
+
+    // ---- tooltips in pile view ----
+    const pileTooltips = await probe("p.checkTooltips()");
+    ok("all icon-only buttons in the pile have tooltips", pileTooltips.issues.length === 0, JSON.stringify(pileTooltips.issues));
     await js("p.clickPutBack(0);");
     await waitFor("p.pileNames().length === 1");
     ok("put back returns a file to the unsorted pile", (await status(stageA)) === "pending", await status(stageA));
@@ -949,6 +1006,10 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await press(",", CTRL);
     ok("Ctrl+, opens the options", (await waitFor("document.querySelector('.options-sheet') !== null")) === true);
     ok("the options show the versions", /2\.11\.6/.test(await probe("document.querySelector('.about-list').textContent")), await probe("document.querySelector('.about-list')?.textContent"));
+
+    // ---- tooltips in options view ----
+    const optionsTooltips = await probe("p.checkTooltips()");
+    ok("all icon-only buttons in the options have tooltips", optionsTooltips.issues.length === 0, JSON.stringify(optionsTooltips.issues));
     // The app's version has one source: Cargo.toml, read by the Rust
     // build and handed to the fake backend by tests/serve.cjs. It used
     // to be hardcoded "1.0.0" here.
@@ -980,11 +1041,11 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await waitFor("document.querySelector('.options-sheet') !== null");
     await js("document.querySelector('.options-sheet').scrollTop = document.querySelector('.shortcuts-list')?.offsetTop || 0;");
     const initKey = await probe("p.shortcutKey('keep')");
-    ok("shortcuts section lists the current key binding", initKey === "ArrowRight", `expected "ArrowRight", got ${initKey}`);
+    ok("shortcuts section lists the current key binding", initKey === "→", `expected "→", got ${initKey}`);
     await probe("p.clickRebindButton('keep')");
     ok("clicking a shortcut key puts it in waiting state", (await waitFor("p.shortcutKeyBusyWaiting('keep')")) === true);
     await press("i");
-    ok("pressing a key rebinds the shortcut", (await waitFor("p.shortcutKey('keep') === 'i'")) === true, await probe("p.shortcutKey('keep')"));
+    ok("pressing a key rebinds the shortcut", (await waitFor("p.shortcutKey('keep') === 'I'")) === true, await probe("p.shortcutKey('keep')"));
     ok("rebinding is persisted", /"keyBindings":\{[^}]*"i":"keep"[^}]*\}/.test(await probe("localStorage.getItem('shotpile.prefs')")), await probe("localStorage.getItem('shotpile.prefs')"));
     // A rebind must be honoured in every view, not only the review. Options was
     // the reported failure: the global handler ignored the binding table.
@@ -993,12 +1054,12 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await probe("p.clickRebindButton('openOptions')");
     await waitFor("p.shortcutKeyBusyWaiting('openOptions')");
     await press("p");
-    ok("a key rebinds a global action", (await waitFor("p.shortcutKey('openOptions') === 'p'")) === true, await probe("p.shortcutKey('openOptions')"));
-    // Escape is a cancel, not a key that can be captured.
+    ok("a key rebinds a global action", (await waitFor("p.shortcutKey('openOptions') === 'P'")) === true, await probe("p.shortcutKey('openOptions')"));
+    // Starting a second rebind cancels the first one.
     await probe("p.clickRebindButton('openOptions')");
     await waitFor("p.shortcutKeyBusyWaiting('openOptions')");
-    await press("Escape");
-    ok("Escape cancels a rebind capture", (await probe("p.shortcutKeyBusyWaiting('openOptions')")) === false && (await probe("p.shortcutKey('openOptions')")) === "p", `${await probe("p.shortcutKeyBusyWaiting('openOptions')")} / ${await probe("p.shortcutKey('openOptions')")}`);
+    await probe("p.clickRebindButton('help')");
+    ok("starting another rebind cancels the first", (await waitFor("!p.shortcutKeyBusyWaiting('openOptions') && p.shortcutKeyBusyWaiting('help')")) === true && (await probe("p.shortcutKey('openOptions')")) === "P");
     await press("Escape");
     await waitFor("!document.querySelector('.options-sheet')");
     await press("p");
@@ -1009,8 +1070,8 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await waitFor("!document.querySelector('.options-sheet')");
     await press("p");
     await waitFor("document.querySelector('.options-sheet') !== null");
-    ok("a rebound shortcut survives reopening Options", (await probe("p.shortcutKey('keep')")) === "i", await probe("p.shortcutKey('keep')"));
-    ok("and the old default is not back", (await probe("p.shortcutKey('keep')")) !== "ArrowRight");
+    ok("a rebound shortcut survives reopening Options", (await probe("p.shortcutKey('keep')")) === "I", await probe("p.shortcutKey('keep')"));
+    ok("and the old default is not back", (await probe("p.shortcutKey('keep')")) !== "→");
     ok("Options shows a decisions donut", (await waitFor("document.querySelector('.options-sheet .donut-seg') !== null")) === true);
     ok("the statistics are one card with one reset", (await probe("document.querySelectorAll('.options-sheet .stats-group').length")) === 1 && (await probe("document.querySelectorAll('.options-sheet .stats-header .btn').length")) === 1);
     ok("the rows do not repeat what the donut already says", !/^(Kept|Skipped|Sent to delete)$/m.test(await probe("[...document.querySelectorAll('.options-sheet .stats-list dt')].map((d) => d.textContent).join('\\n')")));
@@ -1025,9 +1086,91 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await press(",", CTRL);
     await waitFor("document.querySelector('.options-sheet') !== null");
     const resetKey = await probe("p.shortcutKey('keep')");
-    ok("resetting shortcuts restores defaults", resetKey === "ArrowRight", `expected "ArrowRight", got ${resetKey}`);
+    ok("resetting shortcuts restores defaults", resetKey === "→", `expected "→", got ${resetKey}`);
     ok("reset clears the keyBindings in prefs", !/"keyBindings":/.test(await probe("localStorage.getItem('shotpile.prefs')")), await probe("localStorage.getItem('shotpile.prefs')"));
     await press("Escape");
+
+    // ---- keyboard shortcuts help sheet ----
+    // The help is generated from the live bindings: rebind Keep to "i", open it
+    // from Options and compare every rebindable row with the real map.
+    await press(",", CTRL);
+    await waitFor("document.querySelector('.options-sheet') !== null");
+    await probe("p.clickRebindButton('keep')");
+    await waitFor("p.shortcutKeyBusyWaiting('keep')");
+    await press("i");
+    await waitFor("p.shortcutKey('keep') === 'I'");
+    await js(`window.__hides = 0; const b = document.querySelector('.backdrop'); new MutationObserver(() => { if (b.hidden) window.__hides++; }).observe(b, { attributes: true, attributeFilter: ['hidden'] });`);
+    await js("[...document.querySelectorAll('.options-sheet .btn')].find((b) => b.textContent.includes('Keyboard shortcuts')).click();");
+    await waitFor("document.querySelector('.keys-sheet') !== null");
+    await sleep(100);
+    ok("Keyboard shortcuts replaces Options without the dialog closing", (await probe("window.__hides")) === 0 && (await probe("!!document.querySelector('.options-sheet')")) === false, String(await probe("window.__hides")));
+    const help = await probe("[...document.querySelectorAll('.keys-sheet .keys-row')].map((r) => ({ what: r.lastElementChild.textContent, keys: [...r.querySelectorAll('.chord')].map((c) => c.textContent) }))");
+    const keepHelp = help.find((r) => r.what === "Keep");
+    ok("help shows the rebound key for Keep", keepHelp && keepHelp.keys.join() === "I", JSON.stringify(keepHelp));
+    ok("help no longer lists the old Keep key", !help.some((r) => r.what === "Keep" && r.keys.includes("→")));
+    const expectedHelp = await probe("window.__shotpileTest.helpRows()");
+    ok("help rows are exactly what shortcutHelp derives from the bindings", JSON.stringify(help.map((r) => r.what)) === JSON.stringify(expectedHelp), JSON.stringify(expectedHelp));
+    ok("help covers the fixed shortcuts too", ["Undo, from any page", "Show the log", "Zoom the whole app in", "Move between months"].every((w) => help.some((r) => r.what === w)));
+    await press("Escape");
+    await waitFor("!document.querySelector('.keys-sheet')");
+
+    // Reset repaints Options in place.
+    await press(",", CTRL);
+    await waitFor("document.querySelector('.options-sheet') !== null");
+    await js("window.__hides = 0;");
+    await probe("p.clickResetShortcuts()");
+    await sleep(100);
+    ok("Reset shortcuts keeps the dialog open", (await probe("window.__hides")) === 0 && (await probe("!!document.querySelector('.options-sheet')")) === true);
+    ok("Reset shortcuts restores the default label in place", (await probe("p.shortcutKey('keep')")) === "→", await probe("p.shortcutKey('keep')"));
+
+    // Every rebindable review action works on its new key and not on the old one.
+    const unusedKeys = { keep: "k", delete: "j", skip: "u", undo: "x", zoomOut: "w" };
+    for (const [id, key] of Object.entries(unusedKeys)) {
+      await probe(`p.clickRebindButton('${id}')`);
+      await waitFor(`p.shortcutKeyBusyWaiting('${id}')`);
+      await press(key);
+      ok(`${id} rebinds to ${key.toUpperCase()}`, (await waitFor(`p.shortcutKey('${id}') === '${key.toUpperCase()}'`)) === true, await probe(`p.shortcutKey('${id}')`));
+    }
+    await press("Escape");
+    await waitFor("!document.querySelector('.options-sheet')");
+    await probe("p.clickSortAll()");
+    await waitFor("document.querySelector('#card') !== null && !window.__shotpileTest.snapshot().deciding");
+    await sleep(600);
+    const nameBefore = await probe("p.deckTopName()");
+    await press("k");
+    ok("the rebound Keep key decides the card", (await waitFor(`p.deckTopName() !== ${JSON.stringify(nameBefore)}`)) === true);
+        await press("x");
+    await sleep(200);
+    await press("Escape");
+    await waitFor("document.querySelector('#view .month') !== null");
+    // Put the defaults back for the tests after this one.
+    await press(",", CTRL);
+    await waitFor("document.querySelector('.options-sheet') !== null");
+    await probe("p.clickResetShortcuts()");
+    await press("Escape");
+    await waitFor("!document.querySelector('.options-sheet')");
+
+    // A zoom change shows no toast; the value lives in Options.
+    await waitFor("!p.toastOn()", 4000);
+    await press("=", CTRL);
+    await sleep(300);
+    ok("an app zoom change shows no toast", (await probe("p.toastOn()")) === false);
+    await press(",", CTRL);
+    await waitFor("document.querySelector('.options-sheet') !== null");
+    ok("Options shows the current app zoom", (await probe("document.querySelector('.options-sheet .zoom-value').textContent")) === `${Math.round((await probe("JSON.parse(localStorage.getItem('shotpile.prefs')).zoom")) * 100)}%`);
+    await press("0", CTRL);
+    ok("Ctrl+0 puts the shown zoom back to 100%", (await waitFor("document.querySelector('.options-sheet .zoom-value').textContent === '100%'")) === true);
+
+    // Rebind to Space: the label is spelled out and the box is not squashed.
+    await probe("p.clickRebindButton('openViewer')");
+    await waitFor("p.shortcutKeyBusyWaiting('openViewer')");
+    await press(" ");
+    ok("Space is labelled Space", (await waitFor("p.shortcutKey('openViewer') === 'Space'")) === true, await probe("p.shortcutKey('openViewer')"));
+    const heights = await probe("[...document.querySelectorAll('.shortcut-key')].map((b) => b.getBoundingClientRect().height)");
+    ok("every shortcut box is at least 28px tall", heights.length > 5 && heights.every((x) => x >= 28), String(Math.min(...heights)));
+    await probe("p.clickResetShortcuts()");
+    await press("Escape");
+    await waitFor("!document.querySelector('.options-sheet')");
 
     // ---- right-click menus ----
     const rightClick = (sel) => js(`const n = document.querySelector(${JSON.stringify(sel)}); const r = n.getBoundingClientRect();
