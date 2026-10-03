@@ -126,8 +126,7 @@ hand on Windows. Do not mark one done on the strength of the fake backend.
    for Automation permission on the first commit. Shortcut labels say `Ctrl`
    even where `Cmd` works.
 5. **Remaining planned work** (also in the README's Planned section):
-   - The statistics infographic (a small window or section; totals as
-     sentences or bars, themed with tokens and dark values; no libraries).
+   - Statistics: the decisions donut shipped in 1.7.0 (Options).
    - More counters if wanted (longest streak, folders added). Counters live
      in the SQLite `counters` table, keyed by name; recording a new one needs
      no migration. Forgetting a folder must not erase lifetime totals;

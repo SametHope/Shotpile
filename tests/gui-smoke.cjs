@@ -134,6 +134,7 @@ const CTRL_SHIFT = CTRL | SHIFT;
     ok("the header names the current folder", (await probe("p.folderName()")) === "Screenshots", await probe("p.folderName()"));
     // The progress bar: the unsorted remainder is the striped track; deleted is
     // a solid red, not a stripe.
+    ok("segments touch, so no stripe shows between them", (await probe("getComputedStyle(document.querySelector('.segbar')).columnGap")) === "normal" || (await probe("getComputedStyle(document.querySelector('.segbar')).columnGap")) === "0px");
     ok("the unsorted progress track is striped", /repeating-linear-gradient/.test(await probe("p.segbarTrack()") || ""), await probe("p.segbarTrack()"));
     const stripes = await probe("p.segbarStripes()");
     const big = stripes && stripes[10];
@@ -936,7 +937,7 @@ const CTRL_SHIFT = CTRL | SHIFT;
     // The app's version has one source: Cargo.toml, read by the Rust
     // build and handed to the fake backend by tests/serve.cjs. It used
     // to be hardcoded "1.0.0" here.
-    ok("the About panel carries the app's own version", /v1\.6\.0/.test(await probe("document.querySelector('.about-list').textContent")), await probe("document.querySelector('.about-list')?.textContent"));
+    ok("the About panel carries the app's own version", new RegExp("v" + require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "src-tauri", "Cargo.toml"), "utf8").match(/^version\s*=\s*"([^"]+)"/m)[1].replace(/\./g, "\\.")).test(await probe("document.querySelector('.about-list').textContent")), await probe("document.querySelector('.about-list')?.textContent"));
     const resetRow = await probe("p.resetShortcutRow()");
     ok("the shortcut reset is on one line in the existing style", resetRow && resetRow.sameLine && resetRow.ghost, JSON.stringify(resetRow));
     ok("the shortcut reset sits in the last shortcut group, not a group of its own", resetRow && resetRow.lastShortcutsGroup && resetRow.noLoneButton, JSON.stringify(resetRow));
@@ -987,6 +988,8 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await waitFor("!document.querySelector('.options-sheet')");
     await press("p");
     ok("the rebound key opens Options from the library", (await waitFor("document.querySelector('.options-sheet') !== null")) === true);
+    ok("Options shows a decisions donut", (await waitFor("document.querySelector('.options-sheet .donut-seg') !== null")) === true);
+    ok("the donut states its total", (await probe("document.querySelector('.options-sheet .donut-mid b')?.textContent || ''")) !== "");
     await probe("p.clickResetShortcuts()");
     await waitFor("!document.querySelector('.options-sheet')");
     await press(",", CTRL);

@@ -566,9 +566,8 @@ kbd {
      into it in the light theme. */
   box-shadow: inset 0 0 0 1px var(--line-2);
   overflow: hidden;
-  gap: 2px;
 }
-.segbar.lg { height: 10px; gap: 3px; }
+.segbar.lg { height: 10px; }
 /* The month bars are 6px, where an 8px stripe period flattens into grey. Same
    meaning as the big bar, finer period so it actually reads. */
 .segbar:not(.lg) {
@@ -576,6 +575,9 @@ kbd {
 }
 .seg { display: block; height: 100%; min-width: 3px; transition: width .4s var(--ease-out); }
 .seg:first-child { border-radius: 999px 0 0 999px; }
+/* No flex gap: it showed the striped track between the colours. A hairline of
+   the surface colour separates them instead. */
+.seg + .seg { box-shadow: inset 1px 0 0 var(--surface); }
 .seg-kept { background: var(--seg-kept); }
 .seg-staged { background: var(--seg-staged); }
 .seg-deleted { background: var(--seg-deleted); }
@@ -1572,13 +1574,25 @@ body.ready #splash { opacity: 0; visibility: hidden; }
 .about-list dt { color: var(--muted); }
 .about-list dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .about-note { margin: 0; font-size: 12.5px; color: var(--muted); }
-.stats-container { display: grid; gap: 14px; }
-.stats-group { display: grid; gap: 8px; }
+.stats-container { display: grid; gap: 12px; }
+.stats-group { display: grid; gap: 10px; padding: 12px 14px; background: var(--surface-2); border: 1px solid var(--line-2); border-radius: var(--radius); }
 .stats-header { display: flex; justify-content: space-between; align-items: center; }
-.stats-header h4 { margin: 0; font-size: 13px; font-weight: 600; }
-.stats-list { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; font-size: 13px; }
+.stats-header h4 { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.stats-list { margin: 0; display: grid; grid-template-columns: 1fr auto; gap: 6px 14px; font-size: 13px; }
 .stats-list dt { color: var(--muted); }
-.stats-list dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 500; overflow-wrap: anywhere; }
+.stats-list dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; color: var(--text); }
+.donut { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.donut-fig { position: relative; width: 112px; height: 112px; flex: none; }
+.donut-ring { width: 100%; height: 100%; transform: rotate(-90deg); }
+.donut-ring circle { fill: none; stroke-width: 11; }
+.donut-track { stroke: var(--track-line); opacity: .5; }
+.donut-seg.seg-kept { stroke: var(--seg-kept); background: none; }
+.donut-seg.seg-staged { stroke: var(--seg-staged); background: none; }
+.donut-seg.seg-skipped { stroke: var(--seg-skipped); background: none; }
+.donut-mid { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; }
+.donut-mid b { font-size: 20px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.donut-mid small { font-size: 11px; color: var(--muted); }
+.donut-legend { flex-direction: column; gap: 6px; }
 .commit-progress { display: grid; gap: 12px; }
 .progress-stat { font-size: 13px; color: var(--text-2); }
 .progress-file { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

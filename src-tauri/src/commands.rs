@@ -1089,18 +1089,24 @@ pub fn get_counters(state: State<'_, AppState>) -> Result<Vec<CounterGroup>, Str
         });
     }
 
-    // Session counters
-    let session_counters: Vec<_> = all
-        .iter()
-        .filter(|(k, _)| k.starts_with("session:"))
-        .map(|(k, v)| (k.strip_prefix("session:").unwrap_or("").to_string(), *v))
-        .collect();
-    if !session_counters.is_empty() {
-        groups.push(CounterGroup {
-            name: "session".to_string(),
-            label: "Session".to_string(),
-            counters: session_counters,
-        });
+    // The remaining groups share one shape: a prefix, a group id and a label.
+    for (prefix, name, label) in [
+        ("swipe:", "swipe", "Swipes"),
+        ("review:", "review", "Review"),
+        ("session:", "session", "Session"),
+    ] {
+        let counters: Vec<_> = all
+            .iter()
+            .filter(|(k, _)| k.starts_with(prefix))
+            .map(|(k, v)| (k.strip_prefix(prefix).unwrap_or("").to_string(), *v))
+            .collect();
+        if !counters.is_empty() {
+            groups.push(CounterGroup {
+                name: name.to_string(),
+                label: label.to_string(),
+                counters,
+            });
+        }
     }
 
     Ok(groups)

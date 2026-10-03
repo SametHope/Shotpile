@@ -311,7 +311,7 @@ detail, including what still needs checking by hand on Windows.
 
 After that:
 
-- A small infographic window for the local statistics.
+- More statistics (longest streak, folders added); the Options section now has a decisions donut.
 
 Done in this pass: the Delete/Skip/Keep row can be collapsed (the chevron in the
 review header), giving the filmstrip that height, and the review is wider so the
