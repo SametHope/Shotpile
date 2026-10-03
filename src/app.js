@@ -2477,7 +2477,7 @@ function showOptions() {
           h("div", { class: "opt-label" }, "Theme", h("small", { text: "System follows the operating system" })),
           h("div", { class: "segmented", role: "group", "aria-label": "Theme" }, themeButtons)),
         h("div", { class: "opt-row" },
-          h("div", { class: "opt-label" }, "Zoom", h("small", { text: "Ctrl and + or −, or Ctrl and the mouse wheel" })),
+          h("div", { class: "opt-label" }, "App zoom", h("small", { text: "Ctrl and + − 0, or Ctrl and the mouse wheel. Fixed keys; the card zoom below is separate" })),
           h("button", { class: "btn sm icon", "aria-label": "Zoom out", title: "Zoom out (Ctrl and −)", onclick: () => zoomApp(-1) }, icon("zoom-out", { size: 15 })),
           h("span", { class: "zoom-value", text: `${Math.round(current.zoom * 100)}%` }),
           h("button", { class: "btn sm icon", "aria-label": "Zoom in", title: "Zoom in (Ctrl and +)", onclick: () => zoomApp(1) }, icon("zoom-in", { size: 15 })),
