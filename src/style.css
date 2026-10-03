@@ -965,6 +965,7 @@ kbd {
   content: "";
   position: absolute;
   inset: 0;
+  z-index: -1; /* behind the bar's own text, or it blurs the text it sits under */
   pointer-events: none;
   backdrop-filter: saturate(115%) blur(2px);
   -webkit-backdrop-filter: saturate(115%) blur(2px);
