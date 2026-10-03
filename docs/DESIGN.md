@@ -365,3 +365,23 @@ one dedicated pass, with the GUI suite and the screenshots regenerated.
     this; keep it that way or raise the menu.
 20. The Options "Settings" rows mix `h("small")` captions (`.opt-label small`)
     with `.muted` paragraphs for the same kind of help text.
+
+**Maintainer notes (raised after the 1.9.0 pass, nothing started)**
+
+These are requests, not diagnoses. No approach has been decided and none of
+them has been worked on.
+
+21. Statistics does not belong inside Options. It should be its own modal,
+    opened from the header.
+22. About should leave Options the same way: its own modal, opened from the
+    header.
+23. Both need to stay easy to reach from Options, the way the Keyboard
+    shortcuts sheet already is from the button in the "Your data" group.
+24. Some keybinds are exposed on neither the shortcuts modal nor the Options
+    rebind area. Which ones is not recorded here.
+25. The hover tooltips do not sit right against the theme in use, and they only
+    ever appear on the controls they describe. Labels should be able to explain
+    themselves too.
+26. **Open question, to discuss rather than decide:** whether the shortcuts
+    help window should exist at all, on the grounds that every shortcut could
+    be listed in Options next to what it does.

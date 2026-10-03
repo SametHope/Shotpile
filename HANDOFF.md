@@ -46,6 +46,12 @@ the code, not confirmed. Status as of the last session:
   documenting the conventions (plus two small bugs: the shortcuts-reset toast
   passes `duration` instead of `ms`, and `.shortcut-key.conflict` uses an
   undefined `--error` token). Nothing was changed in the docs pass.
+- **Open: requests from the maintainer.** `docs/DESIGN.md` section 12 ends with
+  a short list of UI notes (Statistics and About out of Options and into their
+  own header-opened modals, both still reachable from Options, some keybinds
+  exposed on neither shortcuts surface, tooltip theming and label tooltips, and
+  an open question about whether the shortcuts help window should exist).
+  Requests only, no approach decided, nothing started.
 - 1.8.0 also: the library's Filter became a *View* dialog (sort by date, size or
   left to sort, reversible, plus show/hide sorted months; `sortMonths` in
   logic.js); the hidden-months note is gone; Options statistics are one card
