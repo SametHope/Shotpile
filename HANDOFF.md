@@ -16,10 +16,13 @@ unverified* until someone has run them in a real build.
 Nothing here was root-caused with a debugger; the "likely cause" lines are reading
 the code, not confirmed. Status as of the last session:
 
-- **Fixed in code, still needs a manual pass on the target OS:** A1 (rebinding),
-  A2 (missing command registrations), A3 (file manager), A4 (clipboard),
-  A5 (filmstrip), A6 (unstyled filename filter), plus the GUI suite's
-  dependence on the host OS colour scheme.
+- **Fixed.** A3 (show in file manager), A4 (copy image) and F11 were
+  **confirmed working on a real Windows build** by the maintainer (checked
+  after 1.7.0). A1 (rebinding), A2 (command registrations), A5 (filmstrip) and
+  A6 (filename filter, since removed) are fixed in code and covered by the
+  suites; nobody has reported them broken since, but they have not been
+  explicitly re-confirmed by hand. The GUI suite's dependence on the host OS
+  colour scheme is fixed too.
 - **Open:** A7 (the rest of the thin coverage).
 
 ### Later follow-ups from a real Windows run (this session)
@@ -66,18 +69,17 @@ the code, not confirmed. Status as of the last session:
    letting `Command::arg` quote the whole `/select,...` token — explorer parses
    its own command line and answering a quoted token with Documents is the
    documented failure. Forward slashes are normalised first. The argument string
-   is unit tested; the spawn still needs a glance on Windows (see the manual
-   list in the reply).
-4. **"Copy image" was wrong on Windows.** *Fixed, unverified:* the PowerShell
+   is unit tested, and the spawn is confirmed on a real Windows build.
+4. **"Copy image" was wrong on Windows.** *Fixed, confirmed on Windows:* the PowerShell
    spawn and the `pbcopy`/`xclip` branches are gone. `copy_image` decodes the file
    with the `image` crate (guessing the format, so a `.jfif` works) and puts a
    bitmap on the clipboard with `arboard`: `CF_DIB`/`CF_BITMAP` on Windows, an
    `NSImage` on macOS, `image/png` on Linux. That removes the console flash and
    is what Discord and WhatsApp accept. Both crates are `MIT OR Apache-2.0`,
    already inside `about.toml`; the resolved license expressions were checked
-   against the allowlist. Decoding is unit tested. **It still has to be pasted
-   into a real app** — neither headless Chromium nor the Rust tests can prove the
-   clipboard. AVIF cannot be decoded (the `avif` feature is deliberately off), so
+   against the allowlist. Decoding is unit tested. Pasting into a real app
+   was confirmed by hand on Windows (headless Chromium and the Rust tests cannot
+   prove the clipboard, so macOS and Linux are still unchecked). AVIF cannot be decoded (the `avif` feature is deliberately off), so
    copying one reports an error.
 5. **Resizable filmstrip was cosmetic.** *Fixed:* the thumbnails now scale with
    `--filmstrip-height` (`.film-item` height/width derive from it, keeping the
@@ -198,7 +200,7 @@ hand on Windows. Do not mark one done on the strength of the fake backend.
    that surface uninitialised (black) when the window was resized and the
    library was scrolled afterwards. Both filters are gone and `#view` (the
    scroll container) now paints `var(--bg)` instead of being transparent.
-   **Needs a real Windows re-check** (maximise or F11, then scroll the grid).
+   **Needs a real Windows re-check of the scroll flash** (maximise, then scroll the grid); F11 itself is confirmed.
    Still open and explicitly out of scope for now: small black flashes while
    *moving* a non-fullscreen window.
 
@@ -238,7 +240,8 @@ unless section A says otherwise)
   (`unstage_multiple`) the original report missed.
 - Anything that touches the OS (clipboard, file manager, window background)
   cannot be proven by headless Chromium. Say "implemented, unverified" until
-  it has been run on the target platform.
+  it has been run on the target platform. Copy image, show in file manager and
+  F11 have been (Windows only); macOS and Linux have not.
 - The host OS leaked into the GUI suite: with Windows in dark mode, an
   assertion that hard-coded the light accent failed. The suite now pins
   `prefers-color-scheme: light` at the start and emulates dark only in the
