@@ -574,9 +574,6 @@ function renderLibrary() {
           : null,
         s.skipped
           ? h("button", { class: "btn", title: "Review the screenshots you skipped", onclick: () => openQueue("skipped", null, "Skipped") }, icon("skip", { size: 16 }), "Skipped", h("span", { class: "btn-count", text: formatCount(s.skipped) }))
-          : null,
-        s.total > 0
-          ? h("button", { class: "btn", title: "Find duplicate files to review and remove", onclick: showDuplicates }, icon("copy", { size: 16 }), "Find duplicates")
           : null)),
     segbar(s, "lg"),
     legend({ ...s, pending }, ["kept", "staged", "deleted", "skipped", "pending"]));
@@ -2251,67 +2248,6 @@ function showFilters() {
         h("div", { class: "segmented", role: "group", "aria-label": "Sorted months" }, buttons))),
     actions: [{ label: "Close" }],
   });
-}
-
-async function showDuplicates() {
-  if (!state.rootId) {
-    toast("No folder selected", { tone: "error" });
-    return;
-  }
-  log.info("duplicates", "finding duplicates in folder");
-  try {
-    const groups = await api("find_duplicates", { rootId: state.rootId });
-    if (groups.length === 0) {
-      toast("No duplicate files found", { duration: 3000 });
-      return;
-    }
-    const totalDupes = groups.reduce((sum, g) => sum + g.ids.length, 0);
-    const stageOne = async (id) => {
-      try {
-        const shot = await api("decide", { id, kind: "delete" });
-        state.cache.set(id, shot);
-        log.info("duplicates", `staged ${shot.name}`);
-        toast(`${shot.name} staged for deletion`, { duration: 2000 });
-        refreshCounts().catch((e) => log.warn("duplicates", `couldn't refresh counts: ${e}`));
-      } catch (e) {
-        log.error("duplicates", `failed to stage: ${e}`);
-        toast(`Couldn't stage that file: ${e}`, { tone: "error" });
-      }
-    };
-    const groupsBody = groups.map((group) => {
-      const items = group.ids.map((id) => {
-        const shot = state.cache.get(id);
-        if (!shot) return null;
-        return h("div", { class: "dupe-item" },
-          shot.viewable
-            ? h("img", { class: "dupe-thumb", src: convertFileSrc(shot.path), alt: shot.name })
-            : h("div", { class: "dupe-thumb dupe-unviewable", title: "Unviewable file" }, icon("image-off", { size: 20 })),
-          h("div", { class: "dupe-info" },
-            h("div", { class: "dupe-name", title: shot.path, text: shot.name }),
-            h("div", { class: "dupe-size", text: formatBytes(shot.size) })),
-          h("button", {
-            class: "btn sm",
-            title: "Stage this file for deletion",
-            onclick: () => stageOne(id),
-          }, "Stage for deletion"));
-      }).filter(Boolean);
-      return h("div", { class: "dupe-group" },
-        h("div", { class: "dupe-group-header" }, `${group.ids.length} files (${formatBytes(group.size * group.ids.length)} total)`),
-        h("div", { class: "dupe-list" }, ...items));
-    });
-    modal({
-      title: "Duplicate Files",
-      cls: "duplicates-modal",
-      body: h("div", { class: "duplicates-body" },
-        h("p", { class: "dupe-summary", text: `Found ${totalDupes} files in ${groups.length} duplicate group${groups.length !== 1 ? "s" : ""}. Review each group and stage the copies you want to delete.` }),
-        h("div", { class: "dupe-groups" }, ...groupsBody)),
-      actions: [{ label: "Close" }],
-    });
-    log.info("duplicates", `found ${groups.length} groups with ${totalDupes} files`);
-  } catch (e) {
-    log.error("duplicates", `failed to find duplicates: ${e}`);
-    toast(`Couldn't find duplicates: ${e}`, { tone: "error" });
-  }
 }
 
 const THEME_LABEL = { system: "System", light: "Light", dark: "Dark" };

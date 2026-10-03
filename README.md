@@ -320,8 +320,7 @@ strip holds more shots at once. The filename filter is gone, and the per-month
 progress bars now carry the same stripes as the overview bar. `Escape` leaves a
 review, `F11` goes fullscreen on Windows, and the filmstrip thumbnails show the
 whole frame instead of cropping it.
-- Possible later: a grouped undo for a whole pass and near-duplicate
-  detection (only byte-identical files are found today).
+- Possible later: a grouped undo for a whole pass.
 
 ## License
 
