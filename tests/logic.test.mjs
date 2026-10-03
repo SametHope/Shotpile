@@ -17,6 +17,7 @@ import {
   detectKeyConflict,
   getKeysForAction,
   getKeyBindings,
+  sortMonths,
   resetKeyBindings,
   setKeyBindings,
   wheelZoomFactor,
@@ -467,14 +468,29 @@ test("getKeyBindings returns defaults when no custom bindings exist", () => {
   assert.equal(bindings[" "], ACTIONS.OPEN_VIEWER.id);
 });
 
-test("getKeyBindings merges custom bindings with defaults", () => {
-  const mockPrefs = {
-    get: () => ({ keyBindings: { "ArrowLeft": ACTIONS.KEEP.id } }),
-    set: () => {},
-  };
-  const bindings = getKeyBindings(mockPrefs);
-  assert.equal(bindings.ArrowLeft, ACTIONS.KEEP.id, "custom overrides default");
-  assert.equal(bindings.ArrowRight, ACTIONS.KEEP.id, "other defaults still exist");
+test("a rebound action loses its old default key", () => {
+  // The regression: merging DEFAULT_KEYS back over the saved map restored the
+  // old key, so the Options list and the help showed the default again.
+  const moved = { ...DEFAULT_KEYS };
+  delete moved.ArrowRight;
+  moved.i = ACTIONS.KEEP.id;
+  const bindings = getKeyBindings({ get: () => ({ keyBindings: moved }), set: () => {} });
+  assert.equal(bindings.i, ACTIONS.KEEP.id);
+  assert.equal(bindings.ArrowRight, undefined, "the old key stays unbound");
+  assert.deepEqual(getKeysForAction(ACTIONS.KEEP.id, bindings), ["i"]);
+  assert.equal(bindings.ArrowLeft, ACTIONS.DELETE.id, "untouched actions keep their keys");
+});
+
+test("an action missing from a saved map falls back to its default keys", () => {
+  const bindings = getKeyBindings({ get: () => ({ keyBindings: { i: ACTIONS.KEEP.id } }), set: () => {} });
+  assert.deepEqual(getKeysForAction(ACTIONS.KEEP.id, bindings), ["i"]);
+  assert.equal(bindings.ArrowLeft, ACTIONS.DELETE.id);
+  assert.equal(bindings["?"], ACTIONS.HELP.id);
+});
+
+test("a saved key is not overwritten by a default for another action", () => {
+  const bindings = getKeyBindings({ get: () => ({ keyBindings: { ArrowLeft: ACTIONS.KEEP.id } }), set: () => {} });
+  assert.equal(bindings.ArrowLeft, ACTIONS.KEEP.id);
 });
 
 test("setKeyBindings saves to prefs", () => {
@@ -526,3 +542,33 @@ test("filmItemsPerSide fits the window to the strip width", () => {
   assert.equal(filmItemsPerSide(0, 60, 6), 0);
 });
 
+
+const MONTHS = [
+  { month: "2026-01", total: 10, remaining: 10 },
+  { month: "2026-02", total: 50, remaining: 0 },
+  { month: "2026-03", total: 30, remaining: 20 },
+  { month: "2026-04", total: 30, remaining: 5 },
+];
+const keys = (list) => list.map((m) => m.month);
+
+test("sortMonths by date: newest first by default, reversible", () => {
+  assert.deepEqual(keys(sortMonths(MONTHS)), ["2026-04", "2026-03", "2026-02", "2026-01"]);
+  assert.deepEqual(keys(sortMonths(MONTHS, "date", "asc")), ["2026-01", "2026-02", "2026-03", "2026-04"]);
+});
+
+test("sortMonths by size orders by screenshots, ties by month in the same direction", () => {
+  assert.deepEqual(keys(sortMonths(MONTHS, "count", "desc")), ["2026-02", "2026-04", "2026-03", "2026-01"]);
+  assert.deepEqual(keys(sortMonths(MONTHS, "count", "asc")), ["2026-01", "2026-03", "2026-04", "2026-02"]);
+});
+
+test("sortMonths by what is left orders by remaining", () => {
+  assert.deepEqual(keys(sortMonths(MONTHS, "left", "desc")), ["2026-03", "2026-01", "2026-04", "2026-02"]);
+  assert.deepEqual(keys(sortMonths(MONTHS, "left", "asc")), ["2026-02", "2026-04", "2026-01", "2026-03"]);
+});
+
+test("sortMonths copies its input and tolerates nothing", () => {
+  const input = [...MONTHS];
+  sortMonths(input, "count", "asc");
+  assert.deepEqual(input, MONTHS);
+  assert.deepEqual(sortMonths(null), []);
+});

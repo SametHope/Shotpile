@@ -547,7 +547,16 @@ export const DEFAULT_KEYS = {
 export function getKeyBindings(prefs) {
   if (!prefs) return DEFAULT_KEYS;
   const saved = prefs.get().keyBindings;
-  return saved ? { ...DEFAULT_KEYS, ...saved } : DEFAULT_KEYS;
+  if (!saved) return DEFAULT_KEYS;
+  // The saved map is authoritative: a default key the user moved away from
+  // must stay gone. Only actions the saved map does not mention at all (added
+  // by a later version) fall back to their default keys.
+  const known = new Set(Object.values(saved));
+  const out = { ...saved };
+  for (const [key, id] of Object.entries(DEFAULT_KEYS)) {
+    if (!known.has(id) && !(key in out)) out[key] = id;
+  }
+  return out;
 }
 
 /**
@@ -597,4 +606,25 @@ export function filmItemsPerSide(room, itemWidth, gap = 6) {
   const step = itemWidth + gap;
   if (!(step > 0) || room <= itemWidth) return 0;
   return Math.max(0, Math.floor((room - itemWidth) / (2 * step)));
+}
+
+/** Month list sort keys. `date` groups by year; the others are one flat list. */
+export const MONTH_SORTS = ["date", "count", "left"];
+
+/**
+ * Sort months for the library. `key`: date (month key), count (screenshots in
+ * the month) or left (still to sort). `dir`: "desc" (newest / most first, the
+ * default) or "asc". Ties fall back to the month key in the same direction.
+ * Returns a new array.
+ */
+export function sortMonths(months, key = "date", dir = "desc") {
+  const sign = dir === "asc" ? 1 : -1;
+  const value = (m) => (key === "count" ? Number(m?.total) || 0 : key === "left" ? Number(m?.remaining) || 0 : 0);
+  const month = (m) => String(m?.month ?? "");
+  return [...(months || [])].sort((a, b) => {
+    const d = value(a) - value(b);
+    if (d) return sign * d;
+    const x = month(a), y = month(b);
+    return x < y ? sign * -1 : x > y ? sign : 0;
+  });
 }

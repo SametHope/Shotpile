@@ -11,13 +11,15 @@
   "use strict";
   var KEY = "shotpile.prefs";
   var THEMES = ["system", "light", "dark"];
-  var prefs = { theme: "system", zoom: 1, showDone: false, filmstripHeight: 52, hideActions: false };
+  var prefs = { theme: "system", zoom: 1, showDone: false, filmstripHeight: 52, hideActions: false, monthSort: "date", monthDir: "desc" };
   try {
     var saved = JSON.parse(localStorage.getItem(KEY) || "{}");
     if (THEMES.indexOf(saved.theme) !== -1) prefs.theme = saved.theme;
     if (typeof saved.zoom === "number" && saved.zoom >= 0.5 && saved.zoom <= 2) prefs.zoom = saved.zoom;
     if (typeof saved.showDone === "boolean") prefs.showDone = saved.showDone;
     if (typeof saved.filmstripHeight === "number" && saved.filmstripHeight >= 40 && saved.filmstripHeight <= 300) prefs.filmstripHeight = saved.filmstripHeight;
+    if (["date", "count", "left"].indexOf(saved.monthSort) !== -1) prefs.monthSort = saved.monthSort;
+    if (saved.monthDir === "asc" || saved.monthDir === "desc") prefs.monthDir = saved.monthDir;
     if (typeof saved.hideActions === "boolean") prefs.hideActions = saved.hideActions;
     if (typeof saved.keyBindings === "object" && saved.keyBindings !== null) prefs.keyBindings = saved.keyBindings;
   } catch (e) {
@@ -35,7 +37,7 @@
   window.shotpilePrefs = {
     THEMES: THEMES,
     get: function () {
-      var result = { theme: prefs.theme, zoom: prefs.zoom, showDone: prefs.showDone, filmstripHeight: prefs.filmstripHeight, hideActions: prefs.hideActions };
+      var result = { theme: prefs.theme, zoom: prefs.zoom, showDone: prefs.showDone, filmstripHeight: prefs.filmstripHeight, hideActions: prefs.hideActions, monthSort: prefs.monthSort, monthDir: prefs.monthDir };
       if (prefs.keyBindings) result.keyBindings = prefs.keyBindings;
       return result;
     },
@@ -44,6 +46,8 @@
       if (typeof patch.zoom === "number") prefs.zoom = Math.min(2, Math.max(0.5, Math.round(patch.zoom * 100) / 100));
       if (typeof patch.showDone === "boolean") prefs.showDone = patch.showDone;
       if (typeof patch.filmstripHeight === "number") prefs.filmstripHeight = Math.min(300, Math.max(40, Math.round(patch.filmstripHeight)));
+      if (["date", "count", "left"].indexOf(patch.monthSort) !== -1) prefs.monthSort = patch.monthSort;
+      if (patch.monthDir === "asc" || patch.monthDir === "desc") prefs.monthDir = patch.monthDir;
       if (typeof patch.hideActions === "boolean") prefs.hideActions = patch.hideActions;
       if (patch.keyBindings !== undefined) {
         if (patch.keyBindings === null || (typeof patch.keyBindings === "object" && Object.keys(patch.keyBindings).length === 0)) {

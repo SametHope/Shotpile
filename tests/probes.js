@@ -433,7 +433,8 @@
         // The last shortcut group carries it, and the group still heads
         // with a title rather than being the reset itself.
         lastShortcutsGroup: !!(section && section.querySelector("h3") && !/reset/i.test(section.querySelector("h3").textContent)),
-        noLoneButton: !sections.some((s) => !s.querySelector(".opt-row") && [...s.querySelectorAll(".btn")].length === 1),
+        // A section that is nothing but a title and one button.
+        noLoneButton: !sections.some((s) => !s.querySelector(".opt-row") && [...s.querySelectorAll(".btn")].length === 1 && s.textContent.replace(s.querySelector("h3")?.textContent || "", "").trim() === s.querySelector(".btn").textContent.trim()),
       };
     },
     clickResetShortcuts: () => {
