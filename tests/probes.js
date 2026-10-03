@@ -564,6 +564,34 @@
     const btn = $$(`.shortcut-row[data-action="${actionId}"] .shortcut-key`)[0];
     return btn ? Math.round(btn.getBoundingClientRect().height) : null;
   },
+  // Check that all buttons without visible text have both title and aria-label
+  checkTooltips: () => {
+    const buttons = $$("button");
+    const issues = [];
+    for (const btn of buttons) {
+      // Skip buttons with visible text (including text nodes and icon labels)
+      const text = btn.textContent?.trim() || "";
+      if (text) continue;
+
+      // This is an icon-only button - check for title and aria-label
+      const hasTitle = btn.hasAttribute("title") && btn.getAttribute("title")?.trim();
+      const hasAriaLabel = btn.hasAttribute("aria-label") && btn.getAttribute("aria-label")?.trim();
+
+      if (!hasTitle || !hasAriaLabel) {
+        const id = btn.id || `[class="${btn.className}"]`;
+        issues.push({
+          element: id,
+          hasTitle,
+          hasAriaLabel,
+        });
+      }
+    }
+    return {
+      total: buttons.length,
+      iconOnlyCount: buttons.filter(b => !b.textContent?.trim()).length,
+      issues,
+    };
+  },
 
   };
 })();
