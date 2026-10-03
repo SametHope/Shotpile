@@ -91,6 +91,16 @@ const el = {
 /** Theme and zoom, owned by boot.js (it applies them before the first paint). */
 const prefs = window.shotpilePrefs;
 
+/**
+ * Returns the key binding for an action, for use in tooltips.
+ * Returns "" if the action has no binding or if the binding is the default Ctrl+,.
+ */
+function hintKey(actionId) {
+  if (actionId === ACTIONS.OPEN_OPTIONS.id) return ""; // Ctrl+, cannot be represented in the keybinding map
+  const keys = getKeysForAction(actionId, getKeyBindings(prefs));
+  return keys.length > 0 ? keys[0] : "";
+}
+
 const state = {
   view: "loading", // loading | setup | scanning | months | review | staged
   info: null,
@@ -466,7 +476,7 @@ function renderSetup() {
     h("h1", { text: "Sort a pile of screenshots in minutes" }),
     h("p", { class: "onboard-lead", text: "Point it at the folder your screenshots pile up in. They get grouped by month and dealt out one at a time." }),
     gestureLegend(),
-    h("button", { class: "btn primary lg", onclick: addFolder }, icon("folder-plus"), "Choose a folder"),
+    h("button", { class: "btn primary lg", title: "Open a folder picker to find your screenshots", onclick: addFolder }, icon("folder-plus"), "Choose a folder"),
     h("p", { class: "onboard-fine", text: `Everything stays on this computer. A swipe only marks a file; nothing leaves the disk until you confirm, and then it goes to the ${binName()}.` })
   );
   el.view.replaceChildren(h("div", { class: "page narrow" }, hero));
@@ -564,8 +574,8 @@ function renderLibrary() {
       h("h2", { text: "No screenshots in this folder" }),
       h("p", { text: "Image files in it and in its subfolders show up here after a scan." }),
       h("div", { class: "row center" },
-        h("button", { class: "btn primary", onclick: rescan }, icon("refresh", { size: 16 }), "Scan again"),
-        h("button", { class: "btn", onclick: addFolder }, icon("folder-plus", { size: 16 }), "Choose another folder")))));
+        h("button", { class: "btn primary", title: "Look for new screenshots in this folder", onclick: rescan }, icon("refresh", { size: 16 }), "Scan again"),
+        h("button", { class: "btn", title: "Pick a different folder", onclick: addFolder }, icon("folder-plus", { size: 16 }), "Choose another folder")))));
     return;
   }
 
@@ -587,7 +597,7 @@ function renderLibrary() {
         h("button", { class: "btn", id: "btn-filter", title: "Choose which months show and how they are ordered", onclick: showFilters },
           icon("filter", { size: 16 }), "View"),
         pending
-          ? h("button", { class: "btn primary lg", id: "btn-sort-all", onclick: () => openQueue("unreviewed", null, "All unsorted") },
+          ? h("button", { class: "btn primary lg", id: "btn-sort-all", title: "Review all unsorted screenshots", onclick: () => openQueue("unreviewed", null, "All unsorted") },
               icon("play", { size: 16 }), decided ? "Continue sorting" : "Start sorting", h("span", { class: "btn-count", text: formatCount(pending) }))
           : null,
         pending > 1
@@ -660,6 +670,7 @@ function monthRow(m) {
     class: `month${p.done ? " is-done" : ""}`,
     dataset: { month: m.month },
     tabindex: 0,
+    title: `${parts.join(", ") || "No decisions yet"}`,
     "aria-label": `${label}: ${countOf(p.total, "screenshot")}, ${p.done ? "sorted" : `${formatCount(p.remaining)} left`}`,
     onclick: () => (p.done ? openQueue("kept", m.month, `Kept from ${label}`) : openQueue("month", m.month, label)),
   },
@@ -850,11 +861,12 @@ function reviewActions() {
     title,
     onclick: () => decide(action, { via: "button" }),
   }, icon(ico, { size: 18 }), h("span", { class: "act-label", text: label }), kbd(key));
+  const undoKey = hintKey(ACTIONS.UNDO.id);
   return h("div", { class: "actions", id: "review-actions" },
     btn(ACTION.DELETE, "act-delete", "trash", "Delete", "←", "Mark for deletion (←)"),
     state.scope?.scope === "staged" ? null : btn(ACTION.SKIP, "act-skip", "skip", "Skip", "↑", "Skip for now; it comes back once at the end (↑)"),
     btn(ACTION.KEEP, "act-keep", "check", "Keep", "→", "Keep (→)"),
-    h("button", { class: "act act-undo", title: "Undo the last decision (Z)", "aria-label": "Undo", onclick: () => undo() },
+    h("button", { class: "act act-undo", title: `Undo the last decision${undoKey ? ` (${undoKey})` : ""}`, "aria-label": "Undo", onclick: () => undo() },
       icon("undo", { size: 18 }), kbd("Z")));
 }
 
@@ -918,6 +930,7 @@ function paintFilmstrip() {
       class: `film-item${current ? " current" : ""}`,
       dataset: { status, index: String(i), id: String(ids[i]) },
       title: shot ? `${shot.name}${status !== "pending" ? ` — ${STATUS_LABEL[status] || status}` : ""}` : `#${ids[i]}`,
+      "aria-label": shot ? `${shot.name}${status !== "pending" ? ` — ${STATUS_LABEL[status] || status}` : ""}` : `Item ${i}`,
       "aria-current": current ? "true" : null,
       onclick: () => jumpTo(i),
     },
@@ -1755,14 +1768,14 @@ function renderFinale() {
       : "That's the end of this pass";
   const actions = [];
   if (next) {
-    actions.push(h("button", { class: "btn primary lg", id: "fin-next", onclick: () => openQueue("month", next, monthLabel(next)) },
+    actions.push(h("button", { class: "btn primary lg", id: "fin-next", title: `Review the ${monthLabel(next)} screenshots`, onclick: () => openQueue("month", next, monthLabel(next)) },
       `Next: ${monthLabel(next)}`, icon("chevron-right", { size: 16 })));
   }
   if (staged && !reviewedPile) {
-    actions.push(h("button", { class: `btn ${next ? "" : "primary lg"}`.trim(), onclick: openStaged },
+    actions.push(h("button", { class: `btn ${next ? "" : "primary lg"}`.trim(), title: `Review the ${countOf(staged, "file")} marked for deletion`, onclick: openStaged },
       icon("trash", { size: 16 }), `Review ${countOf(staged, "file")} to delete`));
   }
-  actions.push(h("button", { class: `btn${actions.length ? "" : " primary lg"}`, id: "fin-back", onclick: leaveReview },
+  actions.push(h("button", { class: `btn${actions.length ? "" : " primary lg"}`, id: "fin-back", title: reviewedPile ? "Return to the deletion pile" : "Return to the library", onclick: leaveReview },
     reviewedPile ? "Back to the pile" : "Back to the library"));
 
   el.view.replaceChildren(h("div", { class: "page narrow" },
@@ -1805,7 +1818,7 @@ async function renderStaged() {
       h("div", { class: "empty-glyph ok" }, icon("check", { size: 26 })),
       h("h2", { text: "Nothing marked for deletion" }),
       h("p", { text: `Swipe a card left, or press ←, to put it here. Files stay on disk until you move them to the ${binName()} from this page.` }),
-      h("button", { class: "btn primary", onclick: backToMonths }, "Back to the library"))));
+      h("button", { class: "btn primary", title: "Return to the library", onclick: backToMonths }, "Back to the library"))));
     return;
   }
 
@@ -1820,7 +1833,7 @@ async function renderStaged() {
           icon("play", { size: 16 }), "Check one by one"),
         h("button", { class: "btn", title: "Take all of them off the pile at once", onclick: () => restoreAll(rows) },
           icon("undo", { size: 16 }), "Restore all"),
-        h("button", { class: "btn danger solid", id: "btn-pile-commit", onclick: commit },
+        h("button", { class: "btn danger solid", id: "btn-pile-commit", title: `Move the marked screenshots to the ${binName()}`, onclick: commit },
           icon("trash", { size: 16 }), `Move to ${binName()}`))),
     h("div", { class: "pile-grid", role: "list" }));
   el.view.replaceChildren(page);
@@ -1857,7 +1870,7 @@ function thumb(shot) {
 
 function pileTile(shot) {
   return h("figure", { class: "tile", role: "listitem", dataset: { id: String(shot.id) } },
-    h("button", { class: "tile-photo", title: `Open ${shot.name}`, onclick: () => openShotViewer(shot) }, thumb(shot)),
+    h("button", { class: "tile-photo", title: `Open ${shot.name}`, "aria-label": `Open ${shot.name}`, onclick: () => openShotViewer(shot) }, thumb(shot)),
     h("figcaption", {},
       h("span", { class: "tile-name", text: shot.name, title: shot.name }),
       h("span", { class: "tile-meta", text: `${formatBytes(shot.size)} · ${formatDateTime(shot.taken_ms).slice(0, 10)}` })),

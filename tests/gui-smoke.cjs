@@ -154,6 +154,10 @@ const CTRL_SHIFT = CTRL | SHIFT;
     const dnum = (delColor.match(/\d+/g) || []).map(Number);
     ok("the deleted segment is red", dnum[0] > 120 && dnum[1] < 110 && dnum[2] < 110, delColor);
 
+    // ---- tooltips in library view ----
+    const libTooltips = await probe("p.checkTooltips()");
+    ok("all icon-only buttons in the library have tooltips", libTooltips.issues.length === 0, JSON.stringify(libTooltips.issues));
+
     // ---- open the September queue ----
     await probe("p.clickMonth('2026-09')");
     await waitFor("p.hasCard()");
@@ -176,6 +180,11 @@ const CTRL_SHIFT = CTRL | SHIFT;
     // screen reader as controls.
     const filmRoles = `${await probe("p.attr('#filmstrip', 'role')")} / ${await probe("p.attr('.film-item', 'role')")}`;
     ok("the filmstrip is a group of plain buttons", filmRoles === "group / null", filmRoles);
+
+    // ---- tooltips in review view ----
+    const reviewTooltips = await probe("p.checkTooltips()");
+    ok("all icon-only buttons in the review have tooltips", reviewTooltips.issues.length === 0, JSON.stringify(reviewTooltips.issues));
+
     // Collapsed is not enough: an invisible "Move to Recycle Bin" must not be
     // reachable with Tab and Enter.
     ok("the collapsed footer bar is out of the tab order", (await waitFor("p.visibility('#footbar') === 'hidden'", 800)) === true, String(await probe("p.visibility('#footbar')")));
@@ -637,6 +646,10 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await probe("p.clickStagedBtn()");
     await waitFor("p.pileNames().length === 2");
     ok("the pile shows every staged file", (await probe("p.pileNames().length")) === 2, JSON.stringify(await probe("p.pileNames()")));
+
+    // ---- tooltips in pile view ----
+    const pileTooltips = await probe("p.checkTooltips()");
+    ok("all icon-only buttons in the pile have tooltips", pileTooltips.issues.length === 0, JSON.stringify(pileTooltips.issues));
     await js("p.clickPutBack(0);");
     await waitFor("p.pileNames().length === 1");
     ok("put back returns a file to the unsorted pile", (await status(stageA)) === "pending", await status(stageA));
@@ -949,6 +962,10 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await press(",", CTRL);
     ok("Ctrl+, opens the options", (await waitFor("document.querySelector('.options-sheet') !== null")) === true);
     ok("the options show the versions", /2\.11\.6/.test(await probe("document.querySelector('.about-list').textContent")), await probe("document.querySelector('.about-list')?.textContent"));
+
+    // ---- tooltips in options view ----
+    const optionsTooltips = await probe("p.checkTooltips()");
+    ok("all icon-only buttons in the options have tooltips", optionsTooltips.issues.length === 0, JSON.stringify(optionsTooltips.issues));
     // The app's version has one source: Cargo.toml, read by the Rust
     // build and handed to the fake backend by tests/serve.cjs. It used
     // to be hardcoded "1.0.0" here.
