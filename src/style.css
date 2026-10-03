@@ -959,9 +959,6 @@ kbd {
   opacity: .9;
   transition: opacity .15s ease;
   pointer-events: none;
-  mask-image: radial-gradient(100% 50% at 0% 100%, #000, #000 40%, transparent 70%),
-              radial-gradient(100% 50% at 100% 100%, #000, #000 40%, transparent 70%);
-  mask-composite: add;
 }
 
 .card .foot::before {
@@ -971,9 +968,8 @@ kbd {
   pointer-events: none;
   backdrop-filter: saturate(115%) blur(2px);
   -webkit-backdrop-filter: saturate(115%) blur(2px);
-  mask-image: radial-gradient(100% 50% at 0% 100%, #000, #000 40%, transparent 70%),
-              radial-gradient(100% 50% at 100% 100%, #000, #000 40%, transparent 70%);
-  mask-composite: add;
+  mask-image: linear-gradient(to top, #000 45%, transparent);
+  -webkit-mask-image: linear-gradient(to top, #000 45%, transparent);
 }
 .card:hover .foot,
 .card.dragging .foot,
@@ -1368,7 +1364,8 @@ kbd {
   border-bottom: 1px solid var(--line-soft);
 }
 .keys-row:last-child { border-bottom: 0; }
-.keys { display: flex; gap: 4px; flex-wrap: wrap; }
+.keys { display: flex; gap: 4px 10px; flex-wrap: wrap; }
+.chord { display: inline-flex; gap: 3px; }
 .keys kbd { font-size: 12px; padding: 1px 7px; color: var(--text-2); }
 
 /* ---------- popover menu ---------- */
@@ -1600,7 +1597,7 @@ body.ready #splash { opacity: 0; visibility: hidden; }
 .shortcuts-list { display: grid; gap: 6px; }
 .shortcut-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; background: var(--surface-2); border-radius: 6px; font-size: 13px; }
 .shortcut-label { flex: 1; }
-.shortcut-key { min-width: 80px; text-align: center; font-family: var(--font-mono); font-weight: 600; }
+.shortcut-key { min-width: 80px; min-height: 30px; text-align: center; font-family: var(--font-mono); font-weight: 600; }
 .shortcut-key.waiting { opacity: 0.6; animation: pulse 1s infinite; }
 .shortcut-key.conflict { background: var(--error, #d32f2f) !important; color: white !important; }
 @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
