@@ -59,6 +59,8 @@ platform; releases also ship macOS and Linux builds.
 
 ## Layout
 
+`docs/DESIGN.md` is the UI/UX reference (tokens, components, copy, motion).
+
 ```
 src/boot.js      classic <head> script: theme + zoom prefs before first paint
 src/logic.js     pure, DOM-free, unit tested in tests/logic.test.mjs
@@ -365,4 +367,9 @@ library (`seedDemo()` in the fake), which is also what the README pictures show.
 - **Tooltips are `title` attributes**, rendered by `initTooltips()` (dom.js).
   Do not style or build a second tooltip; icon-only buttons need a title and
   an aria-label.
+- **UI conventions live in `docs/DESIGN.md`**: tokens, components, copy,
+  spacing, motion, the do/don't table and a checklist. Read it before any UI
+  change and update it in the same change when a convention moves. Its last
+  section lists known inconsistencies (a future cleanup pass); do not fix them
+  as a drive-by.
 - Keep diffs minimal. No drive-by refactors.
