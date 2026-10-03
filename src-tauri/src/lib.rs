@@ -1,6 +1,5 @@
 mod commands;
 mod db;
-mod dupes;
 mod log;
 mod scan;
 mod undo;
@@ -78,14 +77,6 @@ pub fn commit_deletes_for_tests(
     let rows = db.staged_rows(None)?;
     let outcome = commands::trash_staged(rows);
     commands::apply_commit(db, undo, None, outcome)
-}
-
-#[doc(hidden)]
-pub fn find_duplicates_for_tests(
-    db: &Db,
-    root_id: i64,
-) -> Result<Vec<dupes::DuplicateGroup>, String> {
-    dupes::find_duplicates(db, root_id)
 }
 
 /// The data folder and database name before the app was renamed to Shotpile.
@@ -352,7 +343,6 @@ pub fn run() {
             commands::unstage_multiple,
             commands::staged_list,
             commands::commit_deletes,
-            commands::find_duplicates,
             commands::copy_image,
             commands::get_counters,
             commands::reset_counters,

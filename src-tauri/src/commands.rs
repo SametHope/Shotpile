@@ -1046,15 +1046,6 @@ pub async fn commit_deletes(
 }
 
 #[tauri::command]
-pub fn find_duplicates(
-    state: State<'_, AppState>,
-    root_id: i64,
-) -> Result<Vec<crate::dupes::DuplicateGroup>, String> {
-    let db = lock(&state.db);
-    crate::dupes::find_duplicates(&db, root_id)
-}
-
-#[tauri::command]
 pub fn get_counters(state: State<'_, AppState>) -> Result<Vec<CounterGroup>, String> {
     let db = lock(&state.db);
     let all = db.get_all_counters()?;

@@ -95,7 +95,7 @@ the code, not confirmed. Status as of the last session:
  7. **Test coverage of the 1.3/1.4 features is thin.** *Partly fixed:* command
     registration, the filmstrip resizing and global rebinding are now covered.
     Still thin: library keyboard navigation, batched grids, "Restore
-    all", the duplicates dialog, the progress modal and the statistics section.
+    all", the progress modal and the statistics section.
 
    A3/A4 have unit tests only for what can be tested off-device (the explorer
    argument, the image decode), which is the honest ceiling for OS-level work.
@@ -135,8 +135,7 @@ hand on Windows. Do not mark one done on the strength of the fake backend.
      nothing leaves the machine.
    - Rust tests for the swipe-direction counters (the 80 px threshold in
      `apply_decision`).
-   - Possible later: a grouped undo for a whole pass, near-duplicate
-     detection (today only byte-identical files).
+   - Possible later: a grouped undo for a whole pass.
    - Requested on a real run, all four now implemented (see AGENTS.md, *Review
      view*, for the mechanics):
      - A toggle to hide the Delete/Skip/Keep row (it sits between the card deck
@@ -228,8 +227,6 @@ unless section A says otherwise)
   in the pile (`unstage_multiple`),
   Linux file selection through the FileManager1 DBus call with an `xdg-open`
   fallback.
-- Exact duplicate detection (`dupes.rs`: size, hash, then a byte compare;
-  staging only, never deletes).
 
 ## D. Lessons for the next session
 
