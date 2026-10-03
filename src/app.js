@@ -34,6 +34,7 @@ import {
   getKeysForAction,
   gestureVisual,
   groupByYear,
+  sortMonths,
   monthLabel,
   nextMonthWithWork,
   panLimit,
@@ -349,6 +350,26 @@ function preload() {
   if (next.length) hydrate(next).catch(() => {});
 }
 
+// Time spent in the app: counted while the window is visible, flushed every
+// minute and whenever it is hidden or closed, so a crash loses under a minute.
+let appClockFrom = 0;
+function flushAppClock() {
+  if (!appClockFrom) return;
+  const seconds = Math.floor((Date.now() - appClockFrom) / 1000);
+  if (seconds < 1) return;
+  appClockFrom += seconds * 1000;
+  api("incr_counter", { name: "session:app_seconds", amount: seconds }).catch((e) => log.warn("stats", `couldn't record app time: ${e}`));
+}
+function startAppClock() {
+  const visible = () => document.visibilityState !== "hidden";
+  appClockFrom = visible() ? Date.now() : 0;
+  document.addEventListener("visibilitychange", () => {
+    if (visible()) { appClockFrom = appClockFrom || Date.now(); } else { flushAppClock(); appClockFrom = 0; }
+  });
+  window.addEventListener("pagehide", flushAppClock);
+  setInterval(flushAppClock, 60000);
+}
+
 function backToMonths() {
   // Leaving a pass mid-review is fine; decisions are already saved.
   closeViewer();
@@ -563,8 +584,8 @@ function renderLibrary() {
           ? [h("b", { text: formatCount(pending) }), " left to sort", facts.length ? ` · ${facts.join(" · ")}` : ""]
           : [icon("check-circle", { size: 16, cls: "ok" }), " Everything here is sorted", facts.length ? ` · ${facts.join(" · ")}` : ""])),
       h("div", { class: "overview-actions" },
-        h("button", { class: "btn", id: "btn-filter", title: "Filter the month list", onclick: showFilters },
-          icon("filter", { size: 16 }), "Filter"),
+        h("button", { class: "btn", id: "btn-filter", title: "Choose which months show and how they are ordered", onclick: showFilters },
+          icon("filter", { size: 16 }), "View"),
         pending
           ? h("button", { class: "btn primary lg", id: "btn-sort-all", onclick: () => openQueue("unreviewed", null, "All unsorted") },
               icon("play", { size: 16 }), decided ? "Continue sorting" : "Start sorting", h("span", { class: "btn-count", text: formatCount(pending) }))
@@ -574,27 +595,18 @@ function renderLibrary() {
           : null,
         s.skipped
           ? h("button", { class: "btn", title: "Review the screenshots you skipped", onclick: () => openQueue("skipped", null, "Skipped") }, icon("skip", { size: 16 }), "Skipped", h("span", { class: "btn-count", text: formatCount(s.skipped) }))
-          : null,
-        s.total > 0
-          ? h("button", { class: "btn", title: "Find duplicate files to review and remove", onclick: showDuplicates }, icon("copy", { size: 16 }), "Find duplicates")
           : null)),
     segbar(s, "lg"),
     legend({ ...s, pending }, ["kept", "staged", "deleted", "skipped", "pending"]));
 
   const showDone = prefs.get().showDone;
-  const shown = showDone ? state.months : state.months.filter((m) => !progressOf(m).done);
-  const hidden = state.months.length - shown.length;
-  const hiddenNote = hidden
-    ? h("p", { class: "filter-note" },
-        `${countOf(hidden, "sorted month")} hidden. `,
-        h("button", { class: "linklike", onclick: showFilters }, "Change filter"))
-    : null;
-
-  const page = h("div", { class: "page" }, overview, hiddenNote);
+  const { monthSort, monthDir } = prefs.get();
+  const shown = sortMonths(showDone ? state.months : state.months.filter((m) => !progressOf(m).done), monthSort, monthDir);
+  const page = h("div", { class: "page" }, overview);
   el.view.replaceChildren(page);
 
   // Batch render month rows grouped by year to avoid UI freeze on large libraries
-  const years = groupByYear(shown);
+  const flat = monthSort !== "date";
   let monthIndex = 0;
   const allMonths = shown;
 
@@ -604,7 +616,7 @@ function renderLibrary() {
     const batch = allMonths.slice(monthIndex, endIndex);
 
     for (const m of batch) {
-      const year = String(m?.month ?? "").slice(0, 4) || "Undated";
+      const year = flat ? SORT_LABEL[monthSort][monthDir] : String(m?.month ?? "").slice(0, 4) || "Undated";
       let yearSection = page.querySelector(`.year:has(> h2[data-year="${year}"])`);
       if (!yearSection) {
         yearSection = h("section", { class: "year" },
@@ -628,6 +640,11 @@ function renderLibrary() {
 
   renderYearBatch();
 }
+
+const SORT_LABEL = {
+  count: { desc: "Most screenshots first", asc: "Fewest screenshots first" },
+  left: { desc: "Most left to sort first", asc: "Fewest left to sort first" },
+};
 
 function monthRow(m) {
   const p = progressOf(m);
@@ -2229,89 +2246,55 @@ async function copyImage(id) {
 /** What the library lists. Today that is whether sorted months show; more
     filters can join here. */
 function showFilters() {
-  const buttons = [[false, "Hide"], [true, "Show"]].map(([value, label]) => h("button", {
-    type: "button",
-    "aria-pressed": String(prefs.get().showDone === value),
-    dataset: { showDone: String(value) },
-    text: label,
-    title: value ? "Show months with nothing left to sort" : "Hide months with nothing left to sort",
-    onclick: (e) => {
-      prefs.set({ showDone: value });
-      log.info("filter", `sorted months ${label.toLowerCase()}`);
-      for (const b of e.currentTarget.parentElement.children) b.setAttribute("aria-pressed", String(b === e.currentTarget));
-      render();
-    },
-  }));
+  const ORDER_TEXT = {
+    date: { desc: "Newest first", asc: "Oldest first" },
+    count: { desc: "Most first", asc: "Fewest first" },
+    left: { desc: "Most first", asc: "Fewest first" },
+  };
+  const segmented = (label, items, current, onPick, dataKey) => {
+    const group = h("div", { class: "segmented", role: "group", "aria-label": label });
+    const paint = () => {
+      group.replaceChildren(...items().map(([value, text, title]) => h("button", {
+        type: "button",
+        "aria-pressed": String(current() === value),
+        dataset: { [dataKey]: String(value) },
+        text,
+        title,
+        onclick: () => { onPick(value); paintAll(); render(); },
+      })));
+    };
+    paint();
+    return { group, paint };
+  };
+  const painters = [];
+  const paintAll = () => painters.forEach((fn) => fn());
+  const make = (...args) => { const r = segmented(...args); painters.push(r.paint); return r.group; };
+  const row = (label, hint, group) => h("div", { class: "opt-row" },
+    h("div", { class: "opt-label" }, label, hint ? h("small", { text: hint }) : null), group);
+
+  const sortBy = make("Sort by", () => [
+    ["date", "Date", "Order the months by date"],
+    ["count", "Size", "Order the months by how many screenshots they hold"],
+    ["left", "Left to sort", "Order the months by how many screenshots are still unsorted"],
+  ], () => prefs.get().monthSort, (v) => { prefs.set({ monthSort: v }); log.info("view", `sort by ${v}`); }, "monthSort");
+  const order = make("Order", () => {
+    const t = ORDER_TEXT[prefs.get().monthSort];
+    return [["desc", t.desc, "Reverse the order"], ["asc", t.asc, "Reverse the order"]];
+  }, () => prefs.get().monthDir, (v) => { prefs.set({ monthDir: v }); log.info("view", `order ${v}`); }, "monthDir");
+  const done = make("Sorted months", () => [
+    [false, "Hide", "Hide months with nothing left to sort"],
+    [true, "Show", "Show months with nothing left to sort"],
+  ], () => prefs.get().showDone, (v) => { prefs.set({ showDone: v }); log.info("view", `sorted months ${v ? "shown" : "hidden"}`); }, "showDone");
+
   modal({
-    title: "Filter",
+    title: "View",
     cls: "options-sheet",
     body: h("section", { class: "opt-group" },
-      h("div", { class: "opt-row" },
-        h("div", { class: "opt-label" }, "Sorted months", h("small", { text: "Months with nothing left to sort. Their screenshots still count in the totals." })),
-        h("div", { class: "segmented", role: "group", "aria-label": "Sorted months" }, buttons))),
+      row("Sort by", "", sortBy),
+      row("Order", "", order),
+      row("Sorted months", "Months with nothing left to sort. Their screenshots still count in the totals.", done)),
     actions: [{ label: "Close" }],
   });
-}
-
-async function showDuplicates() {
-  if (!state.rootId) {
-    toast("No folder selected", { tone: "error" });
-    return;
-  }
-  log.info("duplicates", "finding duplicates in folder");
-  try {
-    const groups = await api("find_duplicates", { rootId: state.rootId });
-    if (groups.length === 0) {
-      toast("No duplicate files found", { duration: 3000 });
-      return;
-    }
-    const totalDupes = groups.reduce((sum, g) => sum + g.ids.length, 0);
-    const stageOne = async (id) => {
-      try {
-        const shot = await api("decide", { id, kind: "delete" });
-        state.cache.set(id, shot);
-        log.info("duplicates", `staged ${shot.name}`);
-        toast(`${shot.name} staged for deletion`, { duration: 2000 });
-        refreshCounts().catch((e) => log.warn("duplicates", `couldn't refresh counts: ${e}`));
-      } catch (e) {
-        log.error("duplicates", `failed to stage: ${e}`);
-        toast(`Couldn't stage that file: ${e}`, { tone: "error" });
-      }
-    };
-    const groupsBody = groups.map((group) => {
-      const items = group.ids.map((id) => {
-        const shot = state.cache.get(id);
-        if (!shot) return null;
-        return h("div", { class: "dupe-item" },
-          shot.viewable
-            ? h("img", { class: "dupe-thumb", src: convertFileSrc(shot.path), alt: shot.name })
-            : h("div", { class: "dupe-thumb dupe-unviewable", title: "Unviewable file" }, icon("image-off", { size: 20 })),
-          h("div", { class: "dupe-info" },
-            h("div", { class: "dupe-name", title: shot.path, text: shot.name }),
-            h("div", { class: "dupe-size", text: formatBytes(shot.size) })),
-          h("button", {
-            class: "btn sm",
-            title: "Stage this file for deletion",
-            onclick: () => stageOne(id),
-          }, "Stage for deletion"));
-      }).filter(Boolean);
-      return h("div", { class: "dupe-group" },
-        h("div", { class: "dupe-group-header" }, `${group.ids.length} files (${formatBytes(group.size * group.ids.length)} total)`),
-        h("div", { class: "dupe-list" }, ...items));
-    });
-    modal({
-      title: "Duplicate Files",
-      cls: "duplicates-modal",
-      body: h("div", { class: "duplicates-body" },
-        h("p", { class: "dupe-summary", text: `Found ${totalDupes} files in ${groups.length} duplicate group${groups.length !== 1 ? "s" : ""}. Review each group and stage the copies you want to delete.` }),
-        h("div", { class: "dupe-groups" }, ...groupsBody)),
-      actions: [{ label: "Close" }],
-    });
-    log.info("duplicates", `found ${groups.length} groups with ${totalDupes} files`);
-  } catch (e) {
-    log.error("duplicates", `failed to find duplicates: ${e}`);
-    toast(`Couldn't find duplicates: ${e}`, { tone: "error" });
-  }
 }
 
 const THEME_LABEL = { system: "System", light: "Light", dark: "Dark" };
@@ -2337,36 +2320,44 @@ function showOptions() {
     h("button", { class: "btn sm", title: `Open the ${target} folder`, onclick: () => reveal(target) }, icon("folder", { size: 15 }), "Open"));
   const fact = (k, v) => [h("dt", { text: k }), h("dd", { text: v || "unknown" })];
 
-  // Helper to refresh statistics section
+  // One card: the donut says the decisions, the rows say everything else.
   const refreshStats = () => {
     api("get_counters").then((groups) => {
       const counterBody = document.getElementById("stats-body");
-      if (counterBody && groups) {
-        const NAMES = { kept: "Kept", staged: "Sent to delete", skipped: "Skipped", files_deleted: "Files deleted",
-          bytes_deleted: "Space freed", undos: "Undos", redos: "Redos", commits: "Commits", launches: "App launches",
-          right: "Swipes right", left: "Swipes left", up: "Swipes up", down: "Swipes down", time_seconds: "Time reviewing" };
-        const fmtStat = (name, v) => name === "bytes_deleted" ? formatBytes(v)
-          : name === "time_seconds" ? (v >= 3600 ? `${Math.floor(v / 3600)} h ${Math.floor(v % 3600 / 60)} min` : v >= 60 ? `${Math.floor(v / 60)} min` : `${v} s`)
-          : formatCount(v);
-        const label = (n) => NAMES[n] || n.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-        const sections = groups.map((group) => {
-          const val = Object.fromEntries(group.counters);
-          const donut = group.name === "decision" ? decisionDonut(val) : null;
-          return h("div", { class: "stats-group" },
-            h("div", { class: "stats-header" },
-              h("h4", { text: group.label }),
-              h("button", { class: "btn sm ghost", title: `Reset ${group.label.toLowerCase()} statistics`, onclick: () => {
-                api("reset_counters", { group: group.name }).then(() => {
-                  log.info("stats", `Reset ${group.name}`);
-                  refreshStats();
-                }).catch((e) => log.error("stats", `Reset ${group.name} failed: ${e}`));
-              } }, "Reset")),
-            donut,
-            h("dl", { class: "stats-list" },
-              ...group.counters.map(([name, value]) => [h("dt", { text: label(name) }), h("dd", { text: fmtStat(name, value) })])));
-        });
-        counterBody.replaceChildren(...sections);
+      if (!counterBody) return;
+      const val = {};
+      for (const g of groups || []) for (const [name, n] of g.counters) val[`${g.name}:${name}`] = n;
+      const dur = (v) => (v >= 3600 ? `${Math.floor(v / 3600)} h ${Math.floor(v % 3600 / 60)} min` : v >= 60 ? `${Math.floor(v / 60)} min` : `${v} s`);
+      const ROWS = [
+        ["session:app_seconds", "Time in the app", dur],
+        ["review:time_seconds", "Time reviewing", dur],
+        ["deletion:files_deleted", "Files deleted", formatCount],
+        ["deletion:bytes_deleted", "Space freed", formatBytes],
+        ["swipe:right", "Swipes right", formatCount],
+        ["swipe:left", "Swipes left", formatCount],
+        ["swipe:up", "Swipes up", formatCount],
+        ["swipe:down", "Swipes down", formatCount],
+        ["session:undos", "Undos", formatCount],
+        ["session:redos", "Redos", formatCount],
+        ["session:commits", "Deletions confirmed", formatCount],
+        ["session:launches", "App launches", formatCount],
+      ].filter(([key]) => val[key]);
+      const donut = decisionDonut({ kept: val["decision:kept"], staged: val["decision:staged"], skipped: val["decision:skipped"] });
+      if (!donut && !ROWS.length) {
+        counterBody.replaceChildren(h("p", { class: "about-note", text: "Nothing recorded yet." }));
+        return;
       }
+      counterBody.replaceChildren(h("div", { class: "stats-group" },
+        h("div", { class: "stats-header" },
+          h("h4", { text: "Your totals" }),
+          h("button", { class: "btn sm ghost", title: "Reset all statistics", onclick: () => {
+            api("reset_counters", {}).then(() => {
+              log.info("stats", "reset");
+              refreshStats();
+            }).catch((e) => log.error("stats", `reset failed: ${e}`));
+          } }, "Reset")),
+        donut,
+        ROWS.length ? h("dl", { class: "stats-list" }, ...ROWS.flatMap(([key, label, fmt]) => [h("dt", { text: label }), h("dd", { text: fmt(val[key]) })])) : null));
     }).catch((e) => log.warn("stats", `Failed to load counters: ${e}`));
   };
 
@@ -2926,6 +2917,7 @@ function revealApp() {
   try {
     state.info = await api("app_info");
     log.info("app_info", `v${state.info.app_version}, db ${state.info.db_path} (schema ${state.info.schema_version})`);
+    startAppClock();
     // Track app launches
     try {
       await api("incr_counter", { name: "session:launches", amount: 1 });

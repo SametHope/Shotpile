@@ -419,33 +419,6 @@
     open_devtools: () => { LOG.push("devtools"); return null; },
     log_read: () => "[2026-09-30 10:00:00.000] INFO  [boot] fake log line",
     log_write: (a) => { UI_LOG.push(a); return null; },
-    find_duplicates: (a) => {
-      // Group by size, then by a simple hash (just the id pattern for fake data)
-      const bySize = new Map();
-      for (const s of inRoot(a.rootId)) {
-        if (s.missing || s.status === "deleted") continue;
-        if (!bySize.has(s.size)) bySize.set(s.size, []);
-        bySize.get(s.size).push(s);
-      }
-      const groups = [];
-      for (const [size, sameSize] of bySize) {
-        if (sameSize.length < 2) continue;
-        // Fake: group by id % 10 (so ids 1,11,21... are duplicates)
-        const byHash = new Map();
-        for (const s of sameSize) {
-          const fakeHash = s.id % 10;
-          if (!byHash.has(fakeHash)) byHash.set(fakeHash, []);
-          byHash.get(fakeHash).push(s.id);
-        }
-        for (const [hash, ids] of byHash) {
-          if (ids.length >= 2) {
-            groups.push({ ids, size });
-          }
-        }
-      }
-      LOG.push("find_duplicates:" + a.rootId + ":" + groups.length);
-      return groups;
-    },
     incr_counter: (a) => {
       counters[a.name] = (counters[a.name] || 0) + a.amount;
       return null;

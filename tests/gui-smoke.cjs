@@ -445,7 +445,7 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await waitFor(`p.status(${JSON.stringify(SECOND)}) === "staged"`);
     ok("the second swipe stages the right file", (await status(SECOND)) === "staged", await status(SECOND));
     ok("the tally counts both swipes", JSON.stringify(await probe("p.tally()")) === JSON.stringify({ keep: 1, delete: 1, skip: 0 }), JSON.stringify(await probe("p.tally()")));
-    ok("a staged file lights the header badge", (await waitFor("p.stagedCount() === '1'")) === true || (await probe("p.stagedCount()")) === "1", await probe("p.stagedCount()"));
+    ok("a staged file lights the header badge", (await waitFor("p.stagedCount() === '1'")) === true, await probe("p.stagedCount()"));
 
     // Undo brings each card back the way it left.
     await press("z");
@@ -559,7 +559,7 @@ const CTRL_SHIFT = CTRL | SHIFT;
     const sel = await probe("p.filmSelected(0)");
     ok("the selected decided item keeps its ring", sel.shadow === true && sel.aria === "true", JSON.stringify(sel));
     ok("the selected decided item keeps its status marker", sel.status === "staged", JSON.stringify(sel));
-    ok("the selected frame is the accent colour, not the status colour", sel.border === "rgb(29, 78, 216)", JSON.stringify(sel));
+    ok("the selected frame is the accent colour, not the status colour", sel.border === (await probe("(() => { const n = document.createElement('i'); n.style.backgroundColor = 'var(--accent)'; document.body.appendChild(n); const c = getComputedStyle(n).backgroundColor; n.remove(); return c; })()")), JSON.stringify(sel));
     await js("p.clickFilm(2);");
     await waitFor(`p.cardName() === ${JSON.stringify(frontier)}`);
     ok("returning lands on the frontier card again", (await probe("p.cardName()")) === frontier, String(await probe("p.cardName()")));
@@ -603,18 +603,33 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await js("p.clickFinale('library');");
     await waitFor("p.view() === 'months'");
     ok("the summary leads back to the library, without the sorted month", (await probe("p.monthRows()")).length === 1, JSON.stringify(await probe("p.monthRows()")));
-    ok("a note says a sorted month is hidden", /1 sorted month hidden/.test(await probe("document.querySelector('.filter-note')?.textContent || ''")), "");
+    ok("no note nags about hidden months", (await probe("document.querySelector('.filter-note')")) === null);
     await js("document.getElementById('btn-filter').click();");
-    await waitFor("document.querySelector('#modal .modal-head h2')?.textContent === 'Filter'");
+    await waitFor("document.querySelector('#modal .modal-head h2')?.textContent === 'View'");
     await js("document.querySelector('[data-show-done=\"true\"]').click();");
     await waitFor("document.querySelectorAll('.month').length === 2");
     ok("the filter can show sorted months", (await probe("p.monthRows()")).length === 2, JSON.stringify(await probe("p.monthRows()")));
     ok("the filter choice is saved", /"showDone":true/.test(await probe("localStorage.getItem('shotpile.prefs')")), "");
+    // Sorting: derive the expectation from the rows on screen, not a constant.
+    const counts = async () => (await probe("p.monthRows()")).map((t) => Number((/([\d,]+) screenshots?/.exec(t) || [])[1]?.replace(/,/g, "")));
+    const sortedDesc = (a) => a.every((n, i) => i === 0 || a[i - 1] >= n);
+    await js("document.querySelector('[data-month-sort=\"count\"]').click();");
+    await waitFor("document.querySelectorAll('.year').length === 1");
+    ok("sorting by size lists the biggest month first", sortedDesc(await counts()) && (await counts()).length === 2, JSON.stringify(await counts()));
+    ok("a size sort drops the year headings for one labelled list", /Most screenshots first/.test(await probe("document.querySelector('.section-label')?.textContent || ''")));
+    await js("document.querySelector('[data-month-dir=\"asc\"]').click();");
+    await waitFor("/Fewest screenshots first/.test(document.querySelector('.section-label')?.textContent || '')");
+    ok("reversing puts the smallest first", sortedDesc((await counts()).slice().reverse()), JSON.stringify(await counts()));
+    ok("the sort choice is saved", /"monthSort":"count"/.test(await probe("localStorage.getItem('shotpile.prefs')")) && /"monthDir":"asc"/.test(await probe("localStorage.getItem('shotpile.prefs')")));
+    await js("document.querySelector('[data-month-sort=\"date\"]').click();");
+    await js("document.querySelector('[data-month-dir=\"desc\"]').click();");
+    await waitFor("document.querySelectorAll('.year').length >= 1 && !!document.querySelector('.section-label[data-year]')");
+    ok("date sort brings the year headings back", /^\d{4}$/.test(await probe("document.querySelector('.section-label')?.textContent || ''")));
     await js("document.querySelector('[data-show-done=\"false\"]').click();");
     await waitFor("document.querySelectorAll('.month').length === 1");
     await js("document.querySelector('#modal .foot button').click();");
     ok("hiding them again works and the dialog closes", (await probe("p.monthRows()")).length === 1 && (await probe("document.getElementById('modal').hidden")) === true, "");
-    ok("the toast follows the theme", (await probe("getComputedStyle(document.getElementById('toast')).backgroundColor")) !== "rgb(233, 238, 245)", "");
+    ok("the toast follows the theme", (await probe("getComputedStyle(document.getElementById('toast')).backgroundColor")) === (await probe("(() => { const n = document.createElement('i'); n.style.backgroundColor = 'var(--surface)'; document.body.appendChild(n); const c = getComputedStyle(n).backgroundColor; n.remove(); return c; })()")), "");
     ok("the footer bar shows in the library", await waitFor("p.footbarOn()"));
     ok("the footer bar pluralises", /2 screenshots marked for deletion/.test(await probe("p.footbarText()")), await probe("p.footbarText()"));
 
@@ -988,7 +1003,22 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await waitFor("!document.querySelector('.options-sheet')");
     await press("p");
     ok("the rebound key opens Options from the library", (await waitFor("document.querySelector('.options-sheet') !== null")) === true);
+    // Regression: the choice has to survive closing and reopening Options, and
+    // the help dialog has to show it too (the old defaults came back).
+    await press("Escape");
+    await waitFor("!document.querySelector('.options-sheet')");
+    await press("p");
+    await waitFor("document.querySelector('.options-sheet') !== null");
+    ok("a rebound shortcut survives reopening Options", (await probe("p.shortcutKey('keep')")) === "i", await probe("p.shortcutKey('keep')"));
+    ok("and the old default is not back", (await probe("p.shortcutKey('keep')")) !== "ArrowRight");
     ok("Options shows a decisions donut", (await waitFor("document.querySelector('.options-sheet .donut-seg') !== null")) === true);
+    ok("the statistics are one card with one reset", (await probe("document.querySelectorAll('.options-sheet .stats-group').length")) === 1 && (await probe("document.querySelectorAll('.options-sheet .stats-header .btn').length")) === 1);
+    ok("the rows do not repeat what the donut already says", !/^(Kept|Skipped|Sent to delete)$/m.test(await probe("[...document.querySelectorAll('.options-sheet .stats-list dt')].map((d) => d.textContent).join('\\n')")));
+    // Time in the app: hiding the window flushes the elapsed seconds.
+    await js("Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' }); document.dispatchEvent(new Event('visibilitychange'));");
+    const appSecs = await probe("window.__TAURI__.core.invoke('get_counters').then((g) => Object.fromEntries(g.flatMap((x) => x.counters.map(([k, v]) => [x.name + ':' + k, v])))['session:app_seconds'] || 0)");
+    await js("delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange'));");
+    ok("hiding the window records the time spent in the app", appSecs >= 1, String(appSecs));
     ok("the donut states its total", (await probe("document.querySelector('.options-sheet .donut-mid b')?.textContent || ''")) !== "");
     await probe("p.clickResetShortcuts()");
     await waitFor("!document.querySelector('.options-sheet')");

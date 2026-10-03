@@ -18,12 +18,20 @@ the code, not confirmed. Status as of the last session:
 
 - **Fixed.** A3 (show in file manager), A4 (copy image) and F11 were
   **confirmed working on a real Windows build** by the maintainer (checked
-  after 1.7.0). A1 (rebinding), A2 (command registrations), A5 (filmstrip) and
-  A6 (filename filter, since removed) are fixed in code and covered by the
-  suites; nobody has reported them broken since, but they have not been
-  explicitly re-confirmed by hand. The GUI suite's dependence on the host OS
+  after 1.7.0). A2 (command registrations) and A5 (filmstrip) were **confirmed on a
+  real Windows playtest** too. A6 (filename filter) was removed. A1 (rebinding)
+  worked in the review but a rebound key did not survive reopening Options
+  (`getKeyBindings` merged the defaults back over the saved map, so the old key
+  returned); that is fixed in 1.8.0 with logic and GUI tests, **not yet
+  re-confirmed by hand**. The GUI suite's dependence on the host OS
   colour scheme is fixed too.
 - **Open:** A7 (the rest of the thin coverage).
+- 1.8.0 also: the library's Filter became a *View* dialog (sort by date, size or
+  left to sort, reversible, plus show/hide sorted months; `sortMonths` in
+  logic.js); the hidden-months note is gone; Options statistics are one card
+  with a donut and a single Reset; a time-in-the-app counter
+  (`session:app_seconds`, flushed each minute and when the window hides); the
+  duplicate finder was removed. These are verified in headless tests only.
 
 ### Later follow-ups from a real Windows run (this session)
 
@@ -95,7 +103,7 @@ the code, not confirmed. Status as of the last session:
  7. **Test coverage of the 1.3/1.4 features is thin.** *Partly fixed:* command
     registration, the filmstrip resizing and global rebinding are now covered.
     Still thin: library keyboard navigation, batched grids, "Restore
-    all", the duplicates dialog, the progress modal and the statistics section.
+    all", the progress modal and the statistics section.
 
    A3/A4 have unit tests only for what can be tested off-device (the explorer
    argument, the image decode), which is the honest ceiling for OS-level work.
@@ -135,8 +143,7 @@ hand on Windows. Do not mark one done on the strength of the fake backend.
      nothing leaves the machine.
    - Rust tests for the swipe-direction counters (the 80 px threshold in
      `apply_decision`).
-   - Possible later: a grouped undo for a whole pass, near-duplicate
-     detection (today only byte-identical files).
+   - Possible later: a grouped undo for a whole pass.
    - Requested on a real run, all four now implemented (see AGENTS.md, *Review
      view*, for the mechanics):
      - A toggle to hide the Delete/Skip/Keep row (it sits between the card deck
@@ -228,8 +235,6 @@ unless section A says otherwise)
   in the pile (`unstage_multiple`),
   Linux file selection through the FileManager1 DBus call with an `xdg-open`
   fallback.
-- Exact duplicate detection (`dupes.rs`: size, hash, then a byte compare;
-  staging only, never deletes).
 
 ## D. Lessons for the next session
 

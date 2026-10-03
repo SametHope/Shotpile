@@ -22,8 +22,9 @@ up in. A big folder is counted as it scans, so a first scan never looks stuck.
 
 **See what is left.** The library shows the whole folder as one bar (kept,
 marked for deletion, deleted, skipped, unsorted), then a row per month. Click
-a month to sort it (months you have finished are hidden; *Filter* brings them
-back), *Continue sorting* to go through everything unsorted,
+a month to sort it (months you have finished are hidden; *View* brings them
+back, and also sorts the list by date, size or what is left, either way round),
+*Continue sorting* to go through everything unsorted,
 newest first, or *Shuffle* to get the same in random order, which turns up
 forgotten screenshots from years ago next to yesterday's. *Skipped* brings back
 what you put off.
@@ -312,7 +313,7 @@ Windows build; macOS and Linux are still unchecked.
 
 After that:
 
-- More statistics (longest streak, folders added); the Options section now has a decisions donut.
+- More statistics (longest streak, folders added). Options already has one totals card: a decisions donut, time in the app and reviewing, files and space freed, swipes, undos and launches.
 
 Done in this pass: the Delete/Skip/Keep row can be collapsed (the chevron in the
 review header), giving the filmstrip that height, and the review is wider so the
@@ -320,8 +321,7 @@ strip holds more shots at once. The filename filter is gone, and the per-month
 progress bars now carry the same stripes as the overview bar. `Escape` leaves a
 review, `F11` goes fullscreen on Windows, and the filmstrip thumbnails show the
 whole frame instead of cropping it.
-- Possible later: a grouped undo for a whole pass and near-duplicate
-  detection (only byte-identical files are found today).
+- Possible later: a grouped undo for a whole pass.
 
 ## License
 
