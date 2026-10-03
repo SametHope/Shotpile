@@ -445,7 +445,7 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await waitFor(`p.status(${JSON.stringify(SECOND)}) === "staged"`);
     ok("the second swipe stages the right file", (await status(SECOND)) === "staged", await status(SECOND));
     ok("the tally counts both swipes", JSON.stringify(await probe("p.tally()")) === JSON.stringify({ keep: 1, delete: 1, skip: 0 }), JSON.stringify(await probe("p.tally()")));
-    ok("a staged file lights the header badge", (await waitFor("p.stagedCount() === '1'")) === true || (await probe("p.stagedCount()")) === "1", await probe("p.stagedCount()"));
+    ok("a staged file lights the header badge", (await waitFor("p.stagedCount() === '1'")) === true, await probe("p.stagedCount()"));
 
     // Undo brings each card back the way it left.
     await press("z");
@@ -559,7 +559,7 @@ const CTRL_SHIFT = CTRL | SHIFT;
     const sel = await probe("p.filmSelected(0)");
     ok("the selected decided item keeps its ring", sel.shadow === true && sel.aria === "true", JSON.stringify(sel));
     ok("the selected decided item keeps its status marker", sel.status === "staged", JSON.stringify(sel));
-    ok("the selected frame is the accent colour, not the status colour", sel.border === "rgb(29, 78, 216)", JSON.stringify(sel));
+    ok("the selected frame is the accent colour, not the status colour", sel.border === (await probe("(() => { const n = document.createElement('i'); n.style.backgroundColor = 'var(--accent)'; document.body.appendChild(n); const c = getComputedStyle(n).backgroundColor; n.remove(); return c; })()")), JSON.stringify(sel));
     await js("p.clickFilm(2);");
     await waitFor(`p.cardName() === ${JSON.stringify(frontier)}`);
     ok("returning lands on the frontier card again", (await probe("p.cardName()")) === frontier, String(await probe("p.cardName()")));
@@ -629,7 +629,7 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await waitFor("document.querySelectorAll('.month').length === 1");
     await js("document.querySelector('#modal .foot button').click();");
     ok("hiding them again works and the dialog closes", (await probe("p.monthRows()")).length === 1 && (await probe("document.getElementById('modal').hidden")) === true, "");
-    ok("the toast follows the theme", (await probe("getComputedStyle(document.getElementById('toast')).backgroundColor")) !== "rgb(233, 238, 245)", "");
+    ok("the toast follows the theme", (await probe("getComputedStyle(document.getElementById('toast')).backgroundColor")) === (await probe("(() => { const n = document.createElement('i'); n.style.backgroundColor = 'var(--surface)'; document.body.appendChild(n); const c = getComputedStyle(n).backgroundColor; n.remove(); return c; })()")), "");
     ok("the footer bar shows in the library", await waitFor("p.footbarOn()"));
     ok("the footer bar pluralises", /2 screenshots marked for deletion/.test(await probe("p.footbarText()")), await probe("p.footbarText()"));
 

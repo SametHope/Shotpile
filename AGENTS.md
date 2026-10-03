@@ -92,9 +92,9 @@ is always `db`, then `undo`.
 ## Verify before claiming done
 
 ```powershell
-npm run test:logic                          # 56 frontend logic tests
-npm run test:gui                            # 286 GUI assertions in headless Chrome
-cd src-tauri; cargo test                    # 77 unit + 4 end-to-end tests
+npm run test:logic                          # 62 frontend logic tests
+npm run test:gui                            # 296 GUI assertions in headless Chrome
+cd src-tauri; cargo test                    # 72 unit + 4 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings
 cd src-tauri; cargo fmt --check
 ```
@@ -327,7 +327,7 @@ library (`seedDemo()` in the fake), which is also what the README pictures show.
   `filmItemsPerSide()` is derived from the strip's width: every extra pixel is
   another item in the queue. The default window is 1360 wide for the same
   reason. The filename filter was removed entirely (UI, `matchesFilename()`,
-  `state.filter`); the sorted-month *Filter* modal is unrelated and stays.
+  `state.filter`); the library's *View* dialog (sort and show/hide sorted months) is unrelated and stays.
 - Small `.segbar`s (the 6px month bars) need a finer stripe than `.segbar.lg`:
   the 8px period flattens into grey at that size, so `.segbar:not(.lg)` uses a
   4px period. Keep the meaning identical to the big bar.
