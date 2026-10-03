@@ -1631,3 +1631,26 @@ body.ready #splash { opacity: 0; visibility: hidden; }
   .page { padding-top: 16px; }
   .review { padding-top: 6px; padding-bottom: 6px; }
 }
+
+/* ------------------------------------------------------------------ tooltip */
+
+/* One themed bubble for every title in the app (initTooltips in dom.js). It
+   sits above dialogs and never takes the pointer. */
+#tooltip {
+  position: fixed;
+  z-index: 10000;
+  max-width: 280px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 500;
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+  animation: tipIn .12s ease-out;
+}
+#tooltip[data-side="above"] { transform-origin: bottom center; }
+@keyframes tipIn { from { opacity: 0; translate: 0 3px; } to { opacity: 1; translate: 0 0; } }
+@media (prefers-reduced-motion: reduce) { #tooltip { animation: none; } }

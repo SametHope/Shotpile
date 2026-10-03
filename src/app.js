@@ -58,6 +58,7 @@ import {
   icon,
   initModal,
   kbd,
+  initTooltips,
   menuOpen,
   modal,
   modalOpen,
@@ -2383,7 +2384,11 @@ function showOptions() {
   };
 
   function beginRebind(action, btn) {
-    rebinding?.cancel();
+    if (rebinding) {
+      // Repainting replaces every button, so look the clicked one up again.
+      rebinding.cancel();
+      btn = shortcutsHost.querySelector(`[data-action="${action.id}"] .shortcut-key`);
+    }
     btn.classList.add("waiting");
     btn.textContent = "Press a key…";
     const stop = () => {
@@ -2442,10 +2447,8 @@ function showOptions() {
                 onclick: (e) => beginRebind(action, e.currentTarget),
               }));
           })))));
+    shortcutsHost.lastElementChild?.appendChild(resetShortcutsRow);
   }
-  paintShortcuts();
-  const shortcutsSections = [shortcutsHost];
-
   // The shortcut reset belongs at the end of the shortcut groups, on
   // one line like the Zoom row: a heading, a paragraph and a lone
   // button in a group of its own put two divider lines around a
@@ -2465,7 +2468,8 @@ function showOptions() {
       },
       text: "Reset",
     }));
-  shortcutsSections.push(h("section", { class: "opt-group" }, resetShortcutsRow));
+  paintShortcuts();
+  const shortcutsSections = [shortcutsHost];
 
   modal({
     title: "Options",
@@ -2817,6 +2821,7 @@ window.__shotpileTest = {
   openViewer: () => openShotViewer(state.card, topCard()),
   closeViewer,
   resetCardZoom: () => zoomOf(topCard())?.reset(),
+  helpRows: () => shortcutHelp(getKeyBindings(prefs)).flatMap((g) => g.rows.map((r) => r.what)),
   snapshot: () => ({ view: state.view, deciding: state.deciding, cursor: state.queue.cursor, ids: state.queue.ids.slice() }),
   dropCache: () => state.cache.clear(),
   resetToSetup() {
@@ -2832,6 +2837,7 @@ window.__shotpileTest = {
 // --------------------------------------------------------------------- wiring
 
 initModal();
+initTooltips();
 el.back.addEventListener("click", backToMonths);
 el.folderBtn.addEventListener("click", folderMenu);
 el.scan.addEventListener("click", rescan);

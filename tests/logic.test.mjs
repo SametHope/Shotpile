@@ -5,6 +5,7 @@ import {
   ACTION,
   ACTIONS,
   DEFAULT_KEYS,
+  FIXED_SHORTCUTS,
   GESTURE_THRESHOLD,
   MAX_ZOOM,
   PassTally,
@@ -17,6 +18,8 @@ import {
   detectKeyConflict,
   getKeysForAction,
   getKeyBindings,
+  keyLabel,
+  shortcutHelp,
   sortMonths,
   resetKeyBindings,
   setKeyBindings,
@@ -571,4 +574,112 @@ test("sortMonths copies its input and tolerates nothing", () => {
   sortMonths(input, "count", "asc");
   assert.deepEqual(input, MONTHS);
   assert.deepEqual(sortMonths(null), []);
+});
+
+test("keyLabel converts keys to readable labels", () => {
+  // Space and arrow keys
+  assert.equal(keyLabel(" "), "Space");
+  assert.equal(keyLabel("ArrowLeft"), "←");
+  assert.equal(keyLabel("ArrowRight"), "→");
+  assert.equal(keyLabel("ArrowUp"), "↑");
+  assert.equal(keyLabel("ArrowDown"), "↓");
+  // Special keys
+  assert.equal(keyLabel("Escape"), "Esc");
+  assert.equal(keyLabel("Backspace"), "Backspace");
+  assert.equal(keyLabel("Enter"), "Enter");
+  // Single letters become uppercase
+  assert.equal(keyLabel("z"), "Z");
+  assert.equal(keyLabel("i"), "I");
+  assert.equal(keyLabel("p"), "P");
+  // Other keys pass through
+  assert.equal(keyLabel("F11"), "F11");
+  assert.equal(keyLabel("F12"), "F12");
+});
+
+test("shortcutHelp groups actions by their category", () => {
+  const bindings = DEFAULT_KEYS;
+  const help = shortcutHelp(bindings);
+
+  // Help should have multiple groups
+  assert.ok(help.length > 0, "help should have at least one group");
+
+  // Extract all action ids from help groups
+  const actionIds = new Set();
+  for (const group of help) {
+    assert.ok(group.title, "each group should have a title");
+    assert.ok(Array.isArray(group.rows), "each group should have rows");
+    for (const row of group.rows) {
+      if (row.id) {
+        actionIds.add(row.id);
+      }
+    }
+  }
+
+  // Every ACTIONS entry should appear exactly once
+  for (const action of Object.values(ACTIONS)) {
+    assert.equal(
+      help.flatMap((g) => g.rows).filter((r) => r.id === action.id).length,
+      1,
+      `action ${action.id} should appear exactly once`
+    );
+  }
+});
+
+test("shortcutHelp shows rebound keys, not defaults", () => {
+  const rebound = { "i": ACTIONS.KEEP.id, "ArrowRight": undefined };
+  const help = shortcutHelp(rebound);
+
+  // Find the keep action in help
+  const keepRow = help.flatMap((g) => g.rows).find((r) => r.id === ACTIONS.KEEP.id);
+  assert.ok(keepRow, "keep action should be in help");
+
+  // The keep row should show "I" (the new binding), not "→" (the old default)
+  const labels = keepRow.chords.flat();
+  assert.ok(labels.includes("I"), "rebound key should show new binding");
+  assert.equal(labels.includes("→"), false, "old default should not appear");
+});
+
+test("shortcutHelp includes FIXED_SHORTCUTS groups", () => {
+  const help = shortcutHelp(DEFAULT_KEYS);
+
+  // For each group in FIXED_SHORTCUTS, check it appears in help
+  const helpGroups = new Set(help.map((g) => g.title));
+  const fixedGroups = new Set(FIXED_SHORTCUTS.map((f) => f.group));
+
+  for (const group of fixedGroups) {
+    assert.ok(helpGroups.has(group), `help should include group "${group}"`);
+  }
+
+  // Check that fixed shortcuts appear in their groups
+  for (const fixed of FIXED_SHORTCUTS) {
+    const group = help.find((g) => g.title === fixed.group);
+    assert.ok(group, `group "${fixed.group}" should exist`);
+    const hasFixed = group.rows.some((r) =>
+      JSON.stringify(r.chords) === JSON.stringify(fixed.chords) &&
+      r.what === fixed.what
+    );
+    assert.ok(hasFixed, `fixed shortcut "${fixed.what}" should appear in group "${fixed.group}"`);
+  }
+});
+
+test("shortcutHelp derives from live bindings, not constants", () => {
+  // Test with default bindings
+  const defaultHelp = shortcutHelp(DEFAULT_KEYS);
+
+  // Test with a modified binding (rebind Delete to 'k')
+  const customBindings = { ...DEFAULT_KEYS };
+  delete customBindings.ArrowLeft;
+  customBindings.k = ACTIONS.DELETE.id;
+  const customHelp = shortcutHelp(customBindings);
+
+  // Find delete rows in both
+  const defaultDelete = defaultHelp.flatMap((g) => g.rows).find((r) => r.id === ACTIONS.DELETE.id);
+  const customDelete = customHelp.flatMap((g) => g.rows).find((r) => r.id === ACTIONS.DELETE.id);
+
+  assert.ok(defaultDelete, "delete should be in default help");
+  assert.ok(customDelete, "delete should be in custom help");
+
+  // Default should have "←", custom should have "K"
+  assert.ok(defaultDelete.chords.flat().includes("←"), "default help should show arrow");
+  assert.ok(customDelete.chords.flat().includes("K"), "custom help should show K");
 });
