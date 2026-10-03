@@ -487,6 +487,40 @@ function onScanProgress(p) {
 
 const SEG_LABEL = { kept: "kept", staged: "to delete", deleted: "deleted", skipped: "skipped", pending: "unsorted" };
 
+// Radial chart of the sorting decisions, in the same colours as the status bar.
+function decisionDonut(val) {
+  const parts = [["kept", val.kept || 0], ["staged", val.staged || 0], ["skipped", val.skipped || 0]];
+  const total = parts.reduce((t, [, n]) => t + n, 0);
+  if (!total) return null;
+  const NS = "http://www.w3.org/2000/svg";
+  const R = 42, C = 2 * Math.PI * R, GAP = parts.filter(([, n]) => n).length > 1 ? 2 : 0;
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", "0 0 100 100");
+  svg.setAttribute("class", "donut-ring");
+  svg.setAttribute("aria-hidden", "true");
+  const ring = (cls, dash, off) => {
+    const c = document.createElementNS(NS, "circle");
+    c.setAttribute("cx", 50); c.setAttribute("cy", 50); c.setAttribute("r", R);
+    c.setAttribute("class", cls);
+    if (dash != null) { c.setAttribute("stroke-dasharray", `${dash} ${C - dash}`); c.setAttribute("stroke-dashoffset", -off); }
+    svg.append(c);
+  };
+  ring("donut-track");
+  let off = 0;
+  for (const [key, n] of parts) {
+    if (!n) continue;
+    const len = n / total * C;
+    ring(`donut-seg seg-${key}`, Math.max(len - GAP, 0.5), off);
+    off += len;
+  }
+  const pct = Math.round(parts[0][1] / total * 100);
+  return h("div", { class: "donut", role: "img", "aria-label": `${formatCount(total)} decisions, ${pct}% kept` },
+    h("div", { class: "donut-fig" }, svg,
+      h("div", { class: "donut-mid" }, h("b", { text: formatCount(total) }), h("small", { text: "decisions" }))),
+    h("ul", { class: "legend donut-legend" }, parts.map(([k, n]) =>
+      h("li", { class: `lg-${k}` }, h("i"), h("b", { text: formatCount(n) }), ` ${SEG_LABEL[k] || k}`))));
+}
+
 function segbar(stat, size = "") {
   const segs = statusSegments(stat);
   const label = segs.map((s) => `${formatCount(s.n)} ${SEG_LABEL[s.key]}`).join(", ") || "nothing sorted yet";
@@ -2308,23 +2342,29 @@ function showOptions() {
     api("get_counters").then((groups) => {
       const counterBody = document.getElementById("stats-body");
       if (counterBody && groups) {
-        const sections = groups.map((group) =>
-          h("div", { class: "stats-group" },
+        const NAMES = { kept: "Kept", staged: "Sent to delete", skipped: "Skipped", files_deleted: "Files deleted",
+          bytes_deleted: "Space freed", undos: "Undos", redos: "Redos", commits: "Commits", launches: "App launches",
+          right: "Swipes right", left: "Swipes left", up: "Swipes up", down: "Swipes down", time_seconds: "Time reviewing" };
+        const fmtStat = (name, v) => name === "bytes_deleted" ? formatBytes(v)
+          : name === "time_seconds" ? (v >= 3600 ? `${Math.floor(v / 3600)} h ${Math.floor(v % 3600 / 60)} min` : v >= 60 ? `${Math.floor(v / 60)} min` : `${v} s`)
+          : formatCount(v);
+        const label = (n) => NAMES[n] || n.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+        const sections = groups.map((group) => {
+          const val = Object.fromEntries(group.counters);
+          const donut = group.name === "decision" ? decisionDonut(val) : null;
+          return h("div", { class: "stats-group" },
             h("div", { class: "stats-header" },
               h("h4", { text: group.label }),
-        h("button", { class: "btn sm ghost", title: "Put every keyboard shortcut back the way it was", onclick: () => {
-
+              h("button", { class: "btn sm ghost", title: `Reset ${group.label.toLowerCase()} statistics`, onclick: () => {
                 api("reset_counters", { group: group.name }).then(() => {
                   log.info("stats", `Reset ${group.name}`);
                   refreshStats();
                 }).catch((e) => log.error("stats", `Reset ${group.name} failed: ${e}`));
-              }, title: `Reset ${group.label.toLowerCase()} statistics` }, "Reset")),
+              } }, "Reset")),
+            donut,
             h("dl", { class: "stats-list" },
-              ...group.counters.map(([name, value]) => {
-                const label = name.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-                const formatted = value > 1000000 ? (value / 1048576).toFixed(2) + " MB" : value > 1000 ? (value / 1024).toFixed(2) + " KB" : String(value);
-                return [h("dt", { text: label }), h("dd", { text: formatted })];
-              }))));
+              ...group.counters.map(([name, value]) => [h("dt", { text: label(name) }), h("dd", { text: fmtStat(name, value) })])));
+        });
         counterBody.replaceChildren(...sections);
       }
     }).catch((e) => log.warn("stats", `Failed to load counters: ${e}`));

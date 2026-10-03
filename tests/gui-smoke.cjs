@@ -134,6 +134,7 @@ const CTRL_SHIFT = CTRL | SHIFT;
     ok("the header names the current folder", (await probe("p.folderName()")) === "Screenshots", await probe("p.folderName()"));
     // The progress bar: the unsorted remainder is the striped track; deleted is
     // a solid red, not a stripe.
+    ok("segments touch, so no stripe shows between them", (await probe("getComputedStyle(document.querySelector('.segbar')).columnGap")) === "normal" || (await probe("getComputedStyle(document.querySelector('.segbar')).columnGap")) === "0px");
     ok("the unsorted progress track is striped", /repeating-linear-gradient/.test(await probe("p.segbarTrack()") || ""), await probe("p.segbarTrack()"));
     const stripes = await probe("p.segbarStripes()");
     const big = stripes && stripes[10];
@@ -987,6 +988,8 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await waitFor("!document.querySelector('.options-sheet')");
     await press("p");
     ok("the rebound key opens Options from the library", (await waitFor("document.querySelector('.options-sheet') !== null")) === true);
+    ok("Options shows a decisions donut", (await waitFor("document.querySelector('.options-sheet .donut-seg') !== null")) === true);
+    ok("the donut states its total", (await probe("document.querySelector('.options-sheet .donut-mid b')?.textContent || ''")) !== "");
     await probe("p.clickResetShortcuts()");
     await waitFor("!document.querySelector('.options-sheet')");
     await press(",", CTRL);
