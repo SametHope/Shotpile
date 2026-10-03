@@ -937,7 +937,7 @@ const CTRL_SHIFT = CTRL | SHIFT;
     // The app's version has one source: Cargo.toml, read by the Rust
     // build and handed to the fake backend by tests/serve.cjs. It used
     // to be hardcoded "1.0.0" here.
-    ok("the About panel carries the app's own version", /v1\.6\.0/.test(await probe("document.querySelector('.about-list').textContent")), await probe("document.querySelector('.about-list')?.textContent"));
+    ok("the About panel carries the app's own version", new RegExp("v" + require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "src-tauri", "Cargo.toml"), "utf8").match(/^version\s*=\s*"([^"]+)"/m)[1].replace(/\./g, "\\.")).test(await probe("document.querySelector('.about-list').textContent")), await probe("document.querySelector('.about-list')?.textContent"));
     const resetRow = await probe("p.resetShortcutRow()");
     ok("the shortcut reset is on one line in the existing style", resetRow && resetRow.sameLine && resetRow.ghost, JSON.stringify(resetRow));
     ok("the shortcut reset sits in the last shortcut group, not a group of its own", resetRow && resetRow.lastShortcutsGroup && resetRow.noLoneButton, JSON.stringify(resetRow));
