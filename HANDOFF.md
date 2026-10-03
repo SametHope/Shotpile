@@ -41,6 +41,11 @@ the code, not confirmed. Status as of the last session:
   on leave), plus a tooltip content pass. Verified in headless tests only; not
   yet re-confirmed by hand on Windows.
 - **Open:** A7 (the rest of the thin coverage).
+- **Open: design cleanup pass.** `docs/DESIGN.md` section 12 lists the
+  near-duplicate colours, components, radii and hand-typed key names found while
+  documenting the conventions (plus two small bugs: the shortcuts-reset toast
+  passes `duration` instead of `ms`, and `.shortcut-key.conflict` uses an
+  undefined `--error` token). Nothing was changed in the docs pass.
 - 1.8.0 also: the library's Filter became a *View* dialog (sort by date, size or
   left to sort, reversible, plus show/hide sorted months; `sortMonths` in
   logic.js); the hidden-months note is gone; Options statistics are one card
