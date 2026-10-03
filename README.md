@@ -307,7 +307,8 @@ A real Windows run of 1.4.0 found several things broken. Those are fixed now —
 shortcut rebinding, "Show in file manager", "Copy image", the resizable
 filmstrip, the unregistered statistics command,
 and the black flash on the first scroll after a resize. `HANDOFF.md` has the
-detail, including what still needs checking by hand on Windows.
+detail. "Show in file manager", "Copy image" and F11 have been confirmed on a real
+Windows build; macOS and Linux are still unchecked.
 
 After that:
 
