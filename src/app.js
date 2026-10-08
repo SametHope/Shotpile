@@ -33,6 +33,7 @@ import {
   getKeyBindings,
   getKeysForAction,
   keyLabel,
+  fixedKey,
   shortcutHelp,
   gestureVisual,
   groupByYear,
@@ -181,7 +182,7 @@ async function toggleFullscreen() {
     log.info("window", on ? "fullscreen on" : "fullscreen off");
   } catch (err) {
     log.warn("window", `couldn't toggle fullscreen: ${err}`);
-    toast("Could not switch fullscreen");
+    toast("Couldn't switch fullscreen");
   }
 }
 
@@ -2382,7 +2383,7 @@ function showOptions() {
   const liveLabel = (action) => {
     const [first] = getKeysForAction(action.id, getKeyBindings(prefs));
     if (first !== undefined) return keyLabel(first);
-    return action.id === ACTIONS.OPEN_OPTIONS.id ? "Ctrl+," : "—";
+    return action.id === ACTIONS.OPEN_OPTIONS.id ? fixedKey("options") : "—";
   };
 
   function beginRebind(action, btn) {
@@ -2422,7 +2423,7 @@ function showOptions() {
       setKeyBindings(prefs, map);
       log.info("shortcuts", `bound ${action.id} to ${ke.key}`);
       paintShortcuts();
-      toast(`Bound ${action.label} to ${keyLabel(ke.key)}`, { duration: 2000 });
+      toast(`Bound ${action.label} to ${keyLabel(ke.key)}`, { ms: 2000 });
     };
     const timer = setTimeout(cancel, 5000);
     rebinding = { cancel };
@@ -2464,7 +2465,7 @@ function showOptions() {
       title: "Restore all keyboard shortcuts to their defaults",
       onclick: () => {
         resetKeyBindings(prefs);
-        toast("Shortcuts reset to defaults", { duration: 2000 });
+        toast("Shortcuts reset to defaults", { ms: 2000 });
         log.info("shortcuts", "reset to defaults");
         paintShortcuts();
       },
@@ -2484,10 +2485,10 @@ function showOptions() {
           h("div", { class: "segmented", role: "group", "aria-label": "Theme" }, themeButtons)),
         h("div", { class: "opt-row" },
           h("div", { class: "opt-label" }, "App zoom", h("small", { text: "Ctrl and + − 0, or Ctrl and the mouse wheel. Fixed keys; the card zoom below is separate" })),
-          h("button", { class: "btn sm icon", "aria-label": "Zoom out", title: "Zoom out (Ctrl and −)", onclick: () => zoomApp(-1) }, icon("zoom-out", { size: 15 })),
+          h("button", { class: "btn sm icon", "aria-label": "Zoom out", title: `Zoom out (${fixedKey("appZoomOut")})`, onclick: () => zoomApp(-1) }, icon("zoom-out", { size: 15 })),
           h("span", { class: "zoom-value", text: `${Math.round(current.zoom * 100)}%` }),
-          h("button", { class: "btn sm icon", "aria-label": "Zoom in", title: "Zoom in (Ctrl and +)", onclick: () => zoomApp(1) }, icon("zoom-in", { size: 15 })),
-          h("button", { class: "btn sm ghost", title: "Reset the zoom to 100% (Ctrl and 0)", onclick: () => zoomApp(0), text: "Reset" }))),
+          h("button", { class: "btn sm icon", "aria-label": "Zoom in", title: `Zoom in (${fixedKey("appZoomIn")})`, onclick: () => zoomApp(1) }, icon("zoom-in", { size: 15 })),
+          h("button", { class: "btn sm ghost", title: `Reset the zoom to 100% (${fixedKey("appZoomReset")})`, onclick: () => zoomApp(0), text: "Reset" }))),
       ...shortcutsSections,
       h("section", { class: "opt-group" },
         h("h3", { text: "Your data" }),
@@ -2563,10 +2564,10 @@ function onContextMenu(e) {
       items.push({ label: "Sort this month", icon: "play", onClick: () => month.click() }, { separator: true });
     }
     items.push(
-      { label: "Undo", icon: "undo", meta: "Ctrl+Z", onClick: () => undo() },
-      { label: "Redo", icon: "redo", meta: "Ctrl+Y", onClick: () => redo() },
+      { label: "Undo", icon: "undo", meta: fixedKey("undo"), onClick: () => undo() },
+      { label: "Redo", icon: "redo", meta: fixedKey("redo"), onClick: () => redo() },
       { separator: true },
-      { label: "Options", icon: "sliders", meta: "Ctrl+,", onClick: showOptions },
+      { label: "Options", icon: "sliders", meta: fixedKey("options"), onClick: showOptions },
       { label: "Keyboard shortcuts", icon: "keyboard", meta: "?", onClick: showShortcuts });
   }
   openMenu(null, items, { at });

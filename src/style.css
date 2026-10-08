@@ -32,10 +32,13 @@
   --danger: #b91c1c;
   --danger-strong: #c92a2a;
   --danger-soft: rgba(220, 38, 38, .1);
+  --danger-line: rgba(220, 38, 38, .3);
   --ok: #15803d;
   --ok-soft: rgba(21, 128, 61, .1);
+  --ok-line: rgba(21, 128, 61, .3);
   --warn: #b45309;
   --warn-soft: rgba(180, 83, 9, .11);
+  --warn-line: rgba(180, 83, 9, .3);
 
   --seg-kept: #2f9e5b;
   --seg-staged: #dc4646;
@@ -338,12 +341,12 @@ main:has(> #view.reviewing) { overflow: visible; }
 }
 .btn.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
 
-.btn.danger { color: var(--danger); border-color: rgba(220, 38, 38, .35); }
+.btn.danger { color: var(--danger); border-color: var(--danger-line); }
 .btn.danger:hover:not(:disabled) { background: var(--danger-soft); border-color: var(--danger); }
 .btn.danger.solid { background: var(--danger-strong); border-color: var(--danger-strong); color: #fff; }
 .btn.danger.solid:hover:not(:disabled) { background: #b32424; border-color: #b32424; }
 
-.btn.ok { color: var(--ok); border-color: rgba(21, 128, 61, .32); }
+.btn.ok { color: var(--ok); border-color: var(--ok-line); }
 .btn.ok:hover:not(:disabled) { background: var(--ok-soft); border-color: var(--ok); }
 
 .btn.ghost { border-color: transparent; background: transparent; }
@@ -364,7 +367,7 @@ main:has(> #view.reviewing) { overflow: visible; }
 .btn:not(.primary) .btn-count { background: var(--surface-3); color: var(--muted); }
 
 /* The pile button in the header: quiet until there is something on it. */
-.pile-btn { color: var(--danger); border-color: rgba(220, 38, 38, .28); background: var(--surface); }
+.pile-btn { color: var(--danger); border-color: var(--danger-line); background: var(--surface); }
 .pile-btn:hover:not(:disabled) { background: var(--danger-soft); border-color: var(--danger); }
 .pile-btn.is-active { background: var(--danger-soft); border-color: var(--danger); }
 .badge {
@@ -1056,11 +1059,11 @@ kbd {
 .act:hover { box-shadow: var(--shadow-md); }
 .act:active { transform: translateY(1px) scale(.98); }
 .act kbd { margin-left: 2px; }
-.act-delete { color: var(--danger); border-color: rgba(220, 38, 38, .3); }
+.act-delete { color: var(--danger); border-color: var(--danger-line); }
 .act-delete:hover { background: var(--danger-soft); border-color: var(--danger); }
-.act-skip { color: var(--warn); border-color: rgba(180, 83, 9, .28); }
+.act-skip { color: var(--warn); border-color: var(--warn-line); }
 .act-skip:hover { background: var(--warn-soft); border-color: var(--warn); }
-.act-keep { color: var(--ok); border-color: rgba(21, 128, 61, .3); }
+.act-keep { color: var(--ok); border-color: var(--ok-line); }
 .act-keep:hover { background: var(--ok-soft); border-color: var(--ok); }
 .act-undo { min-width: 0; padding: 10px 12px; color: var(--muted); margin-left: 6px; background: transparent; box-shadow: none; border-color: transparent; }
 .act-undo:hover { background: var(--surface-3); color: var(--text-2); box-shadow: none; }
@@ -1600,7 +1603,7 @@ body.ready #splash { opacity: 0; visibility: hidden; }
 .shortcut-label { flex: 1; }
 .shortcut-key { min-width: 80px; min-height: 30px; text-align: center; font-family: var(--font-mono); font-weight: 600; }
 .shortcut-key.waiting { opacity: 0.6; animation: pulse 1s infinite; }
-.shortcut-key.conflict { background: var(--error, #d32f2f) !important; color: white !important; }
+.shortcut-key.conflict { background: var(--danger-strong) !important; color: var(--on-accent) !important; }
 @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
 
 /* ------------------------------------------------------------ small windows */
