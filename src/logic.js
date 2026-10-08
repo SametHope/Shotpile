@@ -568,20 +568,26 @@ export function keyLabel(key) {
 
 /** The keys that cannot be rebound (modifier chords, Esc, mouse-free navigation). */
 export const FIXED_SHORTCUTS = [
-  { group: "Sorting", chords: [["Ctrl", "Z"]], what: "Undo, from any page" },
-  { group: "Sorting", chords: [["Ctrl", "Y"], ["Ctrl", "Shift", "Z"]], what: "Redo, from any page" },
+  { group: "Sorting", chords: [["Ctrl", "Z"]], what: "Undo, from any page", id: "undo" },
+  { group: "Sorting", chords: [["Ctrl", "Y"], ["Ctrl", "Shift", "Z"]], what: "Redo, from any page", id: "redo" },
   { group: "Sorting", chords: [["Esc"]], what: "Leave the review, back to where it started" },
   { group: "Looking closer", chords: [["←"], ["→"], ["↑"], ["↓"]], what: "Pan a zoomed card" },
   { group: "Looking closer", chords: [["Esc"]], what: "Close full screen" },
   { group: "Library", chords: [["←"], ["→"], ["↑"], ["↓"]], what: "Move between months" },
   { group: "Library", chords: [["Enter"]], what: "Open the focused month" },
-  { group: "Window", chords: [["Ctrl", "+"]], what: "Zoom the whole app in" },
-  { group: "Window", chords: [["Ctrl", "−"]], what: "Zoom the whole app out" },
-  { group: "Window", chords: [["Ctrl", "0"]], what: "Reset the whole app zoom" },
-  { group: "Window", chords: [["Ctrl", ","]], what: "Options" },
+  { group: "Window", chords: [["Ctrl", "+"]], what: "Zoom the whole app in", id: "appZoomIn" },
+  { group: "Window", chords: [["Ctrl", "−"]], what: "Zoom the whole app out", id: "appZoomOut" },
+  { group: "Window", chords: [["Ctrl", "0"]], what: "Reset the whole app zoom", id: "appZoomReset" },
+  { group: "Window", chords: [["Ctrl", ","]], what: "Options", id: "options" },
   { group: "Troubleshooting", chords: [["F12"], ["Ctrl", "Shift", "I"]], what: "Developer tools" },
   { group: "Troubleshooting", chords: [["Ctrl", "Shift", "L"]], what: "Show the log" },
 ];
+
+/** The first chord of a fixed shortcut as text ("Ctrl+Z"), for hints and tooltips. */
+export function fixedKey(id) {
+  const f = FIXED_SHORTCUTS.find((s) => s.id === id);
+  return f ? f.chords[0].join("+") : "";
+}
 
 const HELP_GROUPS = ["Sorting", "Looking closer", "Library", "Window", "Troubleshooting"];
 

@@ -62,8 +62,9 @@ one theme only.
   `--muted` (captions, meta, icons).
 - **Accent (blue):** `--accent` (fills), `--accent-hover`, `--accent-text` (links
   and text on a surface; lighter in dark), `--accent-soft` (tint), `--on-accent`.
-- **State:** `--danger` / `--danger-strong` / `--danger-soft`, `--ok` /
-  `--ok-soft`, `--warn` / `--warn-soft`. `danger` is text/border, `danger-strong`
+- **State:** `--danger` / `--danger-strong` / `--danger-soft` / `--danger-line`,
+  `--ok` / `--ok-soft` / `--ok-line`, `--warn` / `--warn-soft` / `--warn-line`
+  (`*-line` is the tinted border of an outlined button). `danger` is text/border, `danger-strong`
   is a solid fill (badge, solid button).
 - **Decision colours** (the same meaning everywhere: bars, tally chips, stamps,
   donut): `--seg-kept` green, `--seg-staged` red, `--seg-deleted` darker red,
@@ -286,12 +287,8 @@ one dedicated pass, with the GUI suite and the screenshots regenerated.
 
 **Bugs found while reading**
 
-1. `src/app.js` (Reset shortcuts): `toast("Shortcuts reset to defaults", { duration: 2000 })`
-   passes `duration`, but `toast()` reads `ms`, so it shows for 4.2s, not 2s.
-2. `.shortcut-key.conflict` uses `var(--error, #d32f2f)` and `white` with
-   `!important`. `--error` is not a token (the fallback always wins), so the
-   conflict colour is a stray red that is not `--danger-strong`, and the
-   `!important`s hide a specificity fight with `.shortcut-key.waiting`.
+1. ~~Shortcut toasts passed `duration` (the option is `ms`).~~ Fixed in the 1.9.1 pass.
+2. ~~`.shortcut-key.conflict` used an undefined `--error`.~~ Now `--danger-strong`; the `!important`s stay because `.btn:hover` outranks it.
 
 **Near-duplicate colours that should be one token**
 
@@ -308,9 +305,7 @@ one dedicated pass, with the GUI suite and the screenshots regenerated.
    close to `--warn` `#b45309` and `--seg-skipped` `#d98c2b`. Proposal: stamps
    read `--ok` / `--danger-strong` / `--warn`; add `--ok-line` and `--warn-line`
    border tints.
-5. The button borders for danger/ok/skip use three slightly different alphas
-   (`.28`, `.3`, `.32`, `.35`) for the same idea; the `.act-*` and `.pile-btn`
-   rules repeat what `.btn.danger` / `.btn.ok` already do.
+5. ~~Button border alphas differed.~~ `--danger-line`, `--ok-line` and `--warn-line` now feed `.btn.danger|ok`, `.pile-btn` and `.act-*`. The `.act-*` and `.pile-btn` rules still repeat what `.btn.danger` / `.btn.ok` do (open).
 6. The viewer and log view hard-code a second dark palette (`#0f141b`,
    `#232b36`, `#1a2230`, `#2c3748`, `#232f42`, `#3a475c`, `#9aa7b8`, `#d7e0ea`,
    `rgba(20,26,35,.96)`) that sits next to, but is not, the dark theme tokens
@@ -350,16 +345,11 @@ one dedicated pass, with the GUI suite and the screenshots regenerated.
 
 **Behaviour inconsistencies**
 
-17. Hand-typed key names remain, against the one-source rule: Undo/Redo
-    titles in `index.html` ("Ctrl+Z", "Ctrl+Y"), the app-menu items' `meta`
-    ("Ctrl+Z", "Ctrl+Y", "Ctrl+,"), the Options app-zoom titles ("Ctrl and −",
-    "Ctrl and +", "Ctrl and 0"), the Options button title "Options (Ctrl+,)" and
-    the log hint "Ctrl+Shift+L ... F12". They are all fixed shortcuts, so they
-    should come from `FIXED_SHORTCUTS`/`keyLabel()`. The app zoom titles also
-    spell the chord "Ctrl and −" while the rest say "Ctrl+Z"; use "+".
-18. Some toasts end with a full stop or use "Couldn't" vs "Could not" (see
-    `Could not switch fullscreen` and `Couldn't copy the image`). Pick
-    "Couldn't" and no full stop.
+17. Hand-typed key names, mostly fixed: the app menu, the Options app-zoom
+    titles and the unbound-Options label now read `fixedKey(id)` (logic.js,
+    from `FIXED_SHORTCUTS`). Still hand-typed: the static `title`s in
+    `index.html` (Options, Undo, Redo) and the log hint in the About text.
+18. ~~"Could not" vs "Couldn't" in toasts.~~ Unified on "Couldn't".
 19. `.menu` and `.viewer` share `z-index: 70`, below the modal backdrop (80): a
     menu opened from inside a dialog would sit under it. No current flow does
     this; keep it that way or raise the menu.

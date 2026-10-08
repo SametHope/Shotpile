@@ -45,7 +45,10 @@ the code, not confirmed. Status as of the last session:
   near-duplicate colours, components, radii and hand-typed key names found while
   documenting the conventions (plus two small bugs: the shortcuts-reset toast
   passes `duration` instead of `ms`, and `.shortcut-key.conflict` uses an
-  undefined `--error` token). Nothing was changed in the docs pass.
+  undefined `--error` token). The docs pass changed nothing; a small follow-up (1.9.1 pass) fixed both
+  bugs, added `--danger-line`/`--ok-line`/`--warn-line`, unified "Couldn't" and
+  made the menu and Options hints read `fixedKey()`. The rest of section 12 is
+  still open.
 - **Open: requests from the maintainer.** `docs/DESIGN.md` section 12 ends with
   a short list of UI notes (Statistics and About out of Options and into their
   own header-opened modals, both still reachable from Options, some keybinds

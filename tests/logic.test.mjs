@@ -20,6 +20,7 @@ import {
   getKeyBindings,
   keyLabel,
   shortcutHelp,
+  fixedKey,
   sortMonths,
   resetKeyBindings,
   setKeyBindings,
@@ -682,4 +683,11 @@ test("shortcutHelp derives from live bindings, not constants", () => {
   // Default should have "←", custom should have "K"
   assert.ok(defaultDelete.chords.flat().includes("←"), "default help should show arrow");
   assert.ok(customDelete.chords.flat().includes("K"), "custom help should show K");
+});
+
+test("fixedKey spells the first chord of a fixed shortcut", () => {
+  assert.equal(fixedKey("undo"), "Ctrl+Z");
+  assert.equal(fixedKey("options"), "Ctrl+,");
+  assert.equal(fixedKey("appZoomOut"), "Ctrl+−");
+  assert.equal(fixedKey("nope"), "");
 });
