@@ -843,7 +843,8 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await js(`p.setStatus(${JSON.stringify(PILE_B)}, 'staged'); p.setStatus(${JSON.stringify(FIRST)}, 'staged'); p.setStatus(${JSON.stringify(SECOND)}, 'staged');`);
     await js("p.reset(); p.clickStagedBtn();");
     await waitFor("p.pileNames().length === 2");
-    ok("the pile shows this folder's files only", !(await probe("p.pileNames()")).includes(PILE_B), JSON.stringify(await probe("p.pileNames()")));
+    const pile = await probe("p.pileNames()");
+    ok("the pile shows this folder's files only", (() => { const n = pile; return n.includes(FIRST) && n.includes(SECOND) && !n.includes(PILE_B); })(), JSON.stringify(pile));
     await js("[...document.querySelectorAll('.pile-actions .btn')].find((b) => /one by one/.test(b.textContent)).click();");
     await waitFor("p.hasCard()");
     ok("checking the pile stays in this folder", (await probe("p.progress()")) === "1 of 2" && (await probe("p.cardName()")) === FIRST, `${await probe("p.progress()")} ${await probe("p.cardName()")}`);
@@ -1074,7 +1075,8 @@ const CTRL_SHIFT = CTRL | SHIFT;
     ok("and the old default is not back", (await probe("p.shortcutKey('keep')")) !== "→");
     ok("Options shows a decisions donut", (await waitFor("document.querySelector('.options-sheet .donut-seg') !== null")) === true);
     ok("the statistics are one card with one reset", (await probe("document.querySelectorAll('.options-sheet .stats-group').length")) === 1 && (await probe("document.querySelectorAll('.options-sheet .stats-header .btn').length")) === 1);
-    ok("the rows do not repeat what the donut already says", !/^(Kept|Skipped|Sent to delete)$/m.test(await probe("[...document.querySelectorAll('.options-sheet .stats-list dt')].map((d) => d.textContent).join('\\n')")));
+    const statLabels = await probe("[...document.querySelectorAll('.options-sheet .stats-list dt')].map((d) => d.textContent)");
+    ok("the rows do not repeat what the donut already says", statLabels.length > 0 && !statLabels.some((t) => /^(Kept|Skipped|Sent to delete)$/.test(t)), JSON.stringify(statLabels));
     // Time in the app: hiding the window flushes the elapsed seconds.
     await js("Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' }); document.dispatchEvent(new Event('visibilitychange'));");
     const appSecs = await probe("window.__TAURI__.core.invoke('get_counters').then((g) => Object.fromEntries(g.flatMap((x) => x.counters.map(([k, v]) => [x.name + ':' + k, v])))['session:app_seconds'] || 0)");
@@ -1087,7 +1089,8 @@ const CTRL_SHIFT = CTRL | SHIFT;
     await waitFor("document.querySelector('.options-sheet') !== null");
     const resetKey = await probe("p.shortcutKey('keep')");
     ok("resetting shortcuts restores defaults", resetKey === "→", `expected "→", got ${resetKey}`);
-    ok("reset clears the keyBindings in prefs", !/"keyBindings":/.test(await probe("localStorage.getItem('shotpile.prefs')")), await probe("localStorage.getItem('shotpile.prefs')"));
+    const prefsRaw = await probe("localStorage.getItem('shotpile.prefs')");
+    ok("reset clears the keyBindings in prefs", typeof prefsRaw === "string" && prefsRaw.length > 0 && !/"keyBindings":/.test(prefsRaw), String(prefsRaw));
     await press("Escape");
 
     // ---- keyboard shortcuts help sheet ----

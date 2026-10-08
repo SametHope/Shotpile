@@ -70,6 +70,9 @@ src/dom.js       h(), icon(), toast, modal, confirmDialog, popover menu
 src/viewer.js    full-screen photo viewer
 src/app.js       state, views, review deck, gestures, keyboard, Tauri calls
 tests/commands.test.mjs  asserts every api()/invoke() name is in lib.rs's handler
+tests/consistency.test.mjs  reads the sources and checks they agree: every var(--token)
+                       is declared, toast() options exist, hintKey/fixedKey ids resolve,
+                       shortcut tables and the help sheet line up, icon buttons are labelled
 tests/serve.cjs        serves the repo; injects the fake backend into src/index.html
 tests/fake-backend.js  in-memory mirror of the Rust commands (also `npm run preview`)
 tests/probes.js        page-side helpers the GUI test calls
@@ -94,7 +97,7 @@ is always `db`, then `undo`.
 ## Verify before claiming done
 
 ```powershell
-npm run test:logic                          # 68 frontend logic tests
+npm run test:logic                          # 83 frontend logic tests (incl. cross-file consistency checks)
 npm run test:gui                            # 328 GUI assertions in headless Chrome
 cd src-tauri; cargo test                    # 72 unit + 4 end-to-end tests
 cd src-tauri; cargo clippy --all-targets -- -D warnings

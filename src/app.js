@@ -2415,7 +2415,7 @@ function showOptions() {
       if (conflict) {
         const other = Object.values(ACTIONS).find((a) => a.id === conflict);
         paintShortcuts();
-        toast(`${keyLabel(ke.key)} is already bound to ${other?.label || "another action"}`, { duration: 3000 });
+        toast(`${keyLabel(ke.key)} is already bound to ${other?.label || "another action"}`, { ms: 3000 });
         return;
       }
       for (const k of Object.keys(map)) if (map[k] === action.id) delete map[k];
